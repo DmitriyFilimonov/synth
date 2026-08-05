@@ -47,6 +47,7 @@ interface ArgOscConfig {
   freqStart: number;
   duration: number;
   slope: number;
+  phase: number;
 }
 
 interface ArgAmpEnvConfig {
@@ -89,6 +90,7 @@ const createOscillatorGroup = (config: OscillatorGroup) => {
       amplitude: amplitudeEnvelope({ x }),
       frequency: frequencyEnvelop({ x }),
       x,
+      phase: config.osc.phase,
     });
   };
 };

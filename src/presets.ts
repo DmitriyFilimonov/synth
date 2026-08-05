@@ -5,10 +5,11 @@ export const synthPreset: ArgCreateSynth = {
   oscillators: [
     {
       osc: {
-        freqBase: 220,
+        freqBase: 440,
         freqStart: 880,
         duration: 0.5,
         slope: 0.8,
+        phase: 0,
       },
       ampEnv: {
         startLevel: 0.5,
@@ -23,6 +24,7 @@ export const synthPreset: ArgCreateSynth = {
         freqStart: 878,
         duration: 0.5,
         slope: 0.8,
+        phase: Math.PI,
       },
       ampEnv: {
         startLevel: 0.5,

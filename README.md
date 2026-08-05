@@ -37,6 +37,7 @@ npm run viz
 - `osc.freqStart` — начальная частота (Гц) при t = 0
 - `osc.duration` — длительность огибающей (с)
 - `osc.slope` — кривизна огибающей частоты
+- `osc.phase` — начальная фаза (рад), от 0 до 2π
 - `ampEnv.startLevel` — начальный уровень амплитуды
 - `ampEnv.endLevel` — конечный уровень амплитуды
 - `ampEnv.duration` — длительность огибающей (с)
@@ -50,11 +51,11 @@ import { MIN } from './envelope';
 export const synthPreset: ArgCreateSynth = {
   oscillators: [
     {
-      osc: { freqBase: 440, freqStart: 880, duration: 0.5, slope: 0.8 },
+      osc: { freqBase: 440, freqStart: 880, duration: 0.5, slope: 0.8, phase: 0 },
       ampEnv: { startLevel: 1, endLevel: MIN, duration: 0.5, slope: 0.8 },
     },
     {
-      osc: { freqBase: 660, freqStart: 1320, duration: 0.5, slope: 0.8 },
+      osc: { freqBase: 660, freqStart: 1320, duration: 0.5, slope: 0.8, phase: 0 },
       ampEnv: { startLevel: 0.5, endLevel: MIN, duration: 0.5, slope: 0.8 },
     },
   ],
@@ -108,5 +109,6 @@ export const synthPreset: ArgCreateSynth = {
 - t - время в секундах
 - f - частота
 - a - амплитуда
+- φ — начальная фаза (рад)
 
->y = sin(t * f * 2 * π) * a
+>y = sin(t * f * 2 * π + φ) * a

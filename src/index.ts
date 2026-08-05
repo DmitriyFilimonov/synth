@@ -19,6 +19,6 @@ for (let i = 0; i < TOTAL_SAMPLES; i++) {
 writeWav({
   samples,
   sampleRate: SAMPLE_RATE,
-  filePath: 'output13.wav',
+  filePath: 'output15.wav',
 });
-console.log('Generated output13.wav');
+console.log('Generated output15.wav');
