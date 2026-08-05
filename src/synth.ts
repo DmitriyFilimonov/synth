@@ -42,48 +42,73 @@ const frequencyEnvelopeCreator = ({
   return { frequencyEnvelop };
 };
 
-export interface ArgCreateSynth {
-  osc: {
-    freqBase: number;
-    freqStart: number;
-    duration: number;
-    slope: number;
-  };
-  ampEnv: {
-    startLevel: number;
-    endLevel?: number;
-    duration: number;
-    slope: number;
-  };
+interface ArgOscConfig {
+  freqBase: number;
+  freqStart: number;
+  duration: number;
+  slope: number;
 }
 
-export const createSynth = (synthConfig: ArgCreateSynth) => {
+interface ArgAmpEnvConfig {
+  startLevel: number;
+  endLevel?: number;
+  duration: number;
+  slope: number;
+}
+
+interface OscillatorGroup {
+  osc: ArgOscConfig;
+  ampEnv: ArgAmpEnvConfig;
+}
+
+export interface ArgCreateSynth {
+  oscillators: OscillatorGroup[];
+}
+
+const MAX_OSCILLATORS = 50;
+
+const createOscillatorGroup = (config: OscillatorGroup) => {
   const osc = oscillatorCreator();
 
   const { frequencyEnvelop } = frequencyEnvelopeCreator({
-    base: synthConfig.osc.freqBase,
-    duration: synthConfig.osc.duration,
-    modulation: synthConfig.osc.freqStart - synthConfig.osc.freqBase,
-    slope: synthConfig.osc.slope,
+    base: config.osc.freqBase,
+    duration: config.osc.duration,
+    modulation: config.osc.freqStart - config.osc.freqBase,
+    slope: config.osc.slope,
   });
 
   const amplitudeEnvelope = envelopeCreator({
-    duration: synthConfig.ampEnv.duration,
-    max: synthConfig.ampEnv.startLevel,
-    min: synthConfig.ampEnv.endLevel,
-    slope: synthConfig.ampEnv.slope,
+    duration: config.ampEnv.duration,
+    max: config.ampEnv.startLevel,
+    min: config.ampEnv.endLevel,
+    slope: config.ampEnv.slope,
   });
 
-  return ({
-    x,
-  }: {
-    /**s */
-    x: number;
-  }) => {
+  return ({ x }: { x: number }) => {
     return osc({
       amplitude: amplitudeEnvelope({ x }),
       frequency: frequencyEnvelop({ x }),
       x,
     });
+  };
+};
+
+export const createSynth = (synthConfig: ArgCreateSynth) => {
+  if (synthConfig.oscillators.length > MAX_OSCILLATORS) {
+    throw new Error(
+      `Maximum ${MAX_OSCILLATORS} oscillators allowed, got ${synthConfig.oscillators.length}`,
+    );
+  }
+
+  const oscillatorGroups = synthConfig.oscillators.map((config) =>
+    createOscillatorGroup(config),
+  );
+
+  return ({ x }: { x: number }) => {
+    let sum = 0;
+    for (const oscGroup of oscillatorGroups) {
+      sum += oscGroup({ x });
+    }
+    return Math.max(-1, Math.min(1, sum));
   };
 };
