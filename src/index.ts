@@ -13,12 +13,12 @@ const samples = new Int16Array(TOTAL_SAMPLES);
 for (let i = 0; i < TOTAL_SAMPLES; i++) {
   const timeSeconds = i / SAMPLE_RATE;
   const sample = synth({ x: timeSeconds });
-  samples[i] = Math.max(-32768, Math.min(32767, sample * 32767));
+  samples[i] = Math.round(sample * 32767);
 }
 
 writeWav({
   samples,
   sampleRate: SAMPLE_RATE,
-  filePath: 'output.wav',
+  filePath: 'output10.wav',
 });
-console.log('Generated output.wav');
+console.log('Generated output10.wav');

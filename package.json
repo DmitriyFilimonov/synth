@@ -7,6 +7,7 @@
     "build": "tsc",
     "start": "tsx dist/index.js",
     "dev": "tsx src/index.ts",
+    "viz": "tsx src/visualize-envelopes.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
     "prettier": "prettier --write \"src/**/*.ts\"",
     "prettier:check": "prettier --check \"src/**/*.ts\"",
