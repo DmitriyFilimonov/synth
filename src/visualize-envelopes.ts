@@ -1,8 +1,8 @@
 import { envelopeCreator, MIN } from './envelope';
 import { plotToSvg } from './visualize';
-import { synthPreset } from './presets';
+import { synthPreset1 } from './presets';
 
-const preset = synthPreset;
+const preset = synthPreset1;
 const firstOsc = preset.oscillators[0];
 
 if (!firstOsc) {

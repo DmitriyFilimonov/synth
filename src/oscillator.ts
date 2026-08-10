@@ -1,3 +1,10 @@
+interface OscillatorParams {
+  /** Начальная фаза (рад) */
+  initialPhase: number;
+  on: boolean;
+}
+
+interface ArgOscillatorCreator extends OscillatorParams {}
 interface ArgOscillator {
   /** Текущая позиция по времени (с) */
   x: number;
@@ -5,17 +12,21 @@ interface ArgOscillator {
   amplitude: number;
   /** Значение огибающей частоты */
   frequency: number;
-  /** Начальная фаза (рад) */
-  phase: number;
 }
 
-export const oscillatorCreator = () => {
+export const oscillatorCreator = (
+  argOscillatorCreator: ArgOscillatorCreator,
+) => {
   return (argOscillator: ArgOscillator) => {
-    return (
-      Math.sin(
-        argOscillator.x * argOscillator.frequency * 2 * Math.PI +
-          argOscillator.phase,
-      ) * argOscillator.amplitude
-    );
+    if (argOscillatorCreator.on) {
+      return (
+        Math.sin(
+          argOscillator.x * argOscillator.frequency * 2 * Math.PI +
+            argOscillatorCreator.initialPhase,
+        ) * argOscillator.amplitude
+      );
+    } else {
+      return 0;
+    }
   };
 };

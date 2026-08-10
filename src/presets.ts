@@ -1,7 +1,7 @@
 import { MIN } from './envelope';
 import type { ArgCreateSynth } from './synth';
 
-export const synthPreset: ArgCreateSynth = {
+export const synthPreset1: ArgCreateSynth = {
   oscillators: [
     {
       osc: {
@@ -10,6 +10,7 @@ export const synthPreset: ArgCreateSynth = {
         duration: 0.5,
         slope: 0.8,
         phase: 0,
+        on: true,
       },
       ampEnv: {
         startLevel: 0.5,
@@ -25,6 +26,7 @@ export const synthPreset: ArgCreateSynth = {
         duration: 0.5,
         slope: 0.8,
         phase: Math.PI,
+        on: true,
       },
       ampEnv: {
         startLevel: 0.5,

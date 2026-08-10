@@ -1,3 +1,5 @@
+import { SAMPLE_LENGTH_IN_SECONDS } from './consts';
+
 export const MIN = 0.001;
 
 export interface ArgEvelopCreator {
@@ -10,6 +12,37 @@ export interface ArgEvelopCreator {
   /**кривизна (по умолчанию 1) */
   slope: number;
 }
+
+type EnvNormales = {
+  readonly [K in keyof ArgEvelopCreator]: {
+    readonly min: number;
+    readonly max: number;
+    readonly step?: number;
+  };
+};
+
+export const envNormalesCreator: (
+  maxDuration: number,
+) => EnvNormales = (maxDuration) => ({
+  duration: {
+    min: SAMPLE_LENGTH_IN_SECONDS,
+    max: maxDuration,
+    step: SAMPLE_LENGTH_IN_SECONDS,
+  },
+  max: {
+    min: 0,
+    max: 1,
+  },
+  slope: {
+    min: 0.2,
+    max: 2,
+    step: 0.1,
+  },
+  min: {
+    min: 0,
+    max: 1,
+  },
+});
 
 export interface ArgEnvelope {
   /**s */
