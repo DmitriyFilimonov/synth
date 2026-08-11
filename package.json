@@ -6,6 +6,8 @@
   "scripts": {
     "build": "tsc",
     "start": "tsx dist/index.js",
+    "serve": "tsx dist/server.js",
+    "serve:dev": "tsx src/server.ts",
     "dev": "tsx src/index.ts",
     "viz": "tsx src/visualize-envelopes.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -20,6 +22,7 @@
   "license": "ISC",
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "@types/express": "^5.0.6",
     "@types/node": "^26.1.2",
     "eslint": "^9.39.5",
     "eslint-config-prettier": "^10.1.8",
@@ -28,5 +31,8 @@
     "tsx": "^4.23.5",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.66.0"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
   }
 }

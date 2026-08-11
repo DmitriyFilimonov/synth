@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.wav
+*.svg
+.DS_Store
+.env
+AGENTS.md
+ANALYSIS.md

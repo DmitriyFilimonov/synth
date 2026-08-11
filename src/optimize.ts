@@ -18,7 +18,9 @@ const createWaveForm = (
   sampleRate: number,
   numSamples: number,
 ): number[] => {
-  const synth = createSynth(mapVectorToSynthConfig([...vectorValues]));
+  const synth = createSynth(
+    mapVectorToSynthConfig([...vectorValues]),
+  );
   const samples: number[] = [];
   for (let i = 0; i < numSamples; i++) {
     const timeSeconds = i / sampleRate;
@@ -33,7 +35,11 @@ const evaluateSuppression = (
   targetSignal: readonly number[],
   sampleRate: number,
 ): number => {
-  const generated = createWaveForm(vectorValues, sampleRate, targetSignal.length);
+  const generated = createWaveForm(
+    vectorValues,
+    sampleRate,
+    targetSignal.length,
+  );
   const inverted = generated.map((s) => -s);
   const assessment = assessCancellationQuality({
     target: [...targetSignal],
@@ -90,10 +96,18 @@ const runGaPhase = (
   genomeLength: number,
   generations: number,
   onProgress: ProgressCallback,
-): { bestGenome: number[]; bestFit: number; history: ProgressEntry[] } => {
+): {
+  bestGenome: number[];
+  bestFit: number;
+  history: ProgressEntry[];
+} => {
   const fitness = (genome: number[]): number => {
     if (!hasActiveOsc(genome)) return -100;
-    return evaluateSuppression(genome, arg.targetSignal, arg.sampleRate);
+    return evaluateSuppression(
+      genome,
+      arg.targetSignal,
+      arg.sampleRate,
+    );
   };
 
   const tournamentSelect = (
@@ -143,7 +157,9 @@ const runGaPhase = (
   const population: number[][] = [];
   population.push(normalizeGenome([...arg.initialVector]));
   for (let i = 1; i < POPULATION_SIZE; i++) {
-    population.push(createRandomGenome(arg.initialVector, 0.3, genomeLength));
+    population.push(
+      createRandomGenome(arg.initialVector, 0.3, genomeLength),
+    );
   }
 
   const history: ProgressEntry[] = [];
@@ -194,7 +210,9 @@ const runGaPhase = (
     }));
     indexed.sort((a, b) => b.fit - a.fit);
 
-    const elites = indexed.slice(0, ELITE_COUNT).map((e) => [...e.genome]);
+    const elites = indexed
+      .slice(0, ELITE_COUNT)
+      .map((e) => [...e.genome]);
     const newPopulation: number[][] = [...elites];
 
     while (newPopulation.length < POPULATION_SIZE) {
@@ -210,7 +228,11 @@ const runGaPhase = (
     if (gen % 30 === 0 && gen > 0) {
       const replaceCount = 5;
       for (let i = 0; i < replaceCount; i++) {
-        const rnd = createRandomGenome(arg.initialVector, 0.4, genomeLength);
+        const rnd = createRandomGenome(
+          arg.initialVector,
+          0.4,
+          genomeLength,
+        );
         if (hasActiveOsc(rnd)) {
           const idx = POPULATION_SIZE - replaceCount + i;
           if (idx < POPULATION_SIZE && idx < newPopulation.length) {
@@ -223,7 +245,11 @@ const runGaPhase = (
     }
 
     while (newPopulation.length < POPULATION_SIZE) {
-      const rnd = createRandomGenome(arg.initialVector, 0.2, genomeLength);
+      const rnd = createRandomGenome(
+        arg.initialVector,
+        0.2,
+        genomeLength,
+      );
       if (hasActiveOsc(rnd)) {
         newPopulation.push(rnd);
       }
@@ -241,7 +267,11 @@ const runGaPhase = (
     }
   }
 
-  return { bestGenome: globalBestGenome, bestFit: globalBestFit, history };
+  return {
+    bestGenome: globalBestGenome,
+    bestFit: globalBestFit,
+    history,
+  };
 };
 
 const runFineTunePhase = (
@@ -251,10 +281,18 @@ const runFineTunePhase = (
   startIteration: number,
   onProgress: ProgressCallback,
   prevHistory: ProgressEntry[],
-): { bestGenome: number[]; bestFit: number; history: ProgressEntry[] } => {
+): {
+  bestGenome: number[];
+  bestFit: number;
+  history: ProgressEntry[];
+} => {
   const steps: number[] = genome.map(() => FINE_STEP_BASE);
   let currentGenome = [...genome];
-  let currentBest = evaluateSuppression(currentGenome, arg.targetSignal, arg.sampleRate);
+  let currentBest = evaluateSuppression(
+    currentGenome,
+    arg.targetSignal,
+    arg.sampleRate,
+  );
   const history: ProgressEntry[] = [...prevHistory];
   let stagnationPerParam = new Array(genome.length).fill(0);
 
@@ -281,7 +319,11 @@ const runFineTunePhase = (
       let bestCandidate = currentGenome;
 
       if (leftValid) {
-        const score = evaluateSuppression(left, arg.targetSignal, arg.sampleRate);
+        const score = evaluateSuppression(
+          left,
+          arg.targetSignal,
+          arg.sampleRate,
+        );
         if (score > bestScore) {
           bestScore = score;
           bestCandidate = left;
@@ -289,7 +331,11 @@ const runFineTunePhase = (
       }
 
       if (rightValid) {
-        const score = evaluateSuppression(right, arg.targetSignal, arg.sampleRate);
+        const score = evaluateSuppression(
+          right,
+          arg.targetSignal,
+          arg.sampleRate,
+        );
         if (score > bestScore) {
           bestScore = score;
           bestCandidate = right;
@@ -301,11 +347,17 @@ const runFineTunePhase = (
         currentBest = bestScore;
         iterImproved = true;
         stagnationPerParam[i] = 0;
-        steps[i] = Math.max(FINE_STEP_BASE * 0.1, (steps[i] ?? FINE_STEP_BASE) * 0.9);
+        steps[i] = Math.max(
+          FINE_STEP_BASE * 0.1,
+          (steps[i] ?? FINE_STEP_BASE) * 0.9,
+        );
       } else {
         stagnationPerParam[i]++;
         if (stagnationPerParam[i] % 50 === 0) {
-          steps[i] = Math.min(0.1, (steps[i] ?? FINE_STEP_BASE) * 1.5);
+          steps[i] = Math.min(
+            0.1,
+            (steps[i] ?? FINE_STEP_BASE) * 1.5,
+          );
         }
       }
     }
@@ -330,7 +382,10 @@ const runFineTunePhase = (
         const perturbed = [...currentGenome];
         perturbed[i] = Math.max(
           0,
-          Math.min(1, (perturbed[i] ?? 0) + (Math.random() - 0.5) * step),
+          Math.min(
+            1,
+            (perturbed[i] ?? 0) + (Math.random() - 0.5) * step,
+          ),
         );
         if (hasActiveOsc(perturbed)) {
           const score = evaluateSuppression(
@@ -368,14 +423,20 @@ export const optimize = (
   const gaGens = Math.floor(maxIterations * GA_PHASE_RATIO);
   const fineIters = maxIterations - gaGens;
 
-  const { bestGenome: gaBest, bestFit: gaFit, history: gaHistory } = runGaPhase(
+  const {
+    bestGenome: gaBest,
+    bestFit: gaFit,
+    history: gaHistory,
+  } = runGaPhase(
     arg,
     genomeLength,
     gaGens,
     arg.onProgress ?? (() => {}),
   );
 
-  console.log(`[Hybrid] GA phase done: ${gaFit.toFixed(4)}%, switching to fine-tune`);
+  console.log(
+    `[Hybrid] GA phase done: ${gaFit.toFixed(4)}%, switching to fine-tune`,
+  );
 
   const { bestGenome, bestFit, history } = runFineTunePhase(
     gaBest,

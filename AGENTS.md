@@ -10,6 +10,8 @@
 | `npm run dev` | Запуск через `tsx` без сборки |
 | `npm run build` | Компиляция в `dist/` |
 | `npm run start` | Запуск собранного `dist/index.js` |
+| `npm run serve` | Запуск собранного HTTP-сервера (`dist/server.js`) |
+| `npm run serve:dev` | Запуск HTTP-сервера через `tsx` без сборки |
 | `npm run viz` | Визуализация огибающих (SVG) |
 | `npm run prettier` | Форматирование источников через Prettier |
 | `npm run prettier:check` | Проверка форматирования (без изменений) |
@@ -29,6 +31,8 @@
 ```
 External WAV → Parse samples → Init vector → Optimize (GA + fine-tune) → Generate → Compare → Save WAV + SVG
 ```
+
+### Core-модули (синтез и обработка)
 
 | Файл | Назначение |
 |---|---|
@@ -51,6 +55,59 @@ External WAV → Parse samples → Init vector → Optimize (GA + fine-tune) →
 | `src/match-preset.ts` | Начальная конфигурация для оптимизации |
 | `src/match-visualize.ts` | Визуализация результатов мэтчинга (сигналы + прогресс) |
 | `src/match-entry.ts` | Точка входа для запуска подбора параметров |
+
+### HTTP-сервер (`src/api/`)
+
+```
+src/server.ts                    → Точка входа: только `createApp()` + `listen()`
+src/api/app.ts                   → Создание Express, middleware, регистрация роутов
+src/api/types.ts                 → DTO и интерфейсы запросов/ответов
+src/api/services/synth-service.ts → Бизнес-логика: генерация и мэтчинг WAV
+src/api/controllers/             → Request → Service → Response (валидация, ответы)
+src/api/routes/                  → Express Router (маршрутизация)
+```
+
+| Файл | Назначение |
+|---|---|
+| `src/server.ts` | Точка входа HTTP-сервера. Только `createApp()` + `listen(PORT)`. Не должен содержать роутов, контроллеров, бизнес-логики |
+| `src/api/app.ts` | Создаёт Express-приложение. Регистрирует middleware (`json`, `raw`), health-эндпоинты, подключает `src/api/routes/` |
+| `src/api/types.ts` | Все DTO-интерфейсы для API: `GenerateRequest`, `MatchRequestBody`, `MatchResult`, хелперы конвертации |
+| `src/api/services/synth-service.ts` | Бизнес-логика: `generateWav()`, `matchWav()`. Работают с файловой системой, вызывают core-модули. Ничего не знают про HTTP |
+| `src/api/controllers/synth-controller.ts` | Контроллеры: принимают `Request`, вызывают сервисы, формируют `Response`. Маппинг ошибок на HTTP-статусы |
+| `src/api/routes/synth-routes.ts` | Express Router: определяет URL → controller. Только маршрутизация |
+
+### Правила создания API
+1. **server.ts не трогать для добавления роутов.** Он только запускает приложение
+2. **Новый эндпоинт** → добавить контроллер → добавить роут → сервис если бизнес-логика новая
+3. **Контроллеры** — тонкие: только маппинг `Request → Service` и `Service output → Response`. Вся аудио-логика в `services/`
+4. **Сервисы** не должны зависеть от Express (`req`, `res`). Чистый ввод/вывод
+5. **Типы запросов/ответов** — всегда в `src/api/types.ts`
+
+### Деплой (Timeweb Cloud)
+
+Проект поддерживает контейнеризацию через Docker для деплоя на timeweb.cloud:
+
+| Файл | Назначение |
+|---|---|
+| `Dockerfile` | Мультисборка: `npm ci` → `tsc` → `npm prune` → `node dist/server.js` |
+| `.dockerignore` | Исключает `node_modules`, `dist`, `*.wav`, `*.svg` |
+
+```
+docker build -t synth .
+docker run -p 3000:3000 synth
+```
+
+Порт сервера управляется через переменную окружения `PORT` (по умолчанию `3000`).
+
+### HTTP API эндпоинты
+
+| Метод | Путь | Описание |
+|---|---|---|
+| `GET` | `/health` | Health check |
+| `GET` | `/presets` | Список доступных пресетов |
+| `POST` | `/api/generate` | Генерация WAV (JSON: `preset` или `oscillators`) → WAV binary |
+| `POST` | `/api/match` | Подбор параметров (JSON: `wavBase64`) → JSON с `wavBase64`, `history`, `suppressionPercent` |
+| `POST` | `/api/match/binary` | Подбор параметров (raw `audio/wav`) → WAV binary |
 
 ## Соглашения
 
