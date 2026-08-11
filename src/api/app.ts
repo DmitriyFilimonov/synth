@@ -39,7 +39,7 @@ export function createApp(): Express {
 
   app.use(express.static(webDist));
 
-  app.get('*', (_req, res) => {
+  app.use((_req, res) => {
     res.sendFile(join(webDist, 'index.html'));
   });
 
