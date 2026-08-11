@@ -7,7 +7,7 @@ const NUM_OSCILLATORS = 5;
 match({
   targetWavPath: './output14.wav',
   outputWavPath: './output14_reacreation_7.wav',
-  maxIterations: 10000,
+  maxIterations: 5000,
   initialVector: mapSynthConfigToVector(
     SYNTH_MULTI_PRESET(NUM_OSCILLATORS),
   ),

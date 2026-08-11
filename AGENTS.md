@@ -39,11 +39,11 @@ Dev-сервер проксирует `/api`, `/health`, `/presets` на бэк�
 2. `cd web && npm run dev` — запустить dev-сервер
 
 ## Архитектура
-Проект — генератор-синтезатор. Создаёт файл `.wav` (44 100 Гц, 16 бит, моно) путём аддитивного синтеза до 50 осцилляторов. Включает пайплайн подбора параметров: оптимизатор находит конфигурацию осцилляторов, воспроизводящую заданный WAV-файл, минимизируя RMS-based cancellation %. FFT не используется.
+Проект — генератор-синтезатор. Создаёт файл `.wav` (44 100 Гц, 16 бит, моно) путём аддитивного синтеза до 50 осцилляторов. Включает пайплайн подбора параметров: оптимизатор находит конфигурацию осцилляторов, воспроизводящую заданный WAV-файл, минимизируя RMS-based cancellation %. FFT не используется. Оптимизация выполняется в worker-потоке (`optimizer-worker.ts`), API поддерживает асинхронный режим через job-очередь.
 
 ### Пайплайн подбора параметров
 ```
-External WAV → Parse samples → Init vector → Optimize (GA + fine-tune) → Generate → Compare → Save WAV + SVG
+External WAV → Parse samples → Init vector → Optimize (GA + fine-tune, worker thread) → Generate → Compare → Save WAV + SVG
 ```
 
 ### Core-модули (синтез и обработка)
@@ -66,6 +66,8 @@ External WAV → Parse samples → Init vector → Optimize (GA + fine-tune) →
 | `src/visualize.ts` | Генерация SVG-графиков |
 | `src/visualize-envelopes.ts` | Визуализация огибающих первого осциллятора |
 | `src/match.ts` | Оркестратор мэтчинга: read → optimize → generate → visualize |
+| `src/match-worker.ts` | Обёртка для запуска оптимизации в worker-потоке |
+| `src/optimizer-worker.ts` | Реализация worker-потока: запускает optimize, генерирует WAV, визуализацию |
 | `src/match-preset.ts` | Начальная конфигурация для оптимизации |
 | `src/match-visualize.ts` | Визуализация результатов мэтчинга (сигналы + прогресс) |
 | `src/match-entry.ts` | Точка входа для запуска подбора параметров |
@@ -77,6 +79,7 @@ src/server.ts                    → Точка входа: только `create
 src/api/app.ts                   → Создание Express, middleware, регистрация роутов
 src/api/types.ts                 → DTO и интерфейсы запросов/ответов
 src/api/services/synth-service.ts → Бизнес-логика: генерация и мэтчинг WAV
+src/api/services/job-store.ts     → Хранилище job-ов: CRUD для асинхронных задач
 src/api/controllers/             → Request → Service → Response (валидация, ответы)
 src/api/routes/                  → Express Router (маршрутизация)
 ```
@@ -85,8 +88,9 @@ src/api/routes/                  → Express Router (маршрутизация)
 |---|---|
 | `src/server.ts` | Точка входа HTTP-сервера. Только `createApp()` + `listen(PORT)`. Не должен содержать роутов, контроллеров, бизнес-логики |
 | `src/api/app.ts` | Создаёт Express-приложение. Регистрирует middleware (`json`, `raw`), health-эндпоинты, подключает `src/api/routes/`, отдаёт статику из `web/dist/` (SPA fallback) |
-| `src/api/types.ts` | Все DTO-интерфейсы для API: `GenerateRequest`, `MatchRequestBody`, `MatchResult`, хелперы конвертации |
-| `src/api/services/synth-service.ts` | Бизнес-логика: `generateWav()`, `matchWav()`. Работают с файловой системой, вызывают core-модули. Ничего не знают про HTTP |
+| `src/api/types.ts` | Все DTO-интерфейсы для API: `GenerateRequest`, `MatchRequestBody`, `MatchResult`, `CreateMatchJobRequest`, `JobStatusResponse`, `JobListItem`, хелперы конвертации |
+| `src/api/services/synth-service.ts` | Бизнес-логика: `generateWav()`, `matchWav()`, `matchWavWithJob()`. Работают с файловой системой, вызывают core-модули и worker-потоки. Ничего не знают про HTTP |
+| `src/api/services/job-store.ts` | Хранение job-ов в `jobs/`: создание, обновление статуса, CRUD операции. Файлы: `<id>.json`, `<id>_input.wav`, `<id>_result.wav` |
 | `src/api/controllers/synth-controller.ts` | Контроллеры: принимают `Request`, вызывают сервисы, формируют `Response`. Маппинг ошибок на HTTP-статусы |
 | `src/api/routes/synth-routes.ts` | Express Router: определяет URL → controller. Только маршрутизация |
 
@@ -105,8 +109,12 @@ src/api/routes/                  → Express Router (маршрутизация)
 web/src/
 ├── app/                    # Инициализация (App.tsx, index.tsx)
 ├── features/
-│   └── synth-generator/    # Фича генерации WAV
-│       ├── api/            # Вызовы Backend API
+│   ├── synth-generator/    # Фича генерации WAV
+│   │   ├── api/            # Вызовы Backend API
+│   │   ├── model/          # Типы и интерфейсы
+│   │   └── ui/             # Компоненты UI
+│   └── wav-matcher/        # Фича подбора параметров к WAV
+│       ├── api/            # Вызовы Backend API (job CRUD)
 │       ├── model/          # Типы и интерфейсы
 │       └── ui/             # Компоненты UI
 └── shared/
@@ -119,6 +127,7 @@ web/src/
 | `shared/ui/` | Примитивы: `Button`, `Input`, `Select` |
 | `shared/api/` | `fetchApi<T>` (JSON), `fetchBlob` (binary) |
 | `features/synth-generator/` | Форма генерации: выбор пресета, настройка осцилляторов, плеер |
+| `features/wav-matcher/` | Форма подбора: загрузка WAV, создание job, отслеживание прогресса, скачивание |
 | `app/` | Точка входа, корневой компонент |
 
 **Правила:**
@@ -146,6 +155,8 @@ Express отдаёт статику из `web/dist/` и настроен как 
 
 ### HTTP API эндпоинты
 
+#### Генерация и синхронный мэтчинг
+
 | Метод | Путь | Описание |
 |---|---|---|
 | `GET` | `/health` | Health check |
@@ -153,6 +164,18 @@ Express отдаёт статику из `web/dist/` и настроен как 
 | `POST` | `/api/generate` | Генерация WAV (JSON: `preset` или `oscillators`) → WAV binary |
 | `POST` | `/api/match` | Подбор параметров (JSON: `wavBase64`) → JSON с `wavBase64`, `history`, `suppressionPercent` |
 | `POST` | `/api/match/binary` | Подбор параметров (raw `audio/wav`) → WAV binary |
+
+#### Асинхронный мэтчинг (job-очередь)
+
+| Метод | Путь | Описание |
+|---|---|---|
+| `POST` | `/api/match/job` | Создать job подбора (base64 WAV) → `{ id }` |
+| `POST` | `/api/match/job/json` | Создать job подбора (raw WAV binary) → `{ id }` |
+| `GET` | `/api/match/jobs` | Список всех job |
+| `GET` | `/api/match/jobs/:id` | Статус конкретного job |
+| `GET` | `/api/match/jobs/:id/download` | Скачать результат WAV (completed job) |
+| `GET` | `/api/match/jobs/:id/download-params` | Скачать параметры подбора JSON (completed job) |
+| `DELETE` | `/api/match/jobs/:id` | Удалить job и связанные файлы |
 
 ## Соглашения
 
@@ -176,3 +199,6 @@ Express отдаёт статику из `web/dist/` и настроен как 
 
 ### Производительность оптимизации
 Гибридный подход: GA фаза (40% итераций) исследует пространство через популяцию (40 особей, blend-crossover, adaptive mutation). Fine-tune фаза (60%) — coordinate descent с микро-шагами (`0.005` base) и stagnation-driven perturbation. При 22050 сэмплах и 100 параметрах GA быстрее находит хороший район (~5%), fine-tune медленно но стабильно улучшает результат (~7%+).
+
+### Worker-потоки
+Оптимизация выполняется в отдельном worker-потоке (`optimizer-worker.ts`) через `worker_threads`. `match-worker.ts` предоставляет промис-обёртку для удобного вызова. Worker имеет таймаут 30 минут. Фронтенд использует асинхронный job API для длительных подборов.
