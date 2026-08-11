@@ -201,4 +201,3 @@ async function runMatchJob(
     await unlink(tempOutput).catch(() => {});
   }
 }
-

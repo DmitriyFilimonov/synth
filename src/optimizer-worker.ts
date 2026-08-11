@@ -39,7 +39,9 @@ parentPort.on('message', (msg: WorkerMessage) => {
     for (let i = 0; i < targetWav.samples.length; i++) {
       const timeSeconds = i / msg.sampleRate;
       const sample = synth({ x: timeSeconds });
-      samples[i] = Math.round(sample * MAX_AMPLITUDE_16_BIT_WAV_ENCODED);
+      samples[i] = Math.round(
+        sample * MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
+      );
     }
 
     writeWav({

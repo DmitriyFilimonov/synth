@@ -27,17 +27,22 @@ interface MatchWorkerArgs {
   onProgress?: (entry: MatchWorkerProgress) => void;
 }
 
-export function matchWithWorker(arg: MatchWorkerArgs): Promise<MatchWorkerResult> {
+export function matchWithWorker(
+  arg: MatchWorkerArgs,
+): Promise<MatchWorkerResult> {
   return new Promise((resolveFn, rejectFn) => {
     const workerPath = resolve(__dirname, 'optimizer-worker.js');
     const worker = new Worker(workerPath, {
       workerData: {},
     });
 
-    const timeout = setTimeout(() => {
-      worker.terminate();
-      rejectFn(new Error('Worker timed out'));
-    }, 30 * 60 * 1000);
+    const timeout = setTimeout(
+      () => {
+        worker.terminate();
+        rejectFn(new Error('Worker timed out'));
+      },
+      30 * 60 * 1000,
+    );
 
     worker.on('message', (msg: { type: string; data: unknown }) => {
       if (msg.type === 'progress') {
