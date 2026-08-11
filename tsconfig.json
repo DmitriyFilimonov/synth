@@ -3,9 +3,9 @@
     "rootDir": "./src",
     "outDir": "./dist",
 
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "target": "esnext",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2018",
     "types": ["node"],
 
     "sourceMap": true,
@@ -17,6 +17,7 @@
 
     "strict": true,
     "verbatimModuleSyntax": false,
+    "esModuleInterop": true,
     "isolatedModules": true,
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",

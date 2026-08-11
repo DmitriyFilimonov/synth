@@ -18,7 +18,7 @@
   },
   "keywords": [],
   "author": "",
-  "type": "module",
+  "type": "commonjs",
   "license": "ISC",
   "devDependencies": {
     "@eslint/js": "^9.39.5",
