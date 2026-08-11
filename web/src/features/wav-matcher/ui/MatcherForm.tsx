@@ -41,14 +41,14 @@ export function MatcherForm() {
     pollRef.current = false;
   }, []);
 
-  const fetchJobList = async () => {
+  const fetchJobList = useCallback(async () => {
     try {
       const list = await listJobs();
       setJobList(list);
     } catch {
       // ignore
     }
-  };
+  }, []);
 
   const pollJob = useCallback(
     async (jobId: string) => {
