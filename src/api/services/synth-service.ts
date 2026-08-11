@@ -2,6 +2,7 @@ import { createSynth, ArgCreateSynth } from '../../synth';
 import { writeWav } from '../../write-wav';
 import { MAX_AMPLITUDE_16_BIT_WAV_ENCODED } from '../../consts';
 import { match } from '../../match';
+import { matchWithWorker } from '../../match-worker';
 import { mapSynthConfigToVector } from '../../synth-config-to-vector';
 import { SYNTH_MULTI_PRESET } from '../../match-preset';
 import { tmpdir } from 'node:os';
@@ -85,13 +86,16 @@ export async function matchWav(
       suppressionPercent: number;
     }[] = [];
 
-    const result = match({
+    const initialVector = mapSynthConfigToVector(
+      SYNTH_MULTI_PRESET(numOscillators),
+    );
+
+    const result = await matchWithWorker({
       targetWavPath: tempInput,
       outputWavPath: tempOutput,
+      initialVector,
+      sampleRate: 44100,
       maxIterations,
-      initialVector: mapSynthConfigToVector(
-        SYNTH_MULTI_PRESET(numOscillators),
-      ),
       onProgress: (entry) => {
         history.push(entry);
       },
@@ -157,13 +161,16 @@ async function runMatchJob(
   try {
     await updateJobStatus(jobId, 'running');
 
-    const result = match({
+    const initialVector = mapSynthConfigToVector(
+      SYNTH_MULTI_PRESET(numOscillators),
+    );
+
+    const result = await matchWithWorker({
       targetWavPath: inputPath,
       outputWavPath: tempOutput,
+      initialVector,
+      sampleRate: 44100,
       maxIterations,
-      initialVector: mapSynthConfigToVector(
-        SYNTH_MULTI_PRESET(numOscillators),
-      ),
       onProgress: (entry) => {
         history.push(entry);
         void updateJobStatus(jobId, 'running', {

@@ -6,6 +6,12 @@ import styles from './MatcherForm.module.css';
 import { AudioPlayer } from '@/features/synth-generator/ui/AudioPlayer';
 
 type ViewMode = 'upload' | 'job-list';
+const POLLING_INTERVAL = 10000;
+const IDLE_LOCAL_STORAGE_KEY = 'synth-wav-matcher-idle';
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 export function MatcherForm() {
   const [file, setFile] = useState<File | null>(null);
@@ -19,13 +25,10 @@ export function MatcherForm() {
   const [activeJob, setActiveJob] = useState<JobEntry | null>(null);
   const [jobList, setJobList] = useState<JobListEntry[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('upload');
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<boolean>(false);
 
   const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
+    pollRef.current = false;
   }, []);
 
   const fetchJobList = async () => {
@@ -36,6 +39,39 @@ export function MatcherForm() {
       // ignore
     }
   };
+
+  const pollJob = useCallback(
+    async (jobId: string) => {
+      pollRef.current = true;
+      while (pollRef.current) {
+        try {
+          const status = await getJobStatus(jobId);
+          setActiveJob(status);
+          await fetchJobList();
+
+          if (status.status === 'completed') {
+            stopPolling();
+            try {
+              const blob = await downloadJobResult(jobId);
+              const url = URL.createObjectURL(blob);
+              setAudioUrl(url);
+            } catch {
+              setError('Failed to download result');
+            }
+            break;
+          } else if (status.status === 'failed') {
+            stopPolling();
+            setError(status.errorMessage ?? 'Job failed');
+            break;
+          }
+        } catch {
+          // request failed, keep trying
+        }
+        await sleep(POLLING_INTERVAL);
+      }
+    },
+    [stopPolling, fetchJobList],
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,26 +95,9 @@ export function MatcherForm() {
       setActiveJobId(job.id);
       setActiveJob(null);
       setAudioUrl('');
+      localStorage.setItem(IDLE_LOCAL_STORAGE_KEY, 'false');
 
-      pollRef.current = setInterval(async () => {
-        const status = await getJobStatus(job.id);
-        setActiveJob(status);
-        await fetchJobList();
-
-        if (status.status === 'completed') {
-          stopPolling();
-          try {
-            const blob = await downloadJobResult(job.id);
-            const url = URL.createObjectURL(blob);
-            setAudioUrl(url);
-          } catch {
-            setError('Failed to download result');
-          }
-        } else if (status.status === 'failed') {
-          stopPolling();
-          setError(status.errorMessage ?? 'Job failed');
-        }
-      }, 2000);
+      pollJob(job.id);
 
       setViewMode('upload');
     } catch (err) {
@@ -95,25 +114,8 @@ export function MatcherForm() {
 
     if (job.status === 'running' || job.status === 'queued') {
       stopPolling();
-      setActiveJobId(jobId);
-      setActiveJob(job);
-      pollRef.current = setInterval(async () => {
-        const status = await getJobStatus(jobId);
-        setActiveJob(status);
-
-        if (status.status === 'completed') {
-          stopPolling();
-          try {
-            const blob = await downloadJobResult(jobId);
-            const url = URL.createObjectURL(blob);
-            setAudioUrl(url);
-          } catch {
-            // ignore
-          }
-        } else if (status.status === 'failed') {
-          stopPolling();
-        }
-      }, 2000);
+      await sleep(500);
+      pollJob(jobId);
     } else if (job.status === 'completed') {
       try {
         const blob = await downloadJobResult(jobId);
@@ -129,8 +131,19 @@ export function MatcherForm() {
 
   useEffect(() => {
     fetchJobList();
+    const isIdle = localStorage.getItem(IDLE_LOCAL_STORAGE_KEY) === 'true';
+    const prevJobId = localStorage.getItem('synth-wav-matcher-last-job');
+    if (!isIdle && prevJobId) {
+      pollJob(prevJobId);
+    }
     return stopPolling;
-  }, [stopPolling]);
+  }, [stopPolling, pollJob]);
+
+  useEffect(() => {
+    if (activeJobId) {
+      localStorage.setItem('synth-wav-matcher-last-job', activeJobId);
+    }
+  }, [activeJobId]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
@@ -174,27 +187,26 @@ export function MatcherForm() {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
-  return (
-    <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <Button
-          variant={viewMode === 'upload' ? 'primary' : 'secondary'}
-          onClick={() => setViewMode('upload')}
-        >
-          New Match
-        </Button>
-        <Button
-          variant={viewMode === 'job-list' ? 'primary' : 'secondary'}
-          onClick={() => {
-            setViewMode('job-list');
-            fetchJobList();
-          }}
-        >
-          Jobs ({jobList.length})
-        </Button>
-      </div>
-
-      {viewMode === 'job-list' ? (
+  if (viewMode === 'job-list') {
+    return (
+      <div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <Button
+            variant={viewMode === 'upload' ? 'primary' : 'secondary'}
+            onClick={() => setViewMode('upload')}
+          >
+            New Match
+          </Button>
+          <Button
+            variant={viewMode === 'job-list' ? 'primary' : 'secondary'}
+            onClick={() => {
+              setViewMode('job-list');
+              fetchJobList();
+            }}
+          >
+            Jobs ({jobList.length})
+          </Button>
+        </div>
         <div className={styles.jobList}>
           {jobList.length === 0 && <div>No jobs yet</div>}
           {jobList.map((job) => (
@@ -223,85 +235,107 @@ export function MatcherForm() {
             </div>
           ))}
         </div>
-      ) : (
-        <form className={styles.form} onSubmit={handleSubmit}>
-          <div className={styles.uploadSection}>
-            <label className={styles.fileLabel}>
-              <input
-                type="file"
-                accept=".wav"
-                onChange={handleFileChange}
-                className={styles.fileInput}
-              />
-              {file ? file.name : 'Choose a WAV file...'}
-            </label>
-            {uploadError && <div className={styles.error}>{uploadError}</div>}
-            {file && (
-              <div className={styles.fileInfo}>
-                {file.name} ({(file.size / 1024).toFixed(1)} KB)
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <Button
+          variant={viewMode === 'upload' ? 'primary' : 'secondary'}
+          onClick={() => setViewMode('upload')}
+        >
+          New Match
+        </Button>
+        <Button
+          variant={viewMode === 'job-list' ? 'primary' : 'secondary'}
+          onClick={() => {
+            setViewMode('job-list');
+            fetchJobList();
+          }}
+        >
+          Jobs ({jobList.length})
+        </Button>
+      </div>
+
+      <form className={styles.form} onSubmit={handleSubmit}>
+        <div className={styles.uploadSection}>
+          <label className={styles.fileLabel}>
+            <input
+              type="file"
+              accept=".wav"
+              onChange={handleFileChange}
+              className={styles.fileInput}
+            />
+            {file ? file.name : 'Choose a WAV file...'}
+          </label>
+          {uploadError && <div className={styles.error}>{uploadError}</div>}
+          {file && (
+            <div className={styles.fileInfo}>
+              {file.name} ({(file.size / 1024).toFixed(1)} KB)
+            </div>
+          )}
+        </div>
+
+        <div className={styles.row}>
+          <Input
+            label="Oscillators"
+            type="number"
+            min="1"
+            max="50"
+            step="1"
+            value={numOscillators}
+            onChange={(e) => setNumOscillators(e.target.value)}
+          />
+          <Input
+            label="Max iterations"
+            type="number"
+            min="1"
+            step="1"
+            value={maxIterations}
+            onChange={(e) => setMaxIterations(e.target.value)}
+          />
+        </div>
+
+        {error && <div className={styles.error}>{error}</div>}
+
+        <Button type="submit" disabled={loading || !file}>
+          {loading ? 'Starting...' : 'Match Parameters'}
+        </Button>
+
+        {activeJobId && activeJob && (
+          <div className={styles.progressSection}>
+            <div className={styles.progressHeader}>
+              <span>Job: {activeJobId.slice(0, 8)}</span>
+              <span className={`${styles.jobStatus} ${styles[activeJob.status]}`}>
+                {getStatusLabel(activeJob.status)}
+              </span>
+            </div>
+            <div className={styles.suppressionValue}>
+              Current: {getSupressionFromJob(activeJob).toFixed(2)}%
+            </div>
+            {activeJob.progress.length > 0 && (
+              <div className={styles.miniChart}>
+                {activeJob.progress.map((entry, idx) => {
+                  const maxSup = Math.max(...activeJob.progress.map(p => Math.max(0, p.suppressionPercent)));
+                  const height = maxSup > 0 ? (Math.max(0, entry.suppressionPercent) / maxSup) * 40 : 0;
+                  return (
+                    <div
+                      key={idx}
+                      className={styles.chartBar}
+                      style={{ height: `${Math.max(1, height)}px` }}
+                      title={`${entry.iteration}: ${entry.suppressionPercent.toFixed(2)}%`}
+                    />
+                  );
+                })}
               </div>
             )}
           </div>
+        )}
 
-          <div className={styles.row}>
-            <Input
-              label="Oscillators"
-              type="number"
-              min="1"
-              max="50"
-              step="1"
-              value={numOscillators}
-              onChange={(e) => setNumOscillators(e.target.value)}
-            />
-            <Input
-              label="Max iterations"
-              type="number"
-              min="1"
-              step="1"
-              value={maxIterations}
-              onChange={(e) => setMaxIterations(e.target.value)}
-            />
-          </div>
-
-          {error && <div className={styles.error}>{error}</div>}
-
-          <Button type="submit" disabled={loading || !file}>
-            {loading ? 'Starting...' : 'Match Parameters'}
-          </Button>
-
-          {activeJobId && activeJob && (
-            <div className={styles.progressSection}>
-              <div className={styles.progressHeader}>
-                <span>Job: {activeJobId.slice(0, 8)}</span>
-                <span className={`${styles.jobStatus} ${styles[activeJob.status]}`}>
-                  {getStatusLabel(activeJob.status)}
-                </span>
-              </div>
-              <div className={styles.suppressionValue}>
-                Current: {getSupressionFromJob(activeJob).toFixed(2)}%
-              </div>
-              {activeJob.progress.length > 0 && (
-                <div className={styles.miniChart}>
-                  {activeJob.progress.map((entry, idx) => {
-                    const maxSup = Math.max(...activeJob.progress.map(p => Math.max(0, p.suppressionPercent)));
-                    const height = maxSup > 0 ? (Math.max(0, entry.suppressionPercent) / maxSup) * 40 : 0;
-                    return (
-                      <div
-                        key={idx}
-                        className={styles.chartBar}
-                        style={{ height: `${Math.max(1, height)}px` }}
-                        title={`${entry.iteration}: ${entry.suppressionPercent.toFixed(2)}%`}
-                      />
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {audioUrl && <AudioPlayer url={audioUrl} />}
-        </form>
-      )}
+        {audioUrl && <AudioPlayer url={audioUrl} />}
+      </form>
     </div>
   );
 }
