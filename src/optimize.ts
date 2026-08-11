@@ -51,6 +51,12 @@ const evaluateSuppression = (
 interface ProgressEntry {
   iteration: number;
   suppressionPercent: number;
+  status?:
+    | 'optimizing'
+    | 'stagnation'
+    | 'cataclysm'
+    | 'fine_tuning'
+    | 'done';
 }
 
 export type ProgressCallback = (entry: ProgressEntry) => void;
@@ -190,15 +196,46 @@ const runGaPhase = (
       prevBest = genBest;
     }
 
+    const status =
+      stagnationCount > 50
+        ? 'stagnation'
+        : stagnationCount === 0
+          ? 'optimizing'
+          : 'stagnation';
+
     history.push({
       iteration: gen + 1,
       suppressionPercent: globalBestFit,
+      status,
     });
 
     onProgress({
       iteration: gen + 1,
       suppressionPercent: globalBestFit,
+      status,
     });
+
+    if (stagnationCount > 100 && stagnationCount % 100 < 2) {
+      console.log(
+        `[GA] Cataclysm triggered at gen ${gen + 1} (stagn=${stagnationCount})`,
+      );
+      const replaceCount = Math.floor(POPULATION_SIZE * 0.4);
+      for (let i = 0; i < replaceCount; i++) {
+        const fresh = createRandomGenome(
+          globalBestGenome,
+          0.5,
+          genomeLength,
+        );
+        if (hasActiveOsc(fresh)) {
+          population[POPULATION_SIZE - replaceCount + i] = fresh;
+        }
+      }
+      onProgress({
+        iteration: gen + 1,
+        suppressionPercent: globalBestFit,
+        status: 'cataclysm',
+      });
+    }
 
     if (globalBestFit >= 98) {
       break;
@@ -365,11 +402,13 @@ const runFineTunePhase = (
     history.push({
       iteration: startIteration + iter + 1,
       suppressionPercent: currentBest,
+      status: 'fine_tuning',
     });
 
     onProgress({
       iteration: startIteration + iter + 1,
       suppressionPercent: currentBest,
+      status: 'fine_tuning',
     });
 
     if (currentBest >= 98) {

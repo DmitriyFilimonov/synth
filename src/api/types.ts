@@ -30,7 +30,11 @@ export interface MatchRequestBody {
 }
 
 export interface MatchResult {
-  history: { iteration: number; suppressionPercent: number }[];
+  history: {
+    iteration: number;
+    suppressionPercent: number;
+    status?: string;
+  }[];
   targetInfo: {
     sampleRate: number;
     numSamples: number;
