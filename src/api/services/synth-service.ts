@@ -190,6 +190,8 @@ async function runMatchJob(
           ? (history[history.length - 1]?.suppressionPercent ?? 0)
           : 0,
       targetInfo: result.targetInfo,
+      bestVector: result.bestVector,
+      synthConfig: result.synthConfig,
     });
   } catch (error) {
     const message =

@@ -7,6 +7,7 @@ import {
   unlink,
 } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import type { ArgCreateSynth } from '../../synth';
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
@@ -35,6 +36,8 @@ export interface JobRecord {
     bitsPerSample: number;
     numChannels: number;
   } | null;
+  bestVector: number[] | null;
+  synthConfig: ArgCreateSynth | null;
 }
 
 const JOBS_DIR = join(process.cwd(), 'jobs');
@@ -88,6 +91,8 @@ export async function createJob(
     updatedAt: now,
     suppressionPercent: 0,
     targetInfo: null,
+    bestVector: null,
+    synthConfig: null,
   };
   await writeFile(jobFilePath(id), JSON.stringify(record, null, 2));
   return record;
@@ -103,6 +108,8 @@ export async function updateJobStatus(
       | 'suppressionPercent'
       | 'targetInfo'
       | 'errorMessage'
+      | 'bestVector'
+      | 'synthConfig'
     >
   >,
 ): Promise<JobRecord> {
@@ -121,6 +128,12 @@ export async function updateJobStatus(
     }
     if (partial.errorMessage !== undefined) {
       record.errorMessage = partial.errorMessage;
+    }
+    if (partial.bestVector !== undefined) {
+      record.bestVector = partial.bestVector;
+    }
+    if (partial.synthConfig !== undefined) {
+      record.synthConfig = partial.synthConfig;
     }
   }
   await writeFile(jobFilePath(id), JSON.stringify(record, null, 2));

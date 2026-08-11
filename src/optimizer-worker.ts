@@ -73,6 +73,8 @@ parentPort.on('message', (msg: WorkerMessage) => {
           history.length > 0
             ? (history[history.length - 1]?.suppressionPercent ?? 0)
             : 0,
+        bestVector: vector,
+        synthConfig: optimizedConfig,
       },
     });
   } catch (error) {

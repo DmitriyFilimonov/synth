@@ -237,6 +237,8 @@ export const getJobStatusHandler = async (
       updatedAt: job.updatedAt,
       suppressionPercent: job.suppressionPercent,
       targetInfo: job.targetInfo,
+      bestVector: job.bestVector,
+      synthConfig: job.synthConfig,
     });
   } catch {
     res.status(404).json({ error: 'Job not found' });
@@ -298,6 +300,42 @@ export const downloadJobResultHandler = async (
       `attachment; filename="matched_${id}.wav"`,
     );
     res.send(buffer);
+  } catch {
+    res.status(404).json({ error: 'Job not found' });
+  }
+};
+
+export const downloadJobParamsHandler = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    if (!id) {
+      res.status(400).json({ error: 'Job ID required' });
+      return;
+    }
+
+    const job = await getJob(id);
+
+    if (job.status !== 'completed') {
+      res.status(400).json({
+        error: `Job not completed. Status: ${job.status}`,
+      });
+      return;
+    }
+
+    if (!job.synthConfig) {
+      res.status(404).json({ error: 'Synth config not found' });
+      return;
+    }
+
+    res.set('Content-Type', 'application/json');
+    res.set(
+      'Content-Disposition',
+      `attachment; filename="synth_params_${id}.json"`,
+    );
+    res.json(job.synthConfig);
   } catch {
     res.status(404).json({ error: 'Job not found' });
   }

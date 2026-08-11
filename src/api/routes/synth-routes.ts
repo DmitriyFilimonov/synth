@@ -8,6 +8,7 @@ import {
   getJobStatusHandler,
   getJobsListHandler,
   downloadJobResultHandler,
+  downloadJobParamsHandler,
   deleteJobHandler,
 } from '../controllers/synth-controller';
 
@@ -23,6 +24,10 @@ router.post('/match/job/json', createMatchJobJsonHandler);
 router.get('/match/jobs', getJobsListHandler);
 router.get('/match/jobs/:id', getJobStatusHandler);
 router.get('/match/jobs/:id/download', downloadJobResultHandler);
+router.get(
+  '/match/jobs/:id/download-params',
+  downloadJobParamsHandler,
+);
 router.delete('/match/jobs/:id', deleteJobHandler);
 
 export default router;

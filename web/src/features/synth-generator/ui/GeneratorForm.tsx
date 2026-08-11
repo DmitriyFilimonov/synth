@@ -1,7 +1,10 @@
 import { type ChangeEvent, useState } from 'react';
 import { generateWav } from '../api/generate';
 import { fetchPresets } from '../api/presets';
-import type { GenerateRequest, OscillatorConfig } from '../model/types';
+import type {
+  GenerateRequest,
+  OscillatorConfig,
+} from '../model/types';
 import { AudioPlayer } from './AudioPlayer';
 import { Button, Input, Select } from '@/shared/ui';
 import styles from './GeneratorForm.module.css';
@@ -16,7 +19,9 @@ const DEFAULT_OSCILLATOR: OscillatorConfig = {
 };
 
 export function GeneratorForm() {
-  const [mode, setMode] = useState<'preset' | 'oscillators'>('preset');
+  const [mode, setMode] = useState<'preset' | 'oscillators'>(
+    'preset',
+  );
   const [presets, setPresets] = useState<string[]>([]);
   const [selectedPreset, setSelectedPreset] = useState('');
   const [oscillators, setOscillators] = useState<OscillatorConfig[]>([
@@ -65,7 +70,9 @@ export function GeneratorForm() {
       const url = URL.createObjectURL(blob);
       setAudioUrl(url);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Generation failed');
+      setError(
+        err instanceof Error ? err.message : 'Generation failed',
+      );
     } finally {
       setLoading(false);
     }
@@ -100,7 +107,11 @@ export function GeneratorForm() {
   return (
     <form className={styles.form} onSubmit={handleSubmit}>
       <div className={styles.row}>
-        <Button type="button" variant="secondary" onClick={loadPresets}>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={loadPresets}
+        >
           Load presets
         </Button>
       </div>
@@ -163,7 +174,11 @@ export function GeneratorForm() {
                   step="1"
                   value={osc.freqBase}
                   onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    handleOscillatorChange(i, 'freqBase', e.target.value)
+                    handleOscillatorChange(
+                      i,
+                      'freqBase',
+                      e.target.value,
+                    )
                   }
                 />
                 <Input
@@ -172,7 +187,11 @@ export function GeneratorForm() {
                   step="1"
                   value={osc.freqStart}
                   onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    handleOscillatorChange(i, 'freqStart', e.target.value)
+                    handleOscillatorChange(
+                      i,
+                      'freqStart',
+                      e.target.value,
+                    )
                   }
                 />
                 <Input
@@ -181,7 +200,11 @@ export function GeneratorForm() {
                   step="0.1"
                   value={osc.duration}
                   onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    handleOscillatorChange(i, 'duration', e.target.value)
+                    handleOscillatorChange(
+                      i,
+                      'duration',
+                      e.target.value,
+                    )
                   }
                 />
                 <Input
@@ -209,7 +232,11 @@ export function GeneratorForm() {
                     type="checkbox"
                     checked={osc.on}
                     onChange={(e) =>
-                      handleOscillatorChange(i, 'on', e.target.checked)
+                      handleOscillatorChange(
+                        i,
+                        'on',
+                        e.target.checked,
+                      )
                     }
                   />
                   On
@@ -217,7 +244,11 @@ export function GeneratorForm() {
               </div>
             </div>
           ))}
-          <Button type="button" variant="secondary" onClick={addOscillator}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={addOscillator}
+          >
             + Add oscillator
           </Button>
         </div>

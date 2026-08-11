@@ -18,6 +18,29 @@ export interface MatchConfig {
   maxIterations?: number;
 }
 
+export interface SynthOscConfig {
+  freqBase: number;
+  freqStart: number;
+  duration: number;
+  slope: number;
+  phase: number;
+  on: boolean;
+}
+
+export interface SynthAmpEnvConfig {
+  startLevel: number;
+  endLevel: number;
+  duration: number;
+  slope: number;
+}
+
+export interface SynthConfig {
+  oscillators: {
+    osc: SynthOscConfig;
+    ampEnv: SynthAmpEnvConfig;
+  }[];
+}
+
 export interface JobEntry {
   id: string;
   status: JobStatus;
@@ -31,6 +54,7 @@ export interface JobEntry {
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
+  synthConfig?: SynthConfig;
 }
 
 export interface JobListEntry {

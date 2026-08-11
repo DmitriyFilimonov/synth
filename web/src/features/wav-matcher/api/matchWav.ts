@@ -1,4 +1,11 @@
-import type { MatchConfig, MatchHistoryEntry, MatchTargetInfo, JobEntry, JobListEntry, CreateJobResponse } from '../model/types';
+import type {
+  MatchConfig,
+  MatchHistoryEntry,
+  MatchTargetInfo,
+  JobEntry,
+  JobListEntry,
+  CreateJobResponse,
+} from '../model/types';
 
 export async function createMatchJob(
   file: File,
@@ -7,14 +14,19 @@ export async function createMatchJob(
   const buffer = await file.arrayBuffer();
 
   const params = new URLSearchParams();
-  if (config.numOscillators) params.set('numOscillators', String(config.numOscillators));
-  if (config.maxIterations) params.set('maxIterations', String(config.maxIterations));
+  if (config.numOscillators)
+    params.set('numOscillators', String(config.numOscillators));
+  if (config.maxIterations)
+    params.set('maxIterations', String(config.maxIterations));
 
-  const response = await fetch(`/api/match/job?${params.toString()}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'audio/wav' },
-    body: buffer,
-  });
+  const response = await fetch(
+    `/api/match/job?${params.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'audio/wav' },
+      body: buffer,
+    },
+  );
 
   if (!response.ok) {
     const error = await response
@@ -44,10 +56,24 @@ export async function listJobs(): Promise<JobListEntry[]> {
   return response.json() as Promise<JobListEntry[]>;
 }
 
-export async function downloadJobResult(jobId: string): Promise<Blob> {
+export async function downloadJobResult(
+  jobId: string,
+): Promise<Blob> {
   const response = await fetch(`/api/match/jobs/${jobId}/download`);
   if (!response.ok) {
     throw new Error('Failed to download result');
+  }
+  return response.blob();
+}
+
+export async function downloadJobParams(
+  jobId: string,
+): Promise<Blob> {
+  const response = await fetch(
+    `/api/match/jobs/${jobId}/download-params`,
+  );
+  if (!response.ok) {
+    throw new Error('Failed to download synth params');
   }
   return response.blob();
 }

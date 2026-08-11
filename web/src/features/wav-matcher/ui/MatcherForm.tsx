@@ -1,6 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { createMatchJob, getJobStatus, listJobs, downloadJobResult } from '../api/matchWav';
-import type { JobEntry, JobStatus, JobListEntry } from '../model/types';
+import {
+  createMatchJob,
+  getJobStatus,
+  listJobs,
+  downloadJobResult,
+  downloadJobParams,
+} from '../api/matchWav';
+import type {
+  JobEntry,
+  JobStatus,
+  JobListEntry,
+} from '../model/types';
 import { Button, Input } from '@/shared/ui';
 import styles from './MatcherForm.module.css';
 import { AudioPlayer } from '@/features/synth-generator/ui/AudioPlayer';
@@ -101,7 +111,9 @@ export function MatcherForm() {
 
       setViewMode('upload');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start job');
+      setError(
+        err instanceof Error ? err.message : 'Failed to start job',
+      );
     } finally {
       setLoading(false);
     }
@@ -129,10 +141,29 @@ export function MatcherForm() {
     setViewMode('upload');
   };
 
+  const handleDownloadParams = async (jobId: string) => {
+    try {
+      const blob = await downloadJobParams(jobId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `synth_params_${jobId.slice(0, 8)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      setError('Failed to download synth params');
+    }
+  };
+
   useEffect(() => {
     fetchJobList();
-    const isIdle = localStorage.getItem(IDLE_LOCAL_STORAGE_KEY) === 'true';
-    const prevJobId = localStorage.getItem('synth-wav-matcher-last-job');
+    const isIdle =
+      localStorage.getItem(IDLE_LOCAL_STORAGE_KEY) === 'true';
+    const prevJobId = localStorage.getItem(
+      'synth-wav-matcher-last-job',
+    );
     if (!isIdle && prevJobId) {
       pollJob(prevJobId);
     }
@@ -145,7 +176,9 @@ export function MatcherForm() {
     }
   }, [activeJobId]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     const selected = e.target.files?.[0];
     if (!selected) {
       setFile(null);
@@ -177,14 +210,20 @@ export function MatcherForm() {
   const getSupressionFromJob = (job: JobEntry | null): number => {
     if (!job) return 0;
     if (job.progress.length > 0) {
-      return job.progress[job.progress.length - 1]?.suppressionPercent ?? 0;
+      return (
+        job.progress[job.progress.length - 1]?.suppressionPercent ?? 0
+      );
     }
     return job.suppressionPercent;
   };
 
   const formatTime = (iso: string): string => {
     const date = new Date(iso);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
   };
 
   return (
@@ -217,7 +256,9 @@ export function MatcherForm() {
               onClick={() => handleJobClick(job.id)}
             >
               <div className={styles.jobHeader}>
-                <span className={styles.jobId}>{job.id.slice(0, 8)}</span>
+                <span className={styles.jobId}>
+                  {job.id.slice(0, 8)}
+                </span>
                 <span
                   className={`${styles.jobStatus} ${styles[job.status]}`}
                 >
@@ -225,7 +266,8 @@ export function MatcherForm() {
                 </span>
               </div>
               <div className={styles.jobMeta}>
-                Osc: {job.params.numOscillators}, Iters: {job.params.maxIterations}
+                Osc: {job.params.numOscillators}, Iters:{' '}
+                {job.params.maxIterations}
               </div>
               <div className={styles.jobMeta}>
                 Suppression: {job.suppressionPercent.toFixed(2)}%
@@ -233,87 +275,121 @@ export function MatcherForm() {
               <div className={styles.jobTime}>
                 {formatTime(job.createdAt)}
               </div>
+              {job.status === 'completed' && (
+                <div
+                  className={styles.jobActions}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Button
+                    onClick={() => handleDownloadParams(job.id)}
+                  >
+                    Download Params
+                  </Button>
+                </div>
+              )}
             </div>
           ))}
         </div>
       ) : (
         <form className={styles.form} onSubmit={handleSubmit}>
-        <div className={styles.uploadSection}>
-          <label className={styles.fileLabel}>
-            <input
-              type="file"
-              accept=".wav"
-              onChange={handleFileChange}
-              className={styles.fileInput}
-            />
-            {file ? file.name : 'Choose a WAV file...'}
-          </label>
-          {uploadError && <div className={styles.error}>{uploadError}</div>}
-          {file && (
-            <div className={styles.fileInfo}>
-              {file.name} ({(file.size / 1024).toFixed(1)} KB)
-            </div>
-          )}
-        </div>
-
-        <div className={styles.row}>
-          <Input
-            label="Oscillators"
-            type="number"
-            min="1"
-            max="50"
-            step="1"
-            value={numOscillators}
-            onChange={(e) => setNumOscillators(e.target.value)}
-          />
-          <Input
-            label="Max iterations"
-            type="number"
-            min="1"
-            step="1"
-            value={maxIterations}
-            onChange={(e) => setMaxIterations(e.target.value)}
-          />
-        </div>
-
-        {error && <div className={styles.error}>{error}</div>}
-
-        <Button type="submit" disabled={loading || !file}>
-          {loading ? 'Starting...' : 'Match Parameters'}
-        </Button>
-
-        {activeJobId && activeJob && (
-          <div className={styles.progressSection}>
-            <div className={styles.progressHeader}>
-              <span>Job: {activeJobId.slice(0, 8)}</span>
-              <span className={`${styles.jobStatus} ${styles[activeJob.status]}`}>
-                {getStatusLabel(activeJob.status)}
-              </span>
-            </div>
-            <div className={styles.suppressionValue}>
-              Current: {getSupressionFromJob(activeJob).toFixed(2)}%
-            </div>
-            {activeJob.progress.length > 0 && (
-              <div className={styles.miniChart}>
-                {activeJob.progress.map((entry, idx) => {
-                  const maxSup = Math.max(...activeJob.progress.map(p => Math.max(0, p.suppressionPercent)));
-                  const height = maxSup > 0 ? (Math.max(0, entry.suppressionPercent) / maxSup) * 40 : 0;
-                  return (
-                    <div
-                      key={idx}
-                      className={styles.chartBar}
-                      style={{ height: `${Math.max(1, height)}px` }}
-                      title={`${entry.iteration}: ${entry.suppressionPercent.toFixed(2)}%`}
-                    />
-                  );
-                })}
+          <div className={styles.uploadSection}>
+            <label className={styles.fileLabel}>
+              <input
+                type="file"
+                accept=".wav"
+                onChange={handleFileChange}
+                className={styles.fileInput}
+              />
+              {file ? file.name : 'Choose a WAV file...'}
+            </label>
+            {uploadError && (
+              <div className={styles.error}>{uploadError}</div>
+            )}
+            {file && (
+              <div className={styles.fileInfo}>
+                {file.name} ({(file.size / 1024).toFixed(1)} KB)
               </div>
             )}
           </div>
-        )}
 
-        {audioUrl && <AudioPlayer url={audioUrl} />}
-      </form>
+          <div className={styles.row}>
+            <Input
+              label="Oscillators"
+              type="number"
+              min="1"
+              max="50"
+              step="1"
+              value={numOscillators}
+              onChange={(e) => setNumOscillators(e.target.value)}
+            />
+            <Input
+              label="Max iterations"
+              type="number"
+              min="1"
+              step="1"
+              value={maxIterations}
+              onChange={(e) => setMaxIterations(e.target.value)}
+            />
+          </div>
+
+          {error && <div className={styles.error}>{error}</div>}
+
+          <Button type="submit" disabled={loading || !file}>
+            {loading ? 'Starting...' : 'Match Parameters'}
+          </Button>
+
+          {activeJobId && activeJob && (
+            <div className={styles.progressSection}>
+              <div className={styles.progressHeader}>
+                <span>Job: {activeJobId.slice(0, 8)}</span>
+                <span
+                  className={`${styles.jobStatus} ${styles[activeJob.status]}`}
+                >
+                  {getStatusLabel(activeJob.status)}
+                </span>
+              </div>
+              <div className={styles.suppressionValue}>
+                Current: {getSupressionFromJob(activeJob).toFixed(2)}%
+              </div>
+              {activeJob.progress.length > 0 && (
+                <div className={styles.miniChart}>
+                  {activeJob.progress.map((entry, idx) => {
+                    const maxSup = Math.max(
+                      ...activeJob.progress.map((p) =>
+                        Math.max(0, p.suppressionPercent),
+                      ),
+                    );
+                    const height =
+                      maxSup > 0
+                        ? (Math.max(0, entry.suppressionPercent) /
+                            maxSup) *
+                          40
+                        : 0;
+                    return (
+                      <div
+                        key={idx}
+                        className={styles.chartBar}
+                        style={{ height: `${Math.max(1, height)}px` }}
+                        title={`${entry.iteration}: ${entry.suppressionPercent.toFixed(2)}%`}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+              {activeJob.status === 'completed' && (
+                <div className={styles.resultActions}>
+                  <Button
+                    onClick={() => handleDownloadParams(activeJobId)}
+                  >
+                    Download Params
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {audioUrl && <AudioPlayer url={audioUrl} />}
+        </form>
       )}
     </div>
   );

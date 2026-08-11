@@ -162,3 +162,19 @@
   background: #3b82f6;
   opacity: 0.7;
 }
+
+.resultActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.jobActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.jobActions button {
+  font-size: 11px;
+}

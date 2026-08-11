@@ -68,6 +68,25 @@ export interface JobStatusResponse {
     bitsPerSample: number;
     numChannels: number;
   } | null;
+  bestVector: number[] | null;
+  synthConfig: {
+    oscillators: {
+      osc: {
+        freqBase: number;
+        freqStart: number;
+        duration: number;
+        slope: number;
+        phase: number;
+        on: boolean;
+      };
+      ampEnv: {
+        startLevel: number;
+        endLevel: number;
+        duration: number;
+        slope: number;
+      };
+    }[];
+  } | null;
 }
 
 export interface JobListItem {

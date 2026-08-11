@@ -1,5 +1,6 @@
 import { Worker } from 'worker_threads';
 import { resolve } from 'node:path';
+import type { ArgCreateSynth } from './synth';
 
 export interface MatchWorkerProgress {
   iteration: number;
@@ -16,6 +17,8 @@ export interface MatchWorkerResult {
     numChannels: number;
   };
   suppressionPercent: number;
+  bestVector: number[];
+  synthConfig: ArgCreateSynth;
 }
 
 interface MatchWorkerArgs {
