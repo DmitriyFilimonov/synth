@@ -6,6 +6,8 @@
 
 Также включает **пайплайн подбора параметров** к эталонным WAV-файлам: оптимизатор находит конфигурацию осцилляторов, воспроизводящую заданный звук, минимизируя RMS-based cancellation %.
 
+Веб-интерфейс (React + Vite) доступен при запуске HTTP-сервера на `http://localhost:3000`.
+
 ## Установка
 
 ```bash
@@ -120,7 +122,26 @@ match({
 | `SYNTH_DEFAULT_PRESET` | Один осциллятор 440 Гц |
 | `SYNTH_MULTI_PRESET(n)` | `n` осцилляторов с гармониками и убывающей амплитудой |
 
-### 4. Форматирование и линтинг
+### 4. Веб-интерес
+
+React-приложение (Feature-Sliced Design) для генерации WAV через браузер.
+
+```bash
+# Из корня — dev-сервер (Vite) с прокси на бэкенд:3000
+cd web && npm install
+cd web && npm run dev    # http://localhost:5173
+
+# Production build
+cd web && npm run build  # → web/dist/
+```
+
+Функциональность:
+- Генерация WAV из пресета или ручной настройки осцилляторов
+- Настройка duration и sampleRate
+- Прослушивание результата в браузере
+- Скачивание сгенерированного `.wav`
+
+### 5. Форматирование и линтинг
 
 ```bash
 npm run prettier       # Prettier (авто)
@@ -133,6 +154,8 @@ npm run lint:fix       # ESLint (автофикс)
 
 - Node.js
 - TypeScript
+- Express (HTTP-сервер, API)
+- React + Vite (веб-интерфейс)
 - tsx (dev-рантайм)
 - Prettier + ESLint
 
@@ -150,9 +173,11 @@ npm run lint:fix       # ESLint (автофикс)
 
 ## Структура проекта
 
-| Файл | Назначение |
+| Файл / Папка | Назначение |
 |---|---|
 | `src/index.ts` | Генерация WAV из `presets.ts` |
+| `src/server.ts` | Точка входа HTTP-сервера |
+| `src/api/` | Express API (контроллеры, роуты, сервисы) |
 | `src/presets.ts` | Пресеты для генерации |
 | `src/match-entry.ts` | Точка входа подбора параметров |
 | `src/match.ts` | Оркестратор: read → optimize → generate → visualize |
@@ -171,3 +196,7 @@ npm run lint:fix       # ESLint (автофикс)
 | `src/synth-config-to-vector.ts` | Нормализация конфига → `[0,1]` |
 | `src/vector-to-synth-config.ts` | Денормализация вектора → конфиг (50 осцилляторов) |
 | `src/consts.ts` | Константы: `SAMPLE_RATE` и т.д. |
+| `web/` | Веб-интерфейс (React + Vite, FSD) |
+| `web/src/app/` | Инициализация приложения |
+| `web/src/features/` | Фичи (синтез-генератор) |
+| `web/src/shared/` | Переиспользуемые компоненты и API-клиент |

@@ -1,5 +1,6 @@
 import express from 'express';
 import type { Express } from 'express';
+import { join } from 'path';
 import { SAMPLE_RATE } from '../consts';
 import synthRoutes from './routes/synth-routes';
 
@@ -21,6 +22,8 @@ export function createApp(): Express {
     }),
   );
 
+  const webDist = join(__dirname, '../../web/dist');
+
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
@@ -33,6 +36,12 @@ export function createApp(): Express {
   });
 
   app.use('/api', synthRoutes);
+
+  app.use(express.static(webDist));
+
+  app.get('*', (_req, res) => {
+    res.sendFile(join(webDist, 'index.html'));
+  });
 
   return app;
 }

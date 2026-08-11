@@ -19,10 +19,24 @@
 | `npm run lint:fix` | Автофикс ESLint |
 | `npm run test` | Заглушка тестов (not specified) |
 
+### Веб-интерфейс (`web/`)
+
+| Команда | Действие |
+|---|---|
+| `cd web && npm run dev` | Vite dev-сервер (`http://localhost:5173`) |
+| `cd web && npm run build` | Сборка в `web/dist/` |
+| `cd web && npm run preview` | Превью собранной сборки |
+
+Dev-сервер проксирует `/api`, `/health`, `/presets` на бэкенд `localhost:3000`.
+
 ## Порядок работы
 1. `npm run prettier` — отформатировать код
 2. `npm run build` — убедиться, что типы проходят проверку
 3. `npm run dev` (или `npm run start`) — запустить и проверить результат
+
+Для веб-интерфейса:
+1. `cd web && npm run build` — убедиться, что типы проходят проверку
+2. `cd web && npm run dev` — запустить dev-сервер
 
 ## Архитектура
 Проект — генератор-синтезатор. Создаёт файл `.wav` (44 100 Гц, 16 бит, моно) путём аддитивного синтеза до 50 осцилляторов. Включает пайплайн подбора параметров: оптимизатор находит конфигурацию осцилляторов, воспроизводящую заданный WAV-файл, минимизируя RMS-based cancellation %. FFT не используется.
@@ -70,7 +84,7 @@ src/api/routes/                  → Express Router (маршрутизация)
 | Файл | Назначение |
 |---|---|
 | `src/server.ts` | Точка входа HTTP-сервера. Только `createApp()` + `listen(PORT)`. Не должен содержать роутов, контроллеров, бизнес-логики |
-| `src/api/app.ts` | Создаёт Express-приложение. Регистрирует middleware (`json`, `raw`), health-эндпоинты, подключает `src/api/routes/` |
+| `src/api/app.ts` | Создаёт Express-приложение. Регистрирует middleware (`json`, `raw`), health-эндпоинты, подключает `src/api/routes/`, отдаёт статику из `web/dist/` (SPA fallback) |
 | `src/api/types.ts` | Все DTO-интерфейсы для API: `GenerateRequest`, `MatchRequestBody`, `MatchResult`, хелперы конвертации |
 | `src/api/services/synth-service.ts` | Бизнес-логика: `generateWav()`, `matchWav()`. Работают с файловой системой, вызывают core-модули. Ничего не знают про HTTP |
 | `src/api/controllers/synth-controller.ts` | Контроллеры: принимают `Request`, вызывают сервисы, формируют `Response`. Маппинг ошибок на HTTP-статусы |
@@ -83,14 +97,43 @@ src/api/routes/                  → Express Router (маршрутизация)
 4. **Сервисы** не должны зависеть от Express (`req`, `res`). Чистый ввод/вывод
 5. **Типы запросов/ответов** — всегда в `src/api/types.ts`
 
+### Веб-интерфейс (`web/src/`)
+
+Приложение построено по **Feature-Sliced Design (FSD)**:
+
+```
+web/src/
+├── app/                    # Инициализация (App.tsx, index.tsx)
+├── features/
+│   └── synth-generator/    # Фича генерации WAV
+│       ├── api/            # Вызовы Backend API
+│       ├── model/          # Типы и интерфейсы
+│       └── ui/             # Компоненты UI
+└── shared/
+    ├── api/                # Базовый HTTP-клиент
+    └── ui/                 # Переиспользуемые UI-компоненты
+```
+
+| Слой | Назначение |
+|---|---|
+| `shared/ui/` | Примитивы: `Button`, `Input`, `Select` |
+| `shared/api/` | `fetchApi<T>` (JSON), `fetchBlob` (binary) |
+| `features/synth-generator/` | Форма генерации: выбор пресета, настройка осцилляторов, плеер |
+| `app/` | Точка входа, корневой компонент |
+
+**Правила:**
+1. `features` может импортировать из `shared`, но не из других `features`
+2. `shared` не зависит от `features` и `app`
+3. UI-компоненты используют CSS Modules (`*.module.css`)
+
 ### Деплой (Timeweb Cloud)
 
 Проект поддерживает контейнеризацию через Docker для деплоя на timeweb.cloud:
 
 | Файл | Назначение |
 |---|---|
-| `Dockerfile` | Мультисборка: `npm ci` → `tsc` → `npm prune` → `node dist/server.js` |
-| `.dockerignore` | Исключает `node_modules`, `dist`, `*.wav`, `*.svg` |
+| `Dockerfile` | Мультисборка: бэкенд `npm ci` + `tsc`, веб `npm ci` + `vite build` → `node dist/server.js` |
+| `.dockerignore` | Исключает `node_modules`, `dist`, `web/node_modules`, `web/dist`, `*.wav`, `*.svg` |
 
 ```
 docker build -t synth .
@@ -98,6 +141,8 @@ docker run -p 3000:3000 synth
 ```
 
 Порт сервера управляется через переменную окружения `PORT` (по умолчанию `3000`).
+
+Express отдаёт статику из `web/dist/` и настроен как SPA-сервер (fallback на `index.html`). API эндпоинты `/api/*` имеют приоритет над статикой.
 
 ### HTTP API эндпоинты
 
