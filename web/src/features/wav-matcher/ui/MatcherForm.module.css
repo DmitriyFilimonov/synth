@@ -54,3 +54,111 @@
   border: 1px solid #bbf7d0;
   border-radius: 6px;
 }
+
+.jobList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 600px;
+}
+
+.jobCard {
+  padding: 12px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.jobCard:hover {
+  background: #f9fafb;
+}
+
+.jobHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.jobId {
+  font-family: monospace;
+  font-size: 13px;
+  color: #374151;
+}
+
+.jobStatus {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.jobStatus.queued {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.jobStatus.running {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.jobStatus.completed {
+  background: #d1fae5;
+  color: #059669;
+}
+
+.jobStatus.failed {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.jobMeta {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.jobTime {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 4px;
+}
+
+.progressSection {
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.progressHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.suppressionValue {
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.miniChart {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 42px;
+  margin-top: 8px;
+  padding-top: 2px;
+  border-bottom: 1px solid #e5e7eb;
+  overflow: hidden;
+}
+
+.chartBar {
+  flex: 1;
+  min-width: 2px;
+  background: #3b82f6;
+  opacity: 0.7;
+}

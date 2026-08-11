@@ -1,4 +1,56 @@
-import type { MatchConfig, MatchHistoryEntry, MatchTargetInfo } from '../model/types';
+import type { MatchConfig, MatchHistoryEntry, MatchTargetInfo, JobEntry, JobListEntry, CreateJobResponse } from '../model/types';
+
+export async function createMatchJob(
+  file: File,
+  config: MatchConfig,
+): Promise<CreateJobResponse> {
+  const buffer = await file.arrayBuffer();
+
+  const params = new URLSearchParams();
+  if (config.numOscillators) params.set('numOscillators', String(config.numOscillators));
+  if (config.maxIterations) params.set('maxIterations', String(config.maxIterations));
+
+  const response = await fetch(`/api/match/job?${params.toString()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'audio/wav' },
+    body: buffer,
+  });
+
+  if (!response.ok) {
+    const error = await response
+      .json()
+      .catch(() => ({ error: `HTTP ${response.status}` }));
+    throw new Error(
+      (error as { error?: string }).error ?? 'Failed to create job',
+    );
+  }
+
+  return response.json() as Promise<CreateJobResponse>;
+}
+
+export async function getJobStatus(jobId: string): Promise<JobEntry> {
+  const response = await fetch(`/api/match/jobs/${jobId}`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch job status');
+  }
+  return response.json() as Promise<JobEntry>;
+}
+
+export async function listJobs(): Promise<JobListEntry[]> {
+  const response = await fetch('/api/match/jobs');
+  if (!response.ok) {
+    throw new Error('Failed to fetch jobs list');
+  }
+  return response.json() as Promise<JobListEntry[]>;
+}
+
+export async function downloadJobResult(jobId: string): Promise<Blob> {
+  const response = await fetch(`/api/match/jobs/${jobId}/download`);
+  if (!response.ok) {
+    throw new Error('Failed to download result');
+  }
+  return response.blob();
+}
 
 interface MatchResponse {
   history: MatchHistoryEntry[];

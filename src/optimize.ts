@@ -164,7 +164,7 @@ const runGaPhase = (
   population.push(normalizeGenome([...arg.initialVector]));
   for (let i = 1; i < POPULATION_SIZE; i++) {
     population.push(
-      createRandomGenome(arg.initialVector, 0.3, genomeLength),
+      createRandomGenome(arg.initialVector, 0.5, genomeLength),
     );
   }
 
@@ -175,8 +175,8 @@ const runGaPhase = (
   let prevBest = -Infinity;
 
   for (let gen = 0; gen < generations; gen++) {
-    const sigma = Math.min(0.3, 0.05 + stagnationCount * 0.003);
-    const prob = Math.min(0.3, 0.1 + stagnationCount * 0.002);
+    const sigma = Math.min(0.5, 0.1 + stagnationCount * 0.008);
+    const prob = Math.min(0.5, 0.2 + stagnationCount * 0.005);
 
     const fitnesses = population.map((genome) => {
       const f = fitness(genome);
@@ -215,21 +215,23 @@ const runGaPhase = (
       status,
     });
 
-    if (stagnationCount > 100 && stagnationCount % 100 < 2) {
+    if (stagnationCount > 50 && stagnationCount % 50 < 2) {
       console.log(
         `[GA] Cataclysm triggered at gen ${gen + 1} (stagn=${stagnationCount})`,
       );
-      const replaceCount = Math.floor(POPULATION_SIZE * 0.4);
+      const replaceCount = Math.floor(POPULATION_SIZE * 0.5);
       for (let i = 0; i < replaceCount; i++) {
         const fresh = createRandomGenome(
-          globalBestGenome,
-          0.5,
+          arg.initialVector,
+          1.0,
           genomeLength,
         );
         if (hasActiveOsc(fresh)) {
           population[POPULATION_SIZE - replaceCount + i] = fresh;
         }
       }
+      stagnationCount = 0;
+      prevBest = -Infinity;
       onProgress({
         iteration: gen + 1,
         suppressionPercent: globalBestFit,

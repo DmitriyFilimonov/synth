@@ -7,8 +7,19 @@ import { SYNTH_MULTI_PRESET } from '../../match-preset';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { unlink, readFile, writeFile } from 'node:fs/promises';
+import {
+  unlink,
+  readFile,
+  writeFile,
+  copyFile,
+} from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import {
+  createJob,
+  updateJobStatus,
+  getInputFilePath,
+  getResultFilePath,
+} from './job-store';
 
 interface GeneratedFile {
   buffer: Buffer;
@@ -106,3 +117,81 @@ export async function matchWav(
     await unlink(tempOutput).catch(() => {});
   }
 }
+
+export async function matchWavWithJob(
+  wavBuffer: Buffer,
+  numOscillators: number,
+  maxIterations: number,
+): Promise<string> {
+  const jobId = randomUUID();
+  const inputFileName = `${jobId}_input.wav`;
+
+  await createJob(
+    jobId,
+    { numOscillators, maxIterations },
+    inputFileName,
+  );
+
+  const inputPath = getInputFilePath(jobId);
+  await writeFile(inputPath, wavBuffer);
+
+  setImmediate(() => {
+    void runMatchJob(jobId, numOscillators, maxIterations, inputPath);
+  });
+
+  return jobId;
+}
+
+async function runMatchJob(
+  jobId: string,
+  numOscillators: number,
+  maxIterations: number,
+  inputPath: string,
+): Promise<void> {
+  const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
+  const history: {
+    iteration: number;
+    suppressionPercent: number;
+  }[] = [];
+
+  try {
+    await updateJobStatus(jobId, 'running');
+
+    const result = match({
+      targetWavPath: inputPath,
+      outputWavPath: tempOutput,
+      maxIterations,
+      initialVector: mapSynthConfigToVector(
+        SYNTH_MULTI_PRESET(numOscillators),
+      ),
+      onProgress: (entry) => {
+        history.push(entry);
+        void updateJobStatus(jobId, 'running', {
+          progress: [...history],
+          suppressionPercent: entry.suppressionPercent,
+        });
+      },
+    });
+
+    const resultPath = getResultFilePath(jobId);
+    await copyFile(tempOutput, resultPath);
+
+    await updateJobStatus(jobId, 'completed', {
+      progress: history,
+      suppressionPercent:
+        history.length > 0
+          ? (history[history.length - 1]?.suppressionPercent ?? 0)
+          : 0,
+      targetInfo: result.targetInfo,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown error';
+    await updateJobStatus(jobId, 'failed', {
+      errorMessage: message,
+    });
+  } finally {
+    await unlink(tempOutput).catch(() => {});
+  }
+}
+

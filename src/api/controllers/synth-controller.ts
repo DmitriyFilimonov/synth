@@ -1,12 +1,25 @@
 import type { Request, Response } from 'express';
 import { synthPreset1 } from '../../presets';
 import type { ArgCreateSynth } from '../../synth';
-import { generateWav, matchWav } from '../services/synth-service';
+import {
+  generateWav,
+  matchWav,
+  matchWavWithJob,
+} from '../services/synth-service';
+import {
+  getJob,
+  listJobs,
+  getResultFilePath,
+  deleteJob,
+} from '../services/job-store';
 import {
   GenerateRequest,
   MatchRequestBody,
+  CreateMatchJobRequest,
   oscillatorsToSynthConfig,
 } from '../types';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 
 const PRESETS_MAP: Record<string, ArgCreateSynth> = {
   synthPreset1,
@@ -127,5 +140,183 @@ export const matchBinaryHandler = async (
     const message =
       error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({ error: message });
+  }
+};
+
+export const createMatchJobHandler = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: 'WAV binary data required' });
+      return;
+    }
+
+    const queryParams = req.query as Record<
+      string,
+      string | undefined
+    >;
+    const numOscillators = parseInt(
+      queryParams.numOscillators ?? '5',
+      10,
+    );
+    const maxIterations = parseInt(
+      queryParams.maxIterations ?? '20',
+      10,
+    );
+
+    const jobId = await matchWavWithJob(
+      req.body,
+      isNaN(numOscillators) ? 5 : numOscillators,
+      isNaN(maxIterations) ? 20 : maxIterations,
+    );
+
+    res.status(202).json({ id: jobId });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+};
+
+export const createMatchJobJsonHandler = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const body = (req.body ?? {}) as CreateMatchJobRequest;
+
+    if (body.wavBase64 === undefined || body.wavBase64 === '') {
+      res
+        .status(400)
+        .json({ error: 'wavBase64 field required in request body' });
+      return;
+    }
+
+    const numOscillators = body.numOscillators ?? 5;
+    const maxIterations = body.maxIterations ?? 20;
+
+    const wavBuffer = Buffer.from(body.wavBase64, 'base64');
+
+    const jobId = await matchWavWithJob(
+      wavBuffer,
+      numOscillators,
+      maxIterations,
+    );
+
+    res.status(202).json({ id: jobId });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+};
+
+export const getJobStatusHandler = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    if (!id) {
+      res.status(400).json({ error: 'Job ID required' });
+      return;
+    }
+
+    const job = await getJob(id);
+    res.json({
+      id: job.id,
+      status: job.status,
+      progress: job.progress,
+      params: job.params,
+      inputFileName: job.inputFileName,
+      resultFileName: job.resultFileName,
+      errorMessage: job.errorMessage,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      suppressionPercent: job.suppressionPercent,
+      targetInfo: job.targetInfo,
+    });
+  } catch {
+    res.status(404).json({ error: 'Job not found' });
+  }
+};
+
+export const getJobsListHandler = async (
+  _req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const jobs = await listJobs();
+    res.json(
+      jobs.map((job) => ({
+        id: job.id,
+        status: job.status,
+        suppressionPercent: job.suppressionPercent,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+      })),
+    );
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+};
+
+export const downloadJobResultHandler = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    if (!id) {
+      res.status(400).json({ error: 'Job ID required' });
+      return;
+    }
+
+    const job = await getJob(id);
+
+    if (job.status !== 'completed') {
+      res.status(400).json({
+        error: `Job not completed. Status: ${job.status}`,
+      });
+      return;
+    }
+
+    const resultPath = getResultFilePath(id);
+    if (!existsSync(resultPath)) {
+      res.status(404).json({ error: 'Result file not found' });
+      return;
+    }
+
+    const buffer = await readFile(resultPath);
+    res.set('Content-Type', 'audio/wav');
+    res.set(
+      'Content-Disposition',
+      `attachment; filename="matched_${id}.wav"`,
+    );
+    res.send(buffer);
+  } catch {
+    res.status(404).json({ error: 'Job not found' });
+  }
+};
+
+export const deleteJobHandler = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    if (!id) {
+      res.status(400).json({ error: 'Job ID required' });
+      return;
+    }
+
+    await deleteJob(id);
+    res.status(204).send();
+  } catch {
+    res.status(404).json({ error: 'Job not found' });
   }
 };

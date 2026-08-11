@@ -45,6 +45,39 @@ export interface MatchResult {
   wavBase64: string;
 }
 
+export interface CreateMatchJobRequest {
+  numOscillators?: number;
+  maxIterations?: number;
+  wavBase64?: string;
+}
+
+export interface JobStatusResponse {
+  id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  progress: { iteration: number; suppressionPercent: number }[];
+  params: { numOscillators: number; maxIterations: number };
+  inputFileName: string;
+  resultFileName: string;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  suppressionPercent: number;
+  targetInfo: {
+    sampleRate: number;
+    numSamples: number;
+    bitsPerSample: number;
+    numChannels: number;
+  } | null;
+}
+
+export interface JobListItem {
+  id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  suppressionPercent: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export function oscillatorsToSynthConfig(
   oscillators: OscillatorConfig[],
 ): ArgCreateSynth {

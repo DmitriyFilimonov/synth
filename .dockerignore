@@ -4,6 +4,7 @@ web/node_modules/
 web/dist/
 *.wav
 *.svg
+jobs/
 .DS_Store
 .env
 AGENTS.md
