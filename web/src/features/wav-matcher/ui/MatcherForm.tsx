@@ -187,26 +187,27 @@ export function MatcherForm() {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
-  if (viewMode === 'job-list') {
-    return (
-      <div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <Button
-            variant={viewMode === 'upload' ? 'primary' : 'secondary'}
-            onClick={() => setViewMode('upload')}
-          >
-            New Match
-          </Button>
-          <Button
-            variant={viewMode === 'job-list' ? 'primary' : 'secondary'}
-            onClick={() => {
-              setViewMode('job-list');
-              fetchJobList();
-            }}
-          >
-            Jobs ({jobList.length})
-          </Button>
-        </div>
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <Button
+          variant={viewMode === 'upload' ? 'primary' : 'secondary'}
+          onClick={() => setViewMode('upload')}
+        >
+          New Match
+        </Button>
+        <Button
+          variant={viewMode === 'job-list' ? 'primary' : 'secondary'}
+          onClick={() => {
+            setViewMode('job-list');
+            fetchJobList();
+          }}
+        >
+          Jobs ({jobList.length})
+        </Button>
+      </div>
+
+      {viewMode === 'job-list' ? (
         <div className={styles.jobList}>
           {jobList.length === 0 && <div>No jobs yet</div>}
           {jobList.map((job) => (
@@ -235,31 +236,8 @@ export function MatcherForm() {
             </div>
           ))}
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <Button
-          variant={viewMode === 'upload' ? 'primary' : 'secondary'}
-          onClick={() => setViewMode('upload')}
-        >
-          New Match
-        </Button>
-        <Button
-          variant={viewMode === 'job-list' ? 'primary' : 'secondary'}
-          onClick={() => {
-            setViewMode('job-list');
-            fetchJobList();
-          }}
-        >
-          Jobs ({jobList.length})
-        </Button>
-      </div>
-
-      <form className={styles.form} onSubmit={handleSubmit}>
+      ) : (
+        <form className={styles.form} onSubmit={handleSubmit}>
         <div className={styles.uploadSection}>
           <label className={styles.fileLabel}>
             <input
@@ -336,6 +314,7 @@ export function MatcherForm() {
 
         {audioUrl && <AudioPlayer url={audioUrl} />}
       </form>
+      )}
     </div>
   );
 }
