@@ -13,11 +13,12 @@ interface ArgMatch {
   targetWavPath: string;
   outputWavPath: string;
   maxIterations?: number;
+  initialVector?: readonly number[];
   onProgress?: ProgressCallback;
 }
 
 interface MatchResult {
-  optimizedVector: (readonly [number, number])[];
+  optimizedVector: number[];
   optimizedConfig: ArgCreateSynth;
   history: { iteration: number; suppressionPercent: number }[];
   targetInfo: {
@@ -45,7 +46,9 @@ export const match = (arg: ArgMatch): MatchResult => {
     `Target: ${numSamples} samples, ${targetWav.numChannels}ch, ${targetWav.bitsPerSample}-bit`,
   );
 
-  const initialVector = mapSynthConfigToVector(SYNTH_DEFAULT_PRESET);
+  const initialVector = arg.initialVector
+    ? [...arg.initialVector]
+    : mapSynthConfigToVector(SYNTH_DEFAULT_PRESET);
 
   console.log(`Vector size: ${initialVector.length} parameters`);
   console.log(`Starting optimization...`);
@@ -66,9 +69,7 @@ export const match = (arg: ArgMatch): MatchResult => {
     `Optimization complete. Suppression: ${bestSuppression.toFixed(2)}%`,
   );
 
-  const optimizedConfig = mapVectorToSynthConfig(
-    vector.map((entry) => entry[0]),
-  );
+  const optimizedConfig = mapVectorToSynthConfig(vector);
 
   console.log(`Generating output WAV...`);
   const synth = createSynth(optimizedConfig);

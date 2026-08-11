@@ -1,4 +1,3 @@
-import { SAMPLE_LENGTH_IN_SECONDS } from './consts';
 import { MIN } from './envelope';
 import type { ArgCreateSynth } from './synth';
 
@@ -30,7 +29,7 @@ export const SYNTH_MULTI_PRESET = (count: number): ArgCreateSynth => {
   for (let i = 0; i < count; i++) {
     oscillators.push({
       osc: {
-        freqBase: 440 * (i + 1),
+        freqBase: 50 * (i + 1),
         freqStart: 440 * (i + 1),
         duration: DURATION,
         slope: 1,

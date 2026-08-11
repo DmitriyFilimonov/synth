@@ -1,4 +1,3 @@
-import { SAMPLE_LENGTH_IN_SECONDS } from './consts';
 import { envelopeCreator, MIN } from './envelope';
 import { oscillatorCreator } from './oscillator';
 
@@ -56,40 +55,33 @@ type OscConfigNormales = {
   [K in keyof ArgOscConfig]: {
     min: number;
     max: number;
-    step: number;
   };
 };
 
 export const oscConfigNormales: OscConfigNormales = {
   duration: {
-    min: SAMPLE_LENGTH_IN_SECONDS,
+    min: 1 / 44100,
     max: 0.5,
-    step: SAMPLE_LENGTH_IN_SECONDS,
   },
   freqBase: {
     min: 20,
     max: 20000,
-    step: 1,
   },
   freqStart: {
     min: 20,
     max: 20000,
-    step: 1,
   },
   on: {
     min: 0,
     max: 1,
-    step: 1,
   },
   phase: {
     min: 0,
     max: 2 * Math.PI,
-    step: (2 * Math.PI) / 360,
   },
   slope: {
     min: 0.2,
     max: 2,
-    step: 0.1,
   },
 };
 
@@ -104,30 +96,25 @@ type AmpEnvConfigNormales = Required<{
   [K in keyof ArgAmpEnvConfig]: {
     min: number;
     max: number;
-    step: number;
   };
 }>;
 
 export const ampEnvConfigNormales: AmpEnvConfigNormales = {
   duration: {
-    min: SAMPLE_LENGTH_IN_SECONDS,
+    min: 1 / 44100,
     max: 0.5,
-    step: SAMPLE_LENGTH_IN_SECONDS,
   },
   slope: {
     min: 0.2,
     max: 2,
-    step: 0.1,
   },
   startLevel: {
     min: MIN,
     max: 1,
-    step: MIN,
   },
   endLevel: {
     min: MIN,
     max: 1,
-    step: MIN,
   },
 };
 
@@ -179,9 +166,9 @@ export const createSynth = (synthConfig: ArgCreateSynth) => {
     );
   }
 
-  const oscillatorGroups = synthConfig.oscillators.map((config) =>
-    createOscillatorGroup(config),
-  );
+  const oscillatorGroups = synthConfig.oscillators
+    .filter((config) => config.osc.on)
+    .map((config) => createOscillatorGroup(config));
 
   return ({ x }: { x: number }) => {
     let sum = 0;
