@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import {
   createMatchJob,
   getJobStatus,
@@ -6,18 +6,13 @@ import {
   downloadJobResult,
   downloadJobParams,
 } from '../api/matchWav';
-import type {
-  JobEntry,
-  JobStatus,
-  JobListEntry,
-} from '../model/types';
+import type { JobEntry, JobStatus, JobListEntry } from '../model/types';
 import { Button, Input } from '@/shared/ui';
 import styles from './MatcherForm.module.css';
 import { AudioPlayer } from '@/features/synth-generator/ui/AudioPlayer';
 
 type ViewMode = 'upload' | 'job-list';
 const POLLING_INTERVAL = 10000;
-const IDLE_LOCAL_STORAGE_KEY = 'synth-wav-matcher-idle';
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -31,36 +26,37 @@ export function MatcherForm() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const [uploadError, setUploadError] = useState<string>('');
-  const [activeJobId, setActiveJobId] = useState<string>('');
   const [activeJob, setActiveJob] = useState<JobEntry | null>(null);
   const [jobList, setJobList] = useState<JobListEntry[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('upload');
+
+  const activeJobIdRef = useRef<string>('');
   const pollRef = useRef<boolean>(false);
+  const pollLoopRef = useRef<Promise<void> | null>(null);
 
-  const stopPolling = useCallback(() => {
+  const stopPolling = () => {
     pollRef.current = false;
-  }, []);
+  };
 
-  const fetchJobList = useCallback(async () => {
-    try {
-      const list = await listJobs();
-      setJobList(list);
-    } catch {
-      // ignore
-    }
-  }, []);
+  const pollJob = async (jobId: string) => {
+    stopPolling();
+    await sleep(100);
+    pollRef.current = true;
 
-  const pollJob = useCallback(
-    async (jobId: string) => {
-      pollRef.current = true;
+    pollLoopRef.current = (async () => {
       while (pollRef.current) {
         try {
           const status = await getJobStatus(jobId);
           setActiveJob(status);
-          await fetchJobList();
+          try {
+            const list = await listJobs();
+            setJobList(list);
+          } catch {
+            // ignore
+          }
 
           if (status.status === 'completed') {
-            stopPolling();
+            pollRef.current = false;
             try {
               const blob = await downloadJobResult(jobId);
               const url = URL.createObjectURL(blob);
@@ -70,7 +66,7 @@ export function MatcherForm() {
             }
             break;
           } else if (status.status === 'failed') {
-            stopPolling();
+            pollRef.current = false;
             setError(status.errorMessage ?? 'Job failed');
             break;
           }
@@ -79,9 +75,8 @@ export function MatcherForm() {
         }
         await sleep(POLLING_INTERVAL);
       }
-    },
-    [stopPolling, fetchJobList],
-  );
+    })();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,12 +97,11 @@ export function MatcherForm() {
         numOscillators: Number(numOscillators),
         maxIterations: Number(maxIterations),
       });
-      setActiveJobId(job.id);
+      activeJobIdRef.current = job.id;
       setActiveJob(null);
       setAudioUrl('');
-      localStorage.setItem(IDLE_LOCAL_STORAGE_KEY, 'false');
 
-      pollJob(job.id);
+      await pollJob(job.id);
 
       setViewMode('upload');
     } catch (err) {
@@ -120,14 +114,12 @@ export function MatcherForm() {
   };
 
   const handleJobClick = async (jobId: string) => {
-    setActiveJobId(jobId);
+    activeJobIdRef.current = jobId;
     const job = await getJobStatus(jobId);
     setActiveJob(job);
 
     if (job.status === 'running' || job.status === 'queued') {
-      stopPolling();
-      await sleep(500);
-      pollJob(jobId);
+      await pollJob(jobId);
     } else if (job.status === 'completed') {
       try {
         const blob = await downloadJobResult(jobId);
@@ -157,24 +149,19 @@ export function MatcherForm() {
     }
   };
 
-  useEffect(() => {
-    fetchJobList();
-    const isIdle =
-      localStorage.getItem(IDLE_LOCAL_STORAGE_KEY) === 'true';
-    const prevJobId = localStorage.getItem(
-      'synth-wav-matcher-last-job',
-    );
-    if (!isIdle && prevJobId) {
-      pollJob(prevJobId);
-    }
-    return stopPolling;
-  }, [stopPolling, pollJob]);
+  const handleNewMatch = useCallback(() => {
+    setViewMode('upload');
+  }, []);
 
-  useEffect(() => {
-    if (activeJobId) {
-      localStorage.setItem('synth-wav-matcher-last-job', activeJobId);
+  const handleShowJobs = useCallback(async () => {
+    setViewMode('job-list');
+    try {
+      const list = await listJobs();
+      setJobList(list);
+    } catch {
+      // ignore
     }
-  }, [activeJobId]);
+  }, []);
 
   const handleFileChange = (
     e: React.ChangeEvent<HTMLInputElement>,
@@ -231,16 +218,13 @@ export function MatcherForm() {
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         <Button
           variant={viewMode === 'upload' ? 'primary' : 'secondary'}
-          onClick={() => setViewMode('upload')}
+          onClick={handleNewMatch}
         >
           New Match
         </Button>
         <Button
           variant={viewMode === 'job-list' ? 'primary' : 'secondary'}
-          onClick={() => {
-            setViewMode('job-list');
-            fetchJobList();
-          }}
+          onClick={handleShowJobs}
         >
           Jobs ({jobList.length})
         </Button>
@@ -338,10 +322,10 @@ export function MatcherForm() {
             {loading ? 'Starting...' : 'Match Parameters'}
           </Button>
 
-          {activeJobId && activeJob && (
+          {activeJobIdRef.current && activeJob && (
             <div className={styles.progressSection}>
               <div className={styles.progressHeader}>
-                <span>Job: {activeJobId.slice(0, 8)}</span>
+                <span>Job: {activeJobIdRef.current.slice(0, 8)}</span>
                 <span
                   className={`${styles.jobStatus} ${styles[activeJob.status]}`}
                 >
@@ -379,7 +363,9 @@ export function MatcherForm() {
               {activeJob.status === 'completed' && (
                 <div className={styles.resultActions}>
                   <Button
-                    onClick={() => handleDownloadParams(activeJobId)}
+                    onClick={() =>
+                      handleDownloadParams(activeJobIdRef.current)
+                    }
                   >
                     Download Params
                   </Button>

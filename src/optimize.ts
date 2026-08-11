@@ -3,14 +3,30 @@ import { assessCancellationQuality } from './cancellation-assessment';
 import { createSynth } from './synth';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 
+const OSC_PARAMS = 10;
+
+const isOscEnabled = (vec: readonly number[], idx: number): boolean => {
+  const v = vec[idx];
+  return v !== undefined && v >= 0.5;
+};
+
 const hasActiveOsc = (vec: readonly number[]): boolean => {
-  for (let i = 0; i < vec.length; i += 10) {
-    const v = vec[i];
-    if (v !== undefined && v >= 0.5) {
+  for (let i = 0; i < vec.length; i += OSC_PARAMS) {
+    if (isOscEnabled(vec, i)) {
       return true;
     }
   }
   return false;
+};
+
+const countActiveOscillators = (vec: readonly number[]): number => {
+  let count = 0;
+  for (let i = 0; i < vec.length; i += OSC_PARAMS) {
+    if (isOscEnabled(vec, i)) {
+      count++;
+    }
+  }
+  return count;
 };
 
 const createWaveForm = (
@@ -67,6 +83,7 @@ interface ArgOptimize {
   sampleRate: number;
   maxIterations?: number;
   onProgress?: ProgressCallback;
+  numOscillators?: number;
 }
 
 const POPULATION_SIZE = 40;
@@ -108,12 +125,17 @@ const runGaPhase = (
   history: ProgressEntry[];
 } => {
   const fitness = (genome: number[]): number => {
-    if (!hasActiveOsc(genome)) return -100;
-    return evaluateSuppression(
+    if (!hasActiveOsc(genome)) {
+      return -100;
+    }
+    const suppression = evaluateSuppression(
       genome,
       arg.targetSignal,
       arg.sampleRate,
     );
+    const activeCount = countActiveOscillators(genome);
+    const penalty = Math.max(0, activeCount - 8) * 0.15;
+    return suppression - penalty;
   };
 
   const tournamentSelect = (
@@ -149,13 +171,19 @@ const runGaPhase = (
     prob: number,
   ): number[] => {
     const mutated: number[] = [];
-    for (let i = 0; i < genome.length; i++) {
-      const current = genome[i] ?? 0;
-      mutated.push(
-        Math.random() < prob
-          ? current + (Math.random() - 0.5) * sigma * 2
-          : current,
-      );
+    for (let osc = 0; osc < genome.length / OSC_PARAMS; osc++) {
+      const onIdx = osc * OSC_PARAMS;
+      const currentlyOn = isOscEnabled(genome, onIdx);
+      for (let p = 0; p < OSC_PARAMS; p++) {
+        const idx = onIdx + p;
+        const current = genome[idx] ?? 0;
+        const probForParam = p === 0 ? prob : currentlyOn ? prob : 0;
+        mutated.push(
+          Math.random() < probForParam
+            ? current + (Math.random() - 0.5) * sigma * 2
+            : current,
+        );
+      }
     }
     return normalizeGenome(mutated);
   };
@@ -333,7 +361,7 @@ const runFineTunePhase = (
     arg.sampleRate,
   );
   const history: ProgressEntry[] = [...prevHistory];
-  let stagnationPerParam = new Array(genome.length).fill(0);
+  const stagnationPerParam = new Array(genome.length).fill(0);
 
   console.log(
     `[Hybrid] Fine-tune phase: starting at ${currentBest.toFixed(4)}%, ${genome.length} params`,
@@ -342,61 +370,63 @@ const runFineTunePhase = (
   for (let iter = 0; iter < maxIterations; iter++) {
     let iterImproved = false;
 
-    for (let i = 0; i < genome.length; i++) {
-      const step = steps[i] ?? FINE_STEP_BASE;
-      const center = currentGenome[i] ?? 0;
+    for (let osc = 0; osc < genome.length / OSC_PARAMS; osc++) {
+      const base = osc * OSC_PARAMS;
+      if (!isOscEnabled(currentGenome, base)) {
+        continue;
+      }
 
-      const left = [...currentGenome];
-      left[i] = Math.max(0, center - step);
-      const leftValid = hasActiveOsc(left);
+      for (let p = 0; p < OSC_PARAMS; p++) {
+        const i = base + p;
+        const step = steps[i] ?? FINE_STEP_BASE;
+        const center = currentGenome[i] ?? 0;
 
-      const right = [...currentGenome];
-      right[i] = Math.min(1, center + step);
-      const rightValid = hasActiveOsc(right);
+        const left = [...currentGenome];
+        left[i] = Math.max(0, center - step);
 
-      let bestScore = currentBest;
-      let bestCandidate = currentGenome;
+        const right = [...currentGenome];
+        right[i] = Math.min(1, center + step);
 
-      if (leftValid) {
-        const score = evaluateSuppression(
+        let bestScore = currentBest;
+        let bestCandidate = currentGenome;
+
+        const scoreLeft = evaluateSuppression(
           left,
           arg.targetSignal,
           arg.sampleRate,
         );
-        if (score > bestScore) {
-          bestScore = score;
+        if (scoreLeft > bestScore) {
+          bestScore = scoreLeft;
           bestCandidate = left;
         }
-      }
 
-      if (rightValid) {
-        const score = evaluateSuppression(
+        const scoreRight = evaluateSuppression(
           right,
           arg.targetSignal,
           arg.sampleRate,
         );
-        if (score > bestScore) {
-          bestScore = score;
+        if (scoreRight > bestScore) {
+          bestScore = scoreRight;
           bestCandidate = right;
         }
-      }
 
-      if (bestCandidate !== currentGenome) {
-        currentGenome = bestCandidate;
-        currentBest = bestScore;
-        iterImproved = true;
-        stagnationPerParam[i] = 0;
-        steps[i] = Math.max(
-          FINE_STEP_BASE * 0.1,
-          (steps[i] ?? FINE_STEP_BASE) * 0.9,
-        );
-      } else {
-        stagnationPerParam[i]++;
-        if (stagnationPerParam[i] % 50 === 0) {
-          steps[i] = Math.min(
-            0.1,
-            (steps[i] ?? FINE_STEP_BASE) * 1.5,
+        if (bestCandidate !== currentGenome) {
+          currentGenome = bestCandidate;
+          currentBest = bestScore;
+          iterImproved = true;
+          stagnationPerParam[i] = 0;
+          steps[i] = Math.max(
+            FINE_STEP_BASE * 0.1,
+            (steps[i] ?? FINE_STEP_BASE) * 0.9,
           );
+        } else {
+          stagnationPerParam[i]++;
+          if (stagnationPerParam[i] % 50 === 0) {
+            steps[i] = Math.min(
+              0.1,
+              (steps[i] ?? FINE_STEP_BASE) * 1.5,
+            );
+          }
         }
       }
     }
@@ -418,17 +448,23 @@ const runFineTunePhase = (
     }
 
     if (!iterImproved) {
-      for (let i = 0; i < genome.length; i++) {
-        const step = (steps[i] ?? FINE_STEP_BASE) * 2;
-        const perturbed = [...currentGenome];
-        perturbed[i] = Math.max(
-          0,
-          Math.min(
-            1,
-            (perturbed[i] ?? 0) + (Math.random() - 0.5) * step,
-          ),
-        );
-        if (hasActiveOsc(perturbed)) {
+      for (let osc = 0; osc < genome.length / OSC_PARAMS; osc++) {
+        const base = osc * OSC_PARAMS;
+        if (!isOscEnabled(currentGenome, base)) {
+          continue;
+        }
+
+        for (let p = 0; p < OSC_PARAMS; p++) {
+          const i = base + p;
+          const step = (steps[i] ?? FINE_STEP_BASE) * 2;
+          const perturbed = [...currentGenome];
+          perturbed[i] = Math.max(
+            0,
+            Math.min(
+              1,
+              (perturbed[i] ?? 0) + (Math.random() - 0.5) * step,
+            ),
+          );
           const score = evaluateSuppression(
             perturbed,
             arg.targetSignal,
