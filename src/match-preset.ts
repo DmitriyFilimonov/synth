@@ -1,4 +1,5 @@
 import { MIN } from './envelope';
+import { VOLUME_MIN } from './consts';
 import type { ArgCreateSynth } from './synth';
 
 const DURATION = 0.5;
@@ -15,7 +16,7 @@ export const SYNTH_DEFAULT_PRESET: ArgCreateSynth = {
         on: true,
       },
       ampEnv: {
-        startLevel: 1,
+        startLevel: VOLUME_MIN,
         endLevel: MIN,
         duration: DURATION,
         slope: 1,
@@ -37,7 +38,7 @@ export const SYNTH_MULTI_PRESET = (count: number): ArgCreateSynth => {
         on: true,
       },
       ampEnv: {
-        startLevel: 1 / (i + 1),
+        startLevel: VOLUME_MIN,
         endLevel: MIN,
         duration: DURATION,
         slope: 1,

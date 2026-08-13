@@ -73,7 +73,7 @@ npm run viz
 
 ### 3. Подбор параметров к WAV
 
-Анализирует целевой WAV-файл, оптимизирует конфигурацию осцилляторов (гибридный GA + fine-tune) и создаёт воссозданный WAV + визуализацию сравнения. Оптимизация выполняется в отдельном worker-потоке (`optimizer-worker.ts`), чтобы не блокировать основной поток.
+Анализирует целевой WAV-файл, оптимизирует конфигурацию осцилляторов (чистый coordinate descent) и создаёт воссозданный WAV + визуализацию сравнения. Оптимизация выполняется в отдельном worker-потоке (`optimizer-worker.ts`), чтобы не блокировать основной поток.
 
 ```bash
 # Запуск
@@ -104,14 +104,16 @@ match({
 
 #### Алгоритм оптимизации
 
-Двухфазный workflow:
+Оптимизатор использует чистый coordinate descent:
 
-| Фаза | Доля итераций | Что делает |
-|---|---|---|
-| GA (генетический алгоритм) | 40% | Исследует пространство через популяцию (40 особей, blend-crossover, adaptive mutation). Быстро находит хороший район (~5% suppression). |
-| Fine-tune (micron-step descent) | 60% | Точная подстройка координат (шаг `0.005`) с stagnation-driven perturbation. Медленно улучшает до ~7%+. |
+| Особенность | Описание |
+|---|---|
+| `on` параметр | Строго бинарный (`0` или `1`); при `on = 0` параметры `1-9` осциллятора пропускаются |
+| `countActiveOscillators` | Запрещает отключить последний активный осциллятор |
+| Шаг оптимизации | Последовательный перебор каждой координаты вектора с micro-step (`0.005`) |
+| Ранний выход | `globalStagnation > 300` итераций без улучшения |
 
-> **Важно:** оптимизация вычислительно затратна. Каждая оценка параметра генерирует полный сигнал. 500 итераций на 22 050 сэмплах — десятки минут. Рекомендуется начинать с малого `maxIterations`, постепенно увеличивая.
+> **Важно:** оптимизация вычислительно затратна. Каждая оценка параметра генерирует полный сигнал. Рекомендуется начинать с малого `maxIterations`, постепенно увеличивая.
 
 #### Пресеты для подбора
 
@@ -187,7 +189,7 @@ npm run lint:fix       # ESLint (автофикс)
 | `src/optimizer-worker.ts` | Реализация worker-потока для оптимизации |
 | `src/match-preset.ts` | Пресеты для начальной точки оптимизации |
 | `src/match-visualize.ts` | SVG сравнения сигналов + прогресс |
-| `src/optimize.ts` | Гибридный оптимизатор: GA → fine-tune (micron-step descent) |
+| `src/optimize.ts` | Чистый coordinate descent оптимизатор с ранним выходом по стагнации |
 | `src/visualize-envelopes.ts` | Генерация SVG огибающих |
 | `src/visualize.ts` | Утилита для построения SVG-графиков |
 | `src/synth.ts` | Создатель синтезатора |
@@ -204,4 +206,85 @@ npm run lint:fix       # ESLint (автофикс)
 | `web/src/app/` | Инициализация приложения |
 | `web/src/features/synth-generator/` | Фича генерации WAV |
 | `web/src/features/wav-matcher/` | Фича подбора параметров к WAV |
-| `web/src/shared/` | Переиспользуемые компоненты и API-клиент |
+ | `web/src/shared/` | Переиспользуемые компоненты и API-клиент |
+
+**Соглашения**
+
+### TypeScript (`tsconfig.json`)
+- `strict: true`
+- `verbatimModuleSyntax: false`
+- `noUncheckedIndexedAccess: true`
+- `exactOptionalPropertyTypes: false`
+
+### Prettier (`.prettierrc`)
+- `semi: true`
+- `singleQuote: true`
+- `trailingComma: "all"`
+- `printWidth: 70`
+- `tabWidth: 2`
+
+**HTTP API эндпоинты**
+
+#### Генерация и синхронный мэтчинг
+| Метод | Путь | Описание |
+|---|---|---|
+| `GET` | `/health` | Health check |
+| `GET` | `/presets` | Список доступных пресетов |
+| `POST` | `/api/generate` | Генерация WAV (JSON: `preset` или `oscillators`) → WAV binary |
+| `POST` | `/api/match` | Подбор параметров (JSON: `wavBase64`) → JSON с `wavBase64`, `history`, `suppressionPercent` |
+| `POST` | `/api/match/binary` | Подбор параметров (raw `audio/wav`) → WAV binary |
+
+#### Асинхронный мэтчинг (job‑очередь)
+| Метод | Путь | Описание |
+|---|---|---|
+| `POST` | `/api/match/job` | Создать job подбора (base64 WAV) → `{ id }` |
+| `POST` | `/api/match/job/json` | Создать job подбора (raw WAV binary) → `{ id }` |
+| `GET` | `/api/match/jobs` | Список всех job |
+| `GET` | `/api/match/jobs/:id` | Статус конкретного job |
+| `GET` | `/api/match/jobs/:id/download` | Скачать результат WAV (completed job) |
+| `GET` | `/api/match/jobs/:id/download-params` | Скачать параметры подбора JSON (completed job) |
+| `DELETE` | `/api/match/jobs/:id` | Удалить job и связанные файлы |
+
+**Важные детали**
+
+### Асимметрия маппинга
+`mapSynthConfigToVector()` возвращает `10 * N` значений (N — число осцилляторов). `mapVectorToSynthConfig()` всегда создаёт 50 осцилляторов. Round‑trip расширяет 2‑осцилляторный пресет до 50 (оставшиеся `on: false`).
+
+### Производительность оптимизации
+Чистый coordinate descent: последовательная оптимизация каждой координаты вектора. Параметр `on` строго бинарный (`0` или `1`); если осциллятор выключен, его параметры `1‑9` пропускаются. Защита `countActiveOscillators` запрещает отключить последний активный осциллятор. Ранний выход: `globalStagnation > 300` итераций без улучшения.
+
+### Worker‑потоки
+Оптимизация выполняется в отдельном worker‑потоке (`optimizer‑worker.ts`) через `worker_threads`. `match‑worker.ts` предоставляет промис‑обёртку для удобного вызова. Worker имеет таймаут 30 минут.
+
+**Структура проекта (обновлена)**
+
+| Файл / Папка | Назначение |
+|---|---|
+| `src/index.ts` | Генерация WAV из `presets.ts` |
+| `src/server.ts` | Точка входа HTTP‑сервера |
+| `src/api/` | Express API (контроллеры, роуты, сервисы) |
+| `src/presets.ts` | Пресеты для генерации |
+| `src/match-entry.ts` | Точка входа подбора параметров |
+| `src/match.ts` | Оркестратор: read → optimize → generate → visualize |
+| `src/match-worker.ts` | Обёртка для запуска оптимизации в worker‑потоке |
+| `src/optimizer-worker.ts` | Реализация worker‑потока для оптимизации |
+| `src/match-preset.ts` | Пресеты для начальной точки оптимизации |
+| `src/match-visualize.ts` | SVG сравнения сигналов + прогресс |
+| `src/optimize.ts` | Чистый coordinate descent оптимизатор с ранним выходом по стагнации |
+| `src/visualize-envelopes.ts` | Генерация SVG огибающих |
+| `src/synth.ts` | Создатель синтезатора |
+| `src/oscillator.ts` | Расчёт сигнала осциллятора |
+| `src/envelope.ts` | Экспоненциальная функция огибающей |
+| `src/read-wav.ts` | Парсинг 16‑бит WAV |
+| `src/write-wav.ts` | Запись WAV |
+| `src/cancellation-assessment.ts` | Оценка качества подавления (RMS) |
+| `src/rms.ts` | Расчёт RMS энергии |
+| `src/synth-config-to-vector.ts` | Нормализация конфига → `[0,1]` |
+| `src/vector-to-synth-config.ts` | Денормализация вектора → конфиг (50 осцилляторов) |
+| `src/consts.ts` | Константы: `SAMPLE_RATE` и т.д. |
+| `web/` | Веб‑интерфейс (React + Vite, FSD) |
+| `web/src/app/` | Инициализация приложения |
+| `web/src/features/synth-generator/` | Фича генерации WAV |
+| `web/src/features/wav-matcher/` | Фича подбора параметров к WAV |
+| `web/src/shared/` | Переиспользуемые компоненты и API‑клиент |
+
