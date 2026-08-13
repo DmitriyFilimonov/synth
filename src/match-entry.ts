@@ -9,9 +9,9 @@ import {
   MATCH_DEFAULT_STEP_DECAY_FACTOR,
 } from './match-defaults';
 
-const targetWavPath = './output14.wav';
+const targetWavPath = './targets/techno_1.wav';
 const outputWavPath =
-  './output14_recreation' + Date().toString() + '.wav';
+  './matches/techno_1' + Date().toString() + '.wav';
 
 console.log(`Reading target: ${targetWavPath}`);
 const targetWav = readWav(targetWavPath);

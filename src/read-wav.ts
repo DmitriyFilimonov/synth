@@ -21,28 +21,50 @@ export const readWav = (filePath: string): ReadWavResult => {
     throw new Error(`Not a WAV file: missing WAVE marker`);
   }
 
-  const fmtChunk = view.getUint32(12, false);
-  if (fmtChunk !== 0x666d7420) {
+  let pos = 12;
+  const size = buffer.byteLength;
+  let fmtOffset = -1;
+  let dataOffset = -1;
+  let dataSize = 0;
+
+  while (pos + 8 <= size) {
+    const chunk = view.getUint32(pos, false);
+    const chunkSize = view.getUint32(pos + 4, true);
+
+    if (chunk === 0x666d7420) {
+      fmtOffset = pos;
+    } else if (chunk === 0x64617461) {
+      dataOffset = pos;
+      dataSize = chunkSize;
+    }
+
+    pos += 8 + chunkSize + (chunkSize % 2);
+  }
+
+  if (fmtOffset < 0) {
     throw new Error(`Missing "fmt " chunk`);
   }
 
-  const fmtSize = view.getUint32(16, true);
-  const audioFormat = view.getUint16(20, true);
+  if (dataOffset < 0) {
+    throw new Error(`Missing "data" chunk`);
+  }
+
+  const audioFormat = view.getUint16(fmtOffset + 8, true);
   if (audioFormat !== 1) {
     throw new Error(
       `Only PCM audio format supported, got ${audioFormat}`,
     );
   }
 
-  const numChannels = view.getUint16(22, true);
+  const numChannels = view.getUint16(fmtOffset + 10, true);
   if (numChannels !== 1) {
     throw new Error(
       `Only mono WAV files supported, got ${numChannels} channels`,
     );
   }
 
-  const sampleRate = view.getUint32(24, true);
-  const bitsPerSample = view.getUint16(34, true);
+  const sampleRate = view.getUint32(fmtOffset + 12, true);
+  const bitsPerSample = view.getUint16(fmtOffset + 22, true);
 
   if (bitsPerSample !== 16) {
     throw new Error(
@@ -50,21 +72,12 @@ export const readWav = (filePath: string): ReadWavResult => {
     );
   }
 
-  const fmtChunkStart = 12;
-  const dataChunkStart = fmtChunkStart + 8 + fmtSize;
-  const dataChunk = view.getUint32(dataChunkStart, false);
-  if (dataChunk !== 0x64617461) {
-    throw new Error(`Missing "data" chunk`);
-  }
-
-  const dataSize = view.getUint32(dataChunkStart + 4, true);
-  const dataOffset = dataChunkStart + 8;
-
+  const sampleDataOffset = dataOffset + 8;
   const numSamples = dataSize / 2;
   const samples = new Int16Array(numSamples);
 
   for (let i = 0; i < numSamples; i++) {
-    samples[i] = view.getInt16(dataOffset + i * 2, true);
+    samples[i] = view.getInt16(sampleDataOffset + i * 2, true);
   }
 
   return { samples, sampleRate, bitsPerSample, numChannels };
