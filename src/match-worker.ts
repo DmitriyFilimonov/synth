@@ -29,6 +29,8 @@ interface MatchWorkerArgs {
   initialVector: number[];
   sampleRate: number;
   maxIterations: number;
+  stepGrowthAdd?: number;
+  stepDecayFactor?: number;
   onProgress?: (entry: MatchWorkerProgress) => void;
 }
 
@@ -52,10 +54,10 @@ export function matchWithWorker(
 ): Promise<MatchWorkerResult> {
   return new Promise((resolveFn, rejectFn) => {
     const { specifier, execArgv } = resolveWorkerPath();
-    const worker = new Worker(
-      specifier,
-      execArgv ? { workerData: {}, execArgv } : { workerData: {} },
-    );
+    const worker = new Worker(specifier, {
+      workerData: {},
+      ...(execArgv ? { execArgv } : {}),
+    });
 
     const timeout = setTimeout(
       () => {
@@ -66,7 +68,9 @@ export function matchWithWorker(
     );
 
     worker.on('message', (msg: { type: string; data: unknown }) => {
-      if (msg.type === 'progress') {
+      if (msg.type === 'log') {
+        process.stdout.write((msg.data as string) + '\n');
+      } else if (msg.type === 'progress') {
         arg.onProgress?.(msg.data as MatchWorkerProgress);
       } else if (msg.type === 'done') {
         clearTimeout(timeout);
@@ -95,6 +99,8 @@ export function matchWithWorker(
       initialVector: arg.initialVector,
       sampleRate: arg.sampleRate,
       maxIterations: arg.maxIterations,
+      stepGrowthAdd: arg.stepGrowthAdd,
+      stepDecayFactor: arg.stepDecayFactor,
     });
   });
 }

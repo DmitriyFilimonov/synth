@@ -21,10 +21,9 @@ const findZeroCrossings = (
 ): number[] => {
   const crossings: number[] = [];
   for (let i = from + 1; i < to; i++) {
-    if (
-      (signal[i - 1] < 0 && signal[i] >= 0) ||
-      (signal[i - 1] >= 0 && signal[i] < 0)
-    ) {
+    const prev = signal[i - 1] ?? 0;
+    const curr = signal[i] ?? 0;
+    if ((prev < 0 && curr >= 0) || (prev >= 0 && curr < 0)) {
       crossings.push(i);
     }
   }
@@ -55,8 +54,10 @@ for (const startSample of checkpoints) {
     const period = (endSample - startSample) / (crossings.length / 2);
     const freq = SAMPLE_RATE / period;
     const timeMs = ((startSample / SAMPLE_RATE) * 1000).toFixed(0);
+    const s1 = samples[Math.floor(startSample)] ?? 0;
+    const s2 = samples[Math.floor(startSample) + 100] ?? 0;
     console.log(
-      `  t=${timeMs}ms: ${crossings.length} crossings, est. freq=${freq.toFixed(0)}Hz, amp=${Math.max(Math.abs(samples[Math.floor(startSample)]), Math.abs(samples[Math.floor(startSample) + 100]))}`,
+      `  t=${timeMs}ms: ${crossings.length} crossings, est. freq=${freq.toFixed(0)}Hz, amp=${Math.max(Math.abs(s1), Math.abs(s2))}`,
     );
   }
 }
@@ -67,8 +68,8 @@ for (let t = 0; t < 10; t++) {
   const start = Math.floor((t * totalSamples) / 10);
   const end = start + Math.floor(totalSamples / 10);
   let maxAmp = 0;
-  for (let i = start; i < end; i++) {
-    const abs = Math.abs(samples[i]);
+  for (let i = start; i < end && i < samples.length; i++) {
+    const abs = Math.abs(samples[i] ?? 0);
     if (abs > maxAmp) maxAmp = abs;
   }
   const timeMs = ((start / SAMPLE_RATE) * 1000).toFixed(0);

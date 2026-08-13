@@ -26,6 +26,8 @@ export interface GenerateRequest {
 export interface MatchRequestBody {
   numOscillators?: number;
   maxIterations?: number;
+  stepGrowthAdd?: number;
+  stepDecayFactor?: number;
   wavBase64?: string;
 }
 
@@ -48,6 +50,8 @@ export interface MatchResult {
 export interface CreateMatchJobRequest {
   numOscillators?: number;
   maxIterations?: number;
+  stepGrowthAdd?: number;
+  stepDecayFactor?: number;
   wavBase64?: string;
 }
 
@@ -55,7 +59,12 @@ export interface JobStatusResponse {
   id: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   progress: { iteration: number; suppressionPercent: number }[];
-  params: { numOscillators: number; maxIterations: number };
+  params: {
+    numOscillators: number;
+    maxIterations: number;
+    stepGrowthAdd?: number;
+    stepDecayFactor?: number;
+  };
   inputFileName: string;
   resultFileName: string;
   errorMessage: string | null;
@@ -93,7 +102,12 @@ export interface JobListItem {
   id: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   suppressionPercent: number;
-  params: { numOscillators: number; maxIterations: number };
+  params: {
+    numOscillators: number;
+    maxIterations: number;
+    stepGrowthAdd?: number;
+    stepDecayFactor?: number;
+  };
   createdAt: string;
   updatedAt: string;
 }

@@ -6,8 +6,30 @@ import { writeWav } from './write-wav';
 import { matchVisualize } from './match-visualize';
 import { readWav } from './read-wav';
 import { MAX_AMPLITUDE_16_BIT_WAV_ENCODED } from './consts';
+import {
+  MATCH_DEFAULT_STEP_GROWTH_ADD,
+  MATCH_DEFAULT_STEP_DECAY_FACTOR,
+} from './match-defaults';
 
 if (!parentPort) throw new Error('Must run as worker thread');
+
+const sendLog = (message: string): void => {
+  try {
+    parentPort?.postMessage({ type: 'log', data: message });
+  } catch {
+    // message channel might be closed, silently ignore
+  }
+};
+
+console.log = (...args: unknown[]) => {
+  sendLog(args.map((a) => String(a)).join(' '));
+};
+console.error = (...args: unknown[]) => {
+  sendLog('[ERR] ' + args.map((a) => String(a)).join(' '));
+};
+console.warn = (...args: unknown[]) => {
+  sendLog('[WARN] ' + args.map((a) => String(a)).join(' '));
+};
 
 interface WorkerMessage {
   targetWavPath: string;
@@ -15,6 +37,8 @@ interface WorkerMessage {
   initialVector: number[];
   sampleRate: number;
   maxIterations: number;
+  stepGrowthAdd?: number;
+  stepDecayFactor?: number;
 }
 
 parentPort.on('message', (msg: WorkerMessage) => {
@@ -27,6 +51,10 @@ parentPort.on('message', (msg: WorkerMessage) => {
       targetSignal,
       sampleRate: msg.sampleRate,
       maxIterations: msg.maxIterations,
+      stepGrowthAdd:
+        msg.stepGrowthAdd ?? MATCH_DEFAULT_STEP_GROWTH_ADD,
+      stepDecayFactor:
+        msg.stepDecayFactor ?? MATCH_DEFAULT_STEP_DECAY_FACTOR,
       onProgress: (entry) => {
         parentPort?.postMessage({ type: 'progress', data: entry });
       },

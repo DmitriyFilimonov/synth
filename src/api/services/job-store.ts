@@ -23,6 +23,8 @@ export interface JobRecord {
   params: {
     numOscillators: number;
     maxIterations: number;
+    stepGrowthAdd?: number;
+    stepDecayFactor?: number;
   };
   inputFileName: string;
   resultFileName: string;
@@ -74,7 +76,12 @@ export function getInputFilePath(id: string): string {
 
 export async function createJob(
   id: string,
-  params: { numOscillators: number; maxIterations: number },
+  params: {
+    numOscillators: number;
+    maxIterations: number;
+    stepGrowthAdd?: number;
+    stepDecayFactor?: number;
+  },
   inputFileName: string,
 ): Promise<JobRecord> {
   await ensureJobsDir();

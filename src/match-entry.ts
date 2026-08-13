@@ -2,13 +2,12 @@ import { SAMPLE_RATE } from './consts';
 import { readWav } from './read-wav';
 import { match } from './match';
 import { simpleInitVector } from './simple-init-vector';
-
-// ===== CONFIG =====
-const MAX_OSCILLATORS = 2;
-const MAX_ITERATIONS = 600;
-const STEP_GROWTH_ADD = 0.0001;
-const STEP_DECAY_FACTOR = 0.97;
-// ==================
+import {
+  MATCH_DEFAULT_OSCILLATORS,
+  MATCH_DEFAULT_ITERATIONS,
+  MATCH_DEFAULT_STEP_GROWTH_ADD,
+  MATCH_DEFAULT_STEP_DECAY_FACTOR,
+} from './match-defaults';
 
 const targetWavPath = './output14.wav';
 const outputWavPath =
@@ -19,7 +18,7 @@ const targetWav = readWav(targetWavPath);
 const initialVector = simpleInitVector(
   targetWav.samples,
   SAMPLE_RATE,
-  MAX_OSCILLATORS,
+  MATCH_DEFAULT_OSCILLATORS,
 );
 
 console.log('Initialization complete');
@@ -27,9 +26,9 @@ console.log('Initialization complete');
 match({
   targetWavPath,
   outputWavPath,
-  maxIterations: MAX_ITERATIONS,
+  maxIterations: MATCH_DEFAULT_ITERATIONS,
   initialVector,
   onProgress: () => {},
-  stepGrowthAdd: STEP_GROWTH_ADD,
-  stepDecayFactor: STEP_DECAY_FACTOR,
+  stepGrowthAdd: MATCH_DEFAULT_STEP_GROWTH_ADD,
+  stepDecayFactor: MATCH_DEFAULT_STEP_DECAY_FACTOR,
 });

@@ -2,6 +2,10 @@ import type { Request, Response } from 'express';
 import { synthPreset1 } from '../../presets';
 import type { ArgCreateSynth } from '../../synth';
 import {
+  MATCH_DEFAULT_OSCILLATORS,
+  MATCH_DEFAULT_ITERATIONS,
+} from '../../match-defaults';
+import {
   generateWav,
   matchWav,
   matchWavWithJob,
@@ -87,8 +91,10 @@ export const matchHandler = async (
       return;
     }
 
-    const numOscillators = body.numOscillators ?? 5;
-    const maxIterations = body.maxIterations ?? 20;
+    const numOscillators =
+      body.numOscillators ?? MATCH_DEFAULT_OSCILLATORS;
+    const maxIterations =
+      body.maxIterations ?? MATCH_DEFAULT_ITERATIONS;
 
     const wavBuffer = Buffer.from(body.wavBase64, 'base64');
 
@@ -96,6 +102,8 @@ export const matchHandler = async (
       wavBuffer,
       numOscillators,
       maxIterations,
+      body.stepGrowthAdd,
+      body.stepDecayFactor,
     );
 
     res.json({
@@ -121,13 +129,10 @@ export const matchBinaryHandler = async (
       return;
     }
 
-    const numOscillators = 5;
-    const maxIterations = 20;
-
     const result = await matchWav(
       req.body,
-      numOscillators,
-      maxIterations,
+      MATCH_DEFAULT_OSCILLATORS,
+      MATCH_DEFAULT_ITERATIONS,
     );
 
     res.set('Content-Type', 'audio/wav');
@@ -158,18 +163,35 @@ export const createMatchJobHandler = async (
       string | undefined
     >;
     const numOscillators = parseInt(
-      queryParams.numOscillators ?? '5',
+      queryParams.numOscillators ?? String(MATCH_DEFAULT_OSCILLATORS),
       10,
     );
     const maxIterations = parseInt(
-      queryParams.maxIterations ?? '20',
+      queryParams.maxIterations ?? String(MATCH_DEFAULT_ITERATIONS),
       10,
     );
+    const stepGrowthAddFloat = parseFloat(
+      queryParams.stepGrowthAdd ?? '',
+    );
+    const stepDecayFactorFloat = parseFloat(
+      queryParams.stepDecayFactor ?? '',
+    );
+
+    const stepGrowthAdd = isNaN(stepGrowthAddFloat)
+      ? undefined
+      : stepGrowthAddFloat;
+    const stepDecayFactor = isNaN(stepDecayFactorFloat)
+      ? undefined
+      : stepDecayFactorFloat;
 
     const jobId = await matchWavWithJob(
       req.body,
-      isNaN(numOscillators) ? 5 : numOscillators,
-      isNaN(maxIterations) ? 20 : maxIterations,
+      isNaN(numOscillators)
+        ? MATCH_DEFAULT_OSCILLATORS
+        : numOscillators,
+      isNaN(maxIterations) ? MATCH_DEFAULT_ITERATIONS : maxIterations,
+      stepGrowthAdd,
+      stepDecayFactor,
     );
 
     res.status(202).json({ id: jobId });
@@ -194,8 +216,10 @@ export const createMatchJobJsonHandler = async (
       return;
     }
 
-    const numOscillators = body.numOscillators ?? 5;
-    const maxIterations = body.maxIterations ?? 20;
+    const numOscillators =
+      body.numOscillators ?? MATCH_DEFAULT_OSCILLATORS;
+    const maxIterations =
+      body.maxIterations ?? MATCH_DEFAULT_ITERATIONS;
 
     const wavBuffer = Buffer.from(body.wavBase64, 'base64');
 
@@ -203,6 +227,8 @@ export const createMatchJobJsonHandler = async (
       wavBuffer,
       numOscillators,
       maxIterations,
+      body.stepGrowthAdd,
+      body.stepDecayFactor,
     );
 
     res.status(202).json({ id: jobId });
