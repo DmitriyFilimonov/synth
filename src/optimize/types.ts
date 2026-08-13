@@ -12,4 +12,6 @@ export interface ArgOptimize {
   maxIterations?: number;
   onProgress?: ProgressCallback;
   numOscillators?: number;
+  stepGrowthAdd?: number;
+  stepDecayFactor?: number;
 }

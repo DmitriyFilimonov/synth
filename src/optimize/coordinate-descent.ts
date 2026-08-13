@@ -18,16 +18,15 @@ import type {
 } from './types';
 
 const STAGNATION_EXIT_THRESHOLD = 4;
-const DECAY = 0.8;
 const PLATEAU_RESTART_THRESHOLD = 3;
 const PERTURBATION = 0.05;
 const STEP_GROWTH_THRESHOLD = 5;
-const STEP_GROWTH_FACTOR = 1.3;
+const STEP_DECAY_FACTOR = 0.9;
 
 const RESTART_SCHEDULE = [
-  { startStep: 0.05, minStep: 0.01, label: 'EXPLORATION' },
-  { startStep: 0.02, minStep: 0.005, label: 'REFINEMENT' },
-  { startStep: 0.005, minStep: 0.001, label: 'PRECISION' },
+  { startStep: 0.025, minStep: 0.01, label: 'EXPLORATION' },
+  { startStep: 0.01, minStep: 0.003, label: 'REFINEMENT' },
+  { startStep: 0.0025, minStep: 0.0001, label: 'PRECISION' },
 ];
 
 const optimizeSingleParameter = (
@@ -219,6 +218,8 @@ export const coordinateDescent = (
   sampleRate: number,
   maxIterations: number,
   onProgress?: ProgressCallback,
+  stepGrowthAdd?: number,
+  stepDecayFactor?: number,
 ): OptimizeResult => {
   const genomeLength = initialVector.length;
   const numOsc = genomeLength / OSC_PARAMS;
@@ -230,6 +231,9 @@ export const coordinateDescent = (
   const initOscCount = initialVector.filter(
     (v, i) => i % OSC_PARAMS === 0 && v >= 0.5,
   ).length;
+
+  const actualStepGrowthAdd = stepGrowthAdd ?? 0.01;
+  const actualStepDecayFactor = stepDecayFactor ?? 0.9;
 
   const initialGenerated = createWaveForm(
     genome,
@@ -320,12 +324,9 @@ export const coordinateDescent = (
         plateauCount = 0;
         consecutiveSuccesses++;
         if (consecutiveSuccesses >= STEP_GROWTH_THRESHOLD) {
-          step = Math.min(
-            step * STEP_GROWTH_FACTOR,
-            cycle.startStep * 3,
-          );
+          step += actualStepGrowthAdd;
           console.log(
-            `[CoordDescent] Step grown to ${step.toFixed(4)} (${consecutiveSuccesses} consecutive improvements)`,
+            `[CoordDescent] Step grown to ${step.toFixed(6)} (added ${actualStepGrowthAdd})`,
           );
           consecutiveSuccesses = 0;
         }
@@ -391,24 +392,16 @@ export const coordinateDescent = (
         emitProgress(history, onProgress, iter, currentBest);
         plateauCount = 0;
         consecutiveSuccesses = 0;
-        step = Math.max(cycle.minStep * 0.5, 0.001);
+        step *= actualStepDecayFactor;
         console.log(
-          `[CoordDescent] Step reduced to ${step.toFixed(4)} after failed kick`,
+          `[CoordDescent] Step decayed to ${step.toFixed(8)} (×${actualStepDecayFactor.toFixed(2)})`,
         );
       }
 
       if (stagnation >= STAGNATION_EXIT_THRESHOLD) {
-        step *= DECAY;
-
-        if (step < cycle.minStep) {
-          console.log(
-            `[CoordDescent] Cycle ${cycle.label} finished at iter ${iter} (step ${step.toFixed(5)} < minStep ${cycle.minStep})`,
-          );
-          break;
-        }
-
+        step *= STEP_DECAY_FACTOR;
         console.log(
-          `[CoordDescent] Decay step to ${step.toFixed(5)} (${stagnation} stagnant)`,
+          `[CoordDescent] Decay step to ${step.toFixed(8)} (${stagnation} stagnant)`,
         );
         stagnation = 0;
       }
@@ -497,5 +490,7 @@ export const optimize = (
     arg.sampleRate,
     arg.maxIterations ?? 100,
     arg.onProgress,
+    arg.stepGrowthAdd,
+    arg.stepDecayFactor,
   );
 };

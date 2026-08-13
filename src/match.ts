@@ -15,6 +15,8 @@ interface ArgMatch {
   maxIterations?: number;
   initialVector?: readonly number[];
   onProgress?: ProgressCallback;
+  stepGrowthAdd?: number;
+  stepDecayFactor?: number;
 }
 
 interface MatchResult {
@@ -59,6 +61,8 @@ export const match = (arg: ArgMatch): MatchResult => {
     sampleRate: SAMPLE_RATE,
     maxIterations: arg.maxIterations,
     onProgress: arg.onProgress,
+    stepGrowthAdd: arg.stepGrowthAdd,
+    stepDecayFactor: arg.stepDecayFactor,
   });
 
   const bestSuppression =

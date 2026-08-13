@@ -4,11 +4,15 @@ import { match } from './match';
 import { simpleInitVector } from './simple-init-vector';
 
 // ===== CONFIG =====
-const MAX_OSCILLATORS = 2; // Число доступных осцилляторов
+const MAX_OSCILLATORS = 2;
+const MAX_ITERATIONS = 600;
+const STEP_GROWTH_ADD = 0.001;
+const STEP_DECAY_FACTOR = 0.97;
 // ==================
 
-const targetWavPath = './output15.wav';
-const outputWavPath = './output15_recreation_2' + Date().toString() + '.wav';
+const targetWavPath = './output14.wav';
+const outputWavPath =
+  './output14_recreation' + Date().toString() + '.wav';
 
 console.log(`Reading target: ${targetWavPath}`);
 const targetWav = readWav(targetWavPath);
@@ -23,7 +27,9 @@ console.log('Initialization complete');
 match({
   targetWavPath,
   outputWavPath,
-  maxIterations: 600,
+  maxIterations: MAX_ITERATIONS,
   initialVector,
   onProgress: () => {},
+  stepGrowthAdd: STEP_GROWTH_ADD,
+  stepDecayFactor: STEP_DECAY_FACTOR,
 });
