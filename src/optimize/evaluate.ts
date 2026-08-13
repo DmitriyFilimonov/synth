@@ -190,8 +190,8 @@ export const evaluateSuppressionWindowed = (
     const generatedWindow: number[] = [];
 
     for (let i = start; i < end; i++) {
-      targetWindow.push(targetSignal[i]);
-      generatedWindow.push(generated[i]);
+      targetWindow.push(targetSignal[i] ?? 0);
+      generatedWindow.push(generated[i] ?? 0);
     }
 
     const targetRMS = calculateRMS(targetWindow);

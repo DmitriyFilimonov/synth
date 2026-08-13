@@ -6,7 +6,7 @@ import { simpleInitVector } from './simple-init-vector';
 // ===== CONFIG =====
 const MAX_OSCILLATORS = 2;
 const MAX_ITERATIONS = 600;
-const STEP_GROWTH_ADD = 0.001;
+const STEP_GROWTH_ADD = 0.0001;
 const STEP_DECAY_FACTOR = 0.97;
 // ==================
 

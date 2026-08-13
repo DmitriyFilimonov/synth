@@ -256,6 +256,7 @@ export const getJobsListHandler = async (
         id: job.id,
         status: job.status,
         suppressionPercent: job.suppressionPercent,
+        params: job.params,
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,
       })),

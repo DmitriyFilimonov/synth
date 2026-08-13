@@ -270,6 +270,7 @@ export const coordinateDescent = (
   let cycleIndex = 0;
   while (cycleIndex < RESTART_SCHEDULE.length) {
     const cycle = RESTART_SCHEDULE[cycleIndex];
+    if (!cycle) break;
     let step = cycle.startStep;
     stagnation = 0;
 

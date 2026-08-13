@@ -12,9 +12,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:3000',
-      '/health': 'http://localhost:3000',
-      '/presets': 'http://localhost:3000',
+      '/api': process.env.BACKEND_URL ?? 'http://localhost:3000',
+      '/health': process.env.BACKEND_URL ?? 'http://localhost:3000',
+      '/presets': process.env.BACKEND_URL ?? 'http://localhost:3000',
     },
   },
 });

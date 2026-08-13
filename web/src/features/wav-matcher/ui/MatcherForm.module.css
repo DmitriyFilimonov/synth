@@ -62,6 +62,13 @@
   max-width: 600px;
 }
 
+.emptyState {
+  padding: 24px;
+  text-align: center;
+  color: #9ca3af;
+  font-size: 14px;
+}
+
 .jobCard {
   padding: 12px 16px;
   border: 1px solid #e5e7eb;
@@ -177,4 +184,51 @@
 
 .jobActions button {
   font-size: 11px;
+}
+
+.detail {
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.detailHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.detailTitle {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+  font-family: monospace;
+}
+
+.detailMeta {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.jobSuppression {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  margin-top: 4px;
+}
+
+.chart {
+  width: 100%;
+  max-width: 560px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.resultActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
 }

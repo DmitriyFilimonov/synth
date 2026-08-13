@@ -1,5 +1,7 @@
 import { Worker } from 'worker_threads';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { existsSync } from 'node:fs';
 import type { ArgCreateSynth } from './synth';
 
 export interface MatchWorkerProgress {
@@ -30,14 +32,30 @@ interface MatchWorkerArgs {
   onProgress?: (entry: MatchWorkerProgress) => void;
 }
 
+function resolveWorkerPath(): {
+  specifier: string | URL;
+  execArgv?: string[];
+} {
+  const tsPath = resolve(__dirname, 'optimizer-worker.ts');
+  if (existsSync(tsPath)) {
+    return {
+      specifier: new URL(pathToFileURL(tsPath).href),
+      execArgv: ['--require', require.resolve('tsx/cjs')],
+    };
+  }
+  const jsPath = resolve(__dirname, 'optimizer-worker.js');
+  return { specifier: jsPath };
+}
+
 export function matchWithWorker(
   arg: MatchWorkerArgs,
 ): Promise<MatchWorkerResult> {
   return new Promise((resolveFn, rejectFn) => {
-    const workerPath = resolve(__dirname, 'optimizer-worker.js');
-    const worker = new Worker(workerPath, {
-      workerData: {},
-    });
+    const { specifier, execArgv } = resolveWorkerPath();
+    const worker = new Worker(
+      specifier,
+      execArgv ? { workerData: {}, execArgv } : { workerData: {} },
+    );
 
     const timeout = setTimeout(
       () => {
@@ -71,7 +89,6 @@ export function matchWithWorker(
       }
     });
 
-    // Send the actual configuration after worker starts
     worker.postMessage({
       targetWavPath: arg.targetWavPath,
       outputWavPath: arg.outputWavPath,

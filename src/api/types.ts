@@ -93,6 +93,7 @@ export interface JobListItem {
   id: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   suppressionPercent: number;
+  params: { numOscillators: number; maxIterations: number };
   createdAt: string;
   updatedAt: string;
 }

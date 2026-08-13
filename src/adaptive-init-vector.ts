@@ -58,9 +58,12 @@ const estimateCloseTones = (
     if (prev * curr < 0) beatCrossings++;
   }
 
+  const lastEntry = ampEnv[ampEnv.length - 1];
+  const firstEntry = ampEnv[0];
   const duration =
-    ampEnv[ampEnv.length - 1]?.timeSeconds - ampEnv[0]?.timeSeconds ??
-    0.5;
+    lastEntry && firstEntry
+      ? lastEntry.timeSeconds - firstEntry.timeSeconds
+      : 0.5;
   const beatFreq = beatCrossings / (2 * duration);
 
   // Two tones separated by beat_freq Hz
@@ -120,7 +123,8 @@ export const adaptiveInitVector = (
   const trajectories = clusterHarmonics(frames, 100);
 
   const signalDuration = SAMPLE_LENGTH_IN_SECONDS;
-  const oscParams: ReturnType<typeof fitOscEnvelopes>[] = [];
+  type FitResult = NonNullable<ReturnType<typeof fitOscEnvelopes>>;
+  const oscParams: FitResult[] = [];
 
   for (const traj of trajectories) {
     const params = fitOscEnvelopes(traj, sampleRate, signalDuration);
