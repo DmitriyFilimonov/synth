@@ -1,6 +1,4 @@
 import { plotToSvg } from './visualize';
-import { assessCancellationQuality } from './cancellation-assessment';
-import { calculateRMS } from './rms';
 
 interface ArgMatchVisualize {
   targetSignal: number[];
@@ -47,7 +45,6 @@ export const matchVisualize = (arg: ArgMatchVisualize): void => {
       ...residualDecimated,
     ),
   );
-  const yRange = maxValue > 0 ? maxValue : 1;
 
   plotToSvg({
     lines: [
@@ -122,24 +119,11 @@ export const matchVisualize = (arg: ArgMatchVisualize): void => {
     });
   }
 
-  const assessment = assessCancellationQuality({
-    target: targetDecimated,
-    generated: synthDecimated.map((s) => -s),
-  });
-
-  const targetRMS = calculateRMS(targetDecimated);
-  const synthRMS = calculateRMS(synthDecimated);
-
   console.log(
     `Match visualization saved to ${arg.outputPath}-signal.svg`,
   );
   console.log(
     `Optimization progress saved to ${arg.outputPath}-progress.svg`,
   );
-  console.log(
-    `Final suppression: ${assessment.suppressionPercent.toFixed(2)}%`,
-  );
-  console.log(
-    `Target RMS: ${targetRMS.toFixed(2)}, Synth RMS: ${synthRMS.toFixed(2)}`,
-  );
+
 };

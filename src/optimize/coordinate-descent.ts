@@ -1,15 +1,7 @@
 import {
   OSC_PARAMS,
   FINE_STEP_BASE,
-  STEP_GROWTH_FACTOR,
-  STEP_SHRINK_FACTOR,
-  EARLY_EXIT_THRESHOLD,
-  STAGNATION_PERTURB_THRESHOLD,
-  RANDOM_PERTURB_RATE,
-  RANDOM_PERTURB_MAG,
-  clamp01,
   clampVolume,
-  countActiveOscillators,
   initGenome,
 } from './consts';
 import { VOLUME_PRUNE_THRESHOLD } from '../consts';
@@ -18,96 +10,9 @@ import type {
   ProgressEntry,
   ProgressCallback,
   ArgOptimize,
-  PerturbationResult,
 } from './types';
 
-const generateCandidates = (
-  center: number,
-  step: number,
-  isVolume: boolean,
-): number[] => {
-  const candidates: number[] = [];
-  if (isVolume) {
-    for (let s = 1; s <= 3; s++) {
-      const factor = step * s;
-      const lower = clampVolume(center * (1 - factor));
-      const upper = clampVolume(center * (1 + factor));
-      candidates.push(lower, upper);
-    }
-  } else {
-    for (let s = 1; s <= 3; s++) {
-      const stepSize = step * s;
-      const leftVal = Math.max(0, center - stepSize);
-      const rightVal = Math.min(1, center + stepSize);
-      candidates.push(leftVal, rightVal);
-    }
-  }
-  return candidates;
-};
-
-const perturbAndEvaluate = (
-  genome: readonly number[],
-  targetSignal: readonly number[],
-  sampleRate: number,
-): PerturbationResult => {
-  const perturbed = [...genome] as number[];
-  for (let i = 0; i < perturbed.length; i++) {
-    if (i % OSC_PARAMS === 0) {
-      continue;
-    }
-    if (Math.random() < RANDOM_PERTURB_RATE) {
-      const delta =
-        Math.random() * RANDOM_PERTURB_MAG * 2 - RANDOM_PERTURB_MAG;
-      perturbed[i] = clamp01((perturbed[i] ?? 0) + delta);
-    }
-  }
-  const score = evaluateSuppression(
-    perturbed,
-    targetSignal,
-    sampleRate,
-  );
-  return { genome: perturbed, score };
-};
-
-const applyRandomPerturbation = (
-  genome: readonly number[],
-  targetSignal: readonly number[],
-  sampleRate: number,
-  currentBest: number,
-): { result: PerturbationResult; accepted: boolean } => {
-  const result = perturbAndEvaluate(genome, targetSignal, sampleRate);
-  const accepted = result.score > currentBest;
-  if (accepted) {
-    console.log(
-      `[CoordDescent] Random perturbation improved score to ${result.score.toFixed(4)}%`,
-    );
-  } else {
-    console.log(`[CoordDescent] Random perturbation applied`);
-  }
-  return { result, accepted };
-};
-
-const updateStepAndStagnation = (
-  paramIndex: number,
-  improved: boolean,
-  step: number,
-  steps: number[],
-  stagnationPerParam: number[],
-): void => {
-  if (improved) {
-    steps[paramIndex] = Math.max(
-      FINE_STEP_BASE * 0.25,
-      step * STEP_SHRINK_FACTOR,
-    );
-    stagnationPerParam[paramIndex] = 0;
-  } else {
-    const prevStagnation = stagnationPerParam[paramIndex] ?? 0;
-    stagnationPerParam[paramIndex] = prevStagnation + 1;
-    if ((prevStagnation + 1) % 20 === 0) {
-      steps[paramIndex] = Math.min(0.15, step * STEP_GROWTH_FACTOR);
-    }
-  }
-};
+const STAGNATION_EXIT_THRESHOLD = 10;
 
 const optimizeSingleParameter = (
   genome: readonly number[],
@@ -116,16 +21,19 @@ const optimizeSingleParameter = (
   targetSignal: readonly number[],
   sampleRate: number,
   currentBest: number,
-  steps: number[],
-  stagnationPerParam: number[],
 ): {
   genome: number[];
   score: number;
-  improved: boolean;
 } => {
   const center = genome[paramIndex] ?? 0;
   const isVolume = paramIndex % OSC_PARAMS === 9;
-  const candidates = generateCandidates(center, step, isVolume);
+
+  const candidates = isVolume
+    ? [
+        clampVolume(center * (1 - step)),
+        clampVolume(center * (1 + step)),
+      ]
+    : [Math.max(0, center - step), Math.min(1, center + step)];
 
   let bestScore = currentBest;
   let bestCandidate: number[] | null = null;
@@ -144,68 +52,40 @@ const optimizeSingleParameter = (
     }
   }
 
-  const improved = bestCandidate !== null;
-  updateStepAndStagnation(
-    paramIndex,
-    improved,
-    step,
-    steps,
-    stagnationPerParam,
-  );
-
-  if (improved) {
-    return {
-      genome: bestCandidate ?? ([...genome] as number[]),
-      score: bestScore,
-      improved: true,
-    };
-  }
-
   return {
-    genome: [...genome] as number[],
-    score: currentBest,
-    improved: false,
+    genome: bestCandidate ?? ([...genome] as number[]),
+    score: bestScore,
   };
 };
 
-const coordinateDescentPass = (
+const optimizeIteration = (
   genome: number[],
-  steps: number[],
+  numOsc: number,
   targetSignal: readonly number[],
   sampleRate: number,
   currentBest: number,
-  numOsc: number,
-  bestGenome: number[],
-  stagnationPerParam: number[],
-): { genome: number[]; score: number; bestGenome: number[] } => {
+): { genome: number[]; score: number } => {
   let score = currentBest;
 
   for (let osc = 0; osc < numOsc; osc++) {
     const base = osc * OSC_PARAMS;
     for (let p = 1; p < OSC_PARAMS; p++) {
       const i = base + p;
-      const step = steps[i] ?? FINE_STEP_BASE;
       const result = optimizeSingleParameter(
         genome,
         i,
-        step,
+        FINE_STEP_BASE,
         targetSignal,
         sampleRate,
         score,
-        steps,
-        stagnationPerParam,
       );
       genome.length = 0;
       genome.push(...result.genome);
       score = result.score;
-      if (result.improved) {
-        bestGenome.length = 0;
-        bestGenome.push(...genome);
-      }
     }
   }
 
-  return { genome, score, bestGenome };
+  return { genome, score };
 };
 
 const finalPruneOscillators = (
@@ -227,7 +107,7 @@ const finalPruneOscillators = (
 
   let score = currentBest;
   for (const { base } of pruneCandidates) {
-    const savedFlag = genome[base];
+    const savedFlag = genome[base] ?? 0;
     genome[base] = 0;
     const scoreAfter = evaluateSuppression(
       genome,
@@ -235,7 +115,7 @@ const finalPruneOscillators = (
       sampleRate,
     );
     if (score - scoreAfter > 0.05) {
-      genome[base] = savedFlag ?? 0;
+      genome[base] = savedFlag;
     } else {
       score = scoreAfter;
     }
@@ -256,12 +136,10 @@ const emitProgress = (
   onProgress: ProgressCallback | undefined,
   iteration: number,
   suppressionPercent: number,
-  status: ProgressEntry['status'],
 ): void => {
   const entry: ProgressEntry = {
     iteration,
     suppressionPercent,
-    status,
   };
   history.push(entry);
   onProgress?.(entry);
@@ -282,12 +160,7 @@ export const coordinateDescent = (
   const genomeLength = initialVector.length;
   const numOsc = genomeLength / OSC_PARAMS;
 
-  const steps: number[] = Array.from(
-    { length: genomeLength },
-    () => FINE_STEP_BASE,
-  );
   let genome = initGenome(initialVector);
-  let bestGenome: number[] = [...genome];
 
   let currentBest = evaluateSuppression(
     genome,
@@ -295,83 +168,46 @@ export const coordinateDescent = (
     sampleRate,
   );
   const history: ProgressEntry[] = [];
-  const stagnationPerParam: number[] = Array.from(
-    { length: genomeLength },
-    () => 0,
-  );
-  let globalStagnation = 0;
+  let stagnation = 0;
 
   console.log(
-    `[CoordDescent] Starting at ${currentBest.toFixed(4)}%, ${countActiveOscillators(genome)} active/${numOsc} osc, ${genomeLength} params`,
+    `[CoordDescent] Starting at ${currentBest.toFixed(4)}%, ${genomeLength} params`,
   );
 
   for (let iter = 0; iter < maxIterations; iter++) {
-    const preIterBest = currentBest;
-
-    if (globalStagnation > EARLY_EXIT_THRESHOLD) {
-      console.log(
-        `[CoordDescent] Early exit at iter ${iter + 1} (${globalStagnation} stagnant)`,
-      );
-      break;
-    }
-
-    if (globalStagnation > STAGNATION_PERTURB_THRESHOLD) {
-      const perturbationResult = applyRandomPerturbation(
-        genome,
-        targetSignal,
-        sampleRate,
-        currentBest,
-      );
-      if (perturbationResult.accepted) {
-        genome = perturbationResult.result.genome;
-        currentBest = perturbationResult.result.score;
-        bestGenome = [...genome];
-      }
-    }
-
-    const passResult = coordinateDescentPass(
+    const result = optimizeIteration(
       genome,
-      steps,
+      numOsc,
       targetSignal,
       sampleRate,
       currentBest,
-      numOsc,
-      bestGenome,
-      stagnationPerParam,
     );
-    genome = passResult.genome;
-    currentBest = passResult.score;
-    bestGenome = passResult.bestGenome;
+    genome = result.genome;
+    currentBest = result.score;
 
-    const iterStatus =
-      globalStagnation > 0 ? 'stagnation' : 'optimizing';
-
-    emitProgress(
-      history,
-      onProgress,
-      iter + 1,
-      currentBest,
-      iterStatus,
-    );
-
-    if (currentBest > preIterBest + 0.0001) {
-      globalStagnation = 0;
-    } else {
-      globalStagnation++;
-    }
+    console.log(`Iteration ${iter + 1}: ${currentBest.toFixed(4)}%`);
+    emitProgress(history, onProgress, iter + 1, currentBest);
 
     if (currentBest >= 98) {
       break;
     }
 
-    if ((iter + 1) % 20 === 0) {
+    if (
+      currentBest >
+      (history[history.length - 2]?.suppressionPercent ?? -Infinity)
+    ) {
+      stagnation = 0;
+    } else {
+      stagnation++;
+    }
+
+    if (stagnation >= STAGNATION_EXIT_THRESHOLD) {
       console.log(
-        `[CoordDescent] Iter ${iter + 1}: ${currentBest.toFixed(4)}%, active=${countActiveOscillators(genome)}, stagn=${globalStagnation}`,
+        `[CoordDescent] Early exit at iter ${iter + 1} (${stagnation} stagnant)`,
       );
+      break;
     }
   }
-
-  genome = bestGenome;
 
   currentBest = finalPruneOscillators(
     genome,
@@ -383,13 +219,7 @@ export const coordinateDescent = (
 
   normalizeFlags(genome, numOsc);
 
-  emitProgress(
-    history,
-    onProgress,
-    maxIterations,
-    currentBest,
-    'done',
-  );
+  emitProgress(history, onProgress, maxIterations, currentBest);
 
   return { vector: genome, history };
 };

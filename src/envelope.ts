@@ -61,10 +61,12 @@ export const envelopeCreator =
       );
     }
 
+    const clampedX = Math.min(arg.x, argEnvelopCreator.duration);
+
     return (
       Math.E **
       (Math.log(argEnvelopCreator.min ?? MIN) *
-        (arg.x / argEnvelopCreator.duration) **
+        (clampedX / argEnvelopCreator.duration) **
           (argEnvelopCreator.slope ?? 1))
     );
   };

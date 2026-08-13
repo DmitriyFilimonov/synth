@@ -3,12 +3,6 @@ import { VOLUME_MIN } from '../consts';
 export const OSC_PARAMS = 10;
 
 export const FINE_STEP_BASE = 0.02;
-export const STEP_GROWTH_FACTOR = 1.5;
-export const STEP_SHRINK_FACTOR = 0.66;
-export const EARLY_EXIT_THRESHOLD = 50;
-export const STAGNATION_PERTURB_THRESHOLD = 30;
-export const RANDOM_PERTURB_RATE = 0.2;
-export const RANDOM_PERTURB_MAG = 0.2;
 
 export const clamp01 = (v: number): number =>
   Math.max(0, Math.min(1, v));

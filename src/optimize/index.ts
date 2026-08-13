@@ -13,5 +13,4 @@ export type {
   ProgressEntry,
   ProgressCallback,
   ArgOptimize,
-  PerturbationResult,
 } from './types';
