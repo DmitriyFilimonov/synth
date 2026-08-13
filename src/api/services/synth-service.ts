@@ -1,9 +1,12 @@
 import { createSynth, ArgCreateSynth } from '../../synth';
 import { writeWav } from '../../write-wav';
-import { MAX_AMPLITUDE_16_BIT_WAV_ENCODED } from '../../consts';
+import {
+  MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
+  SAMPLE_RATE,
+} from '../../consts';
 import { matchWithWorker } from '../../match-worker';
-import { mapSynthConfigToVector } from '../../synth-config-to-vector';
-import { SYNTH_MULTI_PRESET } from '../../match-preset';
+import { simpleInitVector } from '../../simple-init-vector';
+import { readWav } from '../../read-wav';
 import {
   MATCH_DEFAULT_STEP_GROWTH_ADD,
   MATCH_DEFAULT_STEP_DECAY_FACTOR,
@@ -91,8 +94,11 @@ export async function matchWav(
       suppressionPercent: number;
     }[] = [];
 
-    const initialVector = mapSynthConfigToVector(
-      SYNTH_MULTI_PRESET(numOscillators),
+    const targetWavData = readWav(tempInput);
+    const initialVector = simpleInitVector(
+      targetWavData.samples,
+      SAMPLE_RATE,
+      numOscillators,
     );
 
     const result = await matchWithWorker({
@@ -180,8 +186,11 @@ async function runMatchJob(
   try {
     await updateJobStatus(jobId, 'running');
 
-    const initialVector = mapSynthConfigToVector(
-      SYNTH_MULTI_PRESET(numOscillators),
+    const targetWavData = readWav(inputPath);
+    const initialVector = simpleInitVector(
+      targetWavData.samples,
+      SAMPLE_RATE,
+      numOscillators,
     );
 
     const result = await matchWithWorker({
