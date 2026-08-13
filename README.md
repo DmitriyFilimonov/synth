@@ -104,25 +104,41 @@ match({
 
 #### Алгоритм оптимизации
 
-Оптимизатор использует чистый coordinate descent:
+Оптимизатор использует coordinate descent с мульти-цикловым подходом:
 
 | Особенность | Описание |
 |---|---|
+| Циклы оптимизации | Три фазы: `EXPLORATION` (шаг 0.05→0.01) → `REFINEMENT` (0.02→0.005) → `PRECISION` (0.005→0.001) |
+| Плато-пинки | При `3` итерациях без улучшения — случайное изменение одного параметра |
+| Random restart | После `5` пинков — полный рандомный перезапуск генома |
+| Затухание шага | При `4` итерациях без улучшения шаг умножается на `0.8` |
 | `on` параметр | Строго бинарный (`0` или `1`); при `on = 0` параметры `1-9` осциллятора пропускаются |
-| `countActiveOscillators` | Запрещает отключить последний активный осциллятор |
-| Шаг оптимизации | Последовательный перебор каждой координаты вектора с micro-step (`0.005`) |
-| Ранний выход | `globalStagnation > 300` итераций без улучшения |
+| `enforceFlagInvariant` | Гарантирует, что осцилляторы с `volume > VOLUME_MIN` включены; все до rightmostEnabled — тоже |
+| Оконечная оценка | `evaluateSuppressionWindowed` — score по 100ms окнам + спектральный scoring (Goertzel) + penalty |
+| Scale fitting | После оптимизации подбирается оптимальный масштаб громкости |
+| Финальный прунинг | Осцилляторы с `startLevel < VOLUME_PRUNE_THRESHOLD` последовательно отключаются |
+| Ранний выход | Достижение `98%` suppression или окончание всех циклов |
 
-> **Важно:** оптимизация вычислительно затратна. Каждая оценка параметра генерирует полный сигнал. Рекомендуется начинать с малого `maxIterations`, постепенно увеличивая.
+> **Важно:** оптимизация вычислительно затратна. Каждая оценка параметра пересинтезирует полный сигнал. Windowed-evaluation оценивает качество по коротким окнам (100ms) с оптимальным scale + спектральным score через Goertzel-алгоритм.
 
-#### Пресеты для подбора
+#### Инициализация вектора
 
-В `src/match-preset.ts`:
+Для подбора параметров доступны стратегии создания начального вектора:
 
-| Пресет | Описание |
+| Файл | Описание |
 |---|---|
-| `SYNTH_DEFAULT_PRESET` | Один осциллятор 440 Гц |
-| `SYNTH_MULTI_PRESET(n)` | `n` осцилляторов с гармониками и убывающей амплитудой |
+| `src/simple-init-vector.ts` | Goertzel-анализ + STFT-гармоники. Определяет sweep (freqOverTime + amplitude envelope), извлекает фазы/амплитуды через Goertzel, дополняет STFT-траекториями |
+| `src/fft-init-vector.ts` | FFT на коротком окне (~23ms) — детекция доминантных гармоник для инициализации частот, фаз и амплитуд |
+| `src/stft-init-vector.ts` | STFT-анализ + кластеризация гармоник + fit envelope. Авто-фундаментальная частота через автокорреляцию, amplitude envelope через RMS-окна |
+| `src/adaptive-init-vector.ts` | Адаптивная инициализация: определяет биения (amplitude modulation), разбивает фундаментальный тон на два близких, добавляет STFT-гармоники |
+
+Вспомогательные модули анализа сигналов:
+
+| Файл | Назначение |
+|---|---|
+| `src/signal-analysis.ts` | Автокорреляция (фундаментальная частота), amplitude envelope (RMS-окна), freqOverTime (zero-crossing rate) |
+| `src/spectrogram.ts` | STFT-анализ: Hanning window, FFT, peak detection, кластеризация гармоник в траектории, fit osc envelopes |
+| `src/fft.ts` | Cooley-Tukey radix-2 FFT, extraction доминантных гармоник с bias к фундаментальным частотам |
 
 ### 4. Веб-интерфейс
 
@@ -191,7 +207,14 @@ npm run lint:fix       # ESLint (автофикс)
 | `src/optimizer-worker.ts` | Реализация worker-потока для оптимизации |
 | `src/match-preset.ts` | Пресеты для начальной точки оптимизации |
 | `src/match-visualize.ts` | SVG сравнения сигналов + прогресс |
-| `src/optimize.ts` | Чистый coordinate descent оптимизатор с ранним выходом по стагнации |
+| `src/optimize/` | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка), `consts.ts` (константы), `types.ts` (типы) |
+| `src/signal-analysis.ts` | Анализ сигналов: автокорреляция, amplitude envelope, freqOverTime |
+| `src/spectrogram.ts` | STFT-анализ: Hanning window, FFT, peak detection, кластеризация, fit envelopes |
+| `src/fft.ts` | Cooley-Tukey radix-2 FFT, extraction доминантных гармоник |
+| `src/simple-init-vector.ts` | Инициализация: Goertzel + STFT-гармоники |
+| `src/fft-init-vector.ts` | FFT-инициализация на коротком окне (~23ms) |
+| `src/stft-init-vector.ts` | STFT-инициализация с траекториями |
+| `src/adaptive-init-vector.ts` | Адаптивная инициализация: детекция биений через amplitude modulation |
 | `src/visualize-envelopes.ts` | Генерация SVG огибающих |
 | `src/visualize.ts` | Утилита для построения SVG-графиков |
 | `src/synth.ts` | Создатель синтезатора |
@@ -203,7 +226,7 @@ npm run lint:fix       # ESLint (автофикс)
 | `src/rms.ts` | Расчёт RMS энергии |
 | `src/synth-config-to-vector.ts` | Нормализация конфига → `[0,1]` |
 | `src/vector-to-synth-config.ts` | Денормализация вектора → конфиг (50 осцилляторов) |
-| `src/consts.ts` | Константы: `SAMPLE_RATE` и т.д. |
+| `src/consts.ts` | Константы: `SAMPLE_RATE`, `VOLUME_MIN`, `VOLUME_PRUNE_THRESHOLD` |
 | `web/` | Веб-интерфейс (React + Vite, FSD) |
 | `web/src/app/` | Инициализация приложения |
 | `web/src/features/synth-generator/` | Фича генерации WAV |
@@ -253,40 +276,8 @@ npm run lint:fix       # ESLint (автофикс)
 `mapSynthConfigToVector()` возвращает `10 * N` значений (N — число осцилляторов). `mapVectorToSynthConfig()` всегда создаёт 50 осцилляторов. Round‑trip расширяет 2‑осцилляторный пресет до 50 (оставшиеся `on: false`).
 
 ### Производительность оптимизации
-Чистый coordinate descent: последовательная оптимизация каждой координаты вектора. Параметр `on` строго бинарный (`0` или `1`); если осциллятор выключен, его параметры `1‑9` пропускаются. Защита `countActiveOscillators` запрещает отключить последний активный осциллятор. Ранний выход: `globalStagnation > 300` итераций без улучшения.
+Coordinate descent с мульти-цикловым подходом (EXPLORATION → REFINEMENT → PRECISION). На каждой итерации последовательно оптимизируется каждая координата активного осциллятора. Параметр `on` строго бинарный (`0` или `1`); отключённые осцилляторы пропускаются. Оценка через `evaluateSuppressionWindowed`: средний score по 100ms окнам + оптимальный scale + спектральный score (Goertzel на доминантных частотах) + shape penalty. Плато-пинки и random restarts для выхода из локальных оптимумов. Финальный scale fitting и прунинг тихих осцилляторов.
 
 ### Worker‑потоки
 Оптимизация выполняется в отдельном worker‑потоке (`optimizer‑worker.ts`) через `worker_threads`. `match‑worker.ts` предоставляет промис‑обёртку для удобного вызова. Worker имеет таймаут 30 минут.
-
-**Структура проекта (обновлена)**
-
-| Файл / Папка | Назначение |
-|---|---|
-| `src/index.ts` | Генерация WAV из `presets.ts` |
-| `src/server.ts` | Точка входа HTTP‑сервера |
-| `src/api/` | Express API (контроллеры, роуты, сервисы) |
-| `src/presets.ts` | Пресеты для генерации |
-| `src/match-entry.ts` | Точка входа подбора параметров |
-| `src/match.ts` | Оркестратор: read → optimize → generate → visualize |
-| `src/match-worker.ts` | Обёртка для запуска оптимизации в worker‑потоке |
-| `src/optimizer-worker.ts` | Реализация worker‑потока для оптимизации |
-| `src/match-preset.ts` | Пресеты для начальной точки оптимизации |
-| `src/match-visualize.ts` | SVG сравнения сигналов + прогресс |
-| `src/optimize.ts` | Чистый coordinate descent оптимизатор с ранним выходом по стагнации |
-| `src/visualize-envelopes.ts` | Генерация SVG огибающих |
-| `src/synth.ts` | Создатель синтезатора |
-| `src/oscillator.ts` | Расчёт сигнала осциллятора |
-| `src/envelope.ts` | Экспоненциальная функция огибающей |
-| `src/read-wav.ts` | Парсинг 16‑бит WAV |
-| `src/write-wav.ts` | Запись WAV |
-| `src/cancellation-assessment.ts` | Оценка качества подавления (RMS) |
-| `src/rms.ts` | Расчёт RMS энергии |
-| `src/synth-config-to-vector.ts` | Нормализация конфига → `[0,1]` |
-| `src/vector-to-synth-config.ts` | Денормализация вектора → конфиг (50 осцилляторов) |
-| `src/consts.ts` | Константы: `SAMPLE_RATE` и т.д. |
-| `web/` | Веб‑интерфейс (React + Vite, FSD) |
-| `web/src/app/` | Инициализация приложения |
-| `web/src/features/synth-generator/` | Фича генерации WAV |
-| `web/src/features/wav-matcher/` | Фича подбора параметров к WAV |
-| `web/src/shared/` | Переиспользуемые компоненты и API‑клиент |
 

@@ -69,7 +69,7 @@ Generate → Compare → Save WAV + SVG
 | Файл | Назначение |
 |---|---|
 | `src/index.ts` | Точка входа, генерация WAV из пресета |
-| `src/consts.ts` | Константы: `SAMPLE_RATE`, `SAMPLE_LENGTH_IN_SECONDS`, `MAX_AMPLITUDE_16_BIT_WAV_ENCODED` |
+| `src/consts.ts` | Константы: `SAMPLE_RATE`, `SAMPLE_LENGTH_IN_SECONDS`, `MAX_AMPLITUDE_16_BIT_WAV_ENCODED`, `VOLUME_MIN`, `VOLUME_PRUNE_THRESHOLD` |
 | `src/synth.ts` | Создание синтезатора из конфигурации осцилляторов |
 | `src/envelope.ts` | Экспоненциальная функция огибающей. При `x > duration` значение clamp'ится к `duration` (огибающая остаётся на последнем вычисленном уровне) |
 | `src/oscillator.ts` | Расчёт сигнала осциллятора |
@@ -78,7 +78,14 @@ Generate → Compare → Save WAV + SVG
 | `src/write-wav.ts` | Запись `Int16Array` в WAV-файл |
 | `src/synth-config-to-vector.ts` | Нормализация конфига → вектор `number[]` `[0, 1]` |
 | `src/vector-to-synth-config.ts` | Денормализация вектора → конфиг (50 осцилляторов) |
-| `src/optimize.ts` | Coordinate descent оптимизатор с ранним выходом по стагнации |
+| `src/optimize/` | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка suppression), `consts.ts` (константы), `types.ts` (типы) |
+| `src/signal-analysis.ts` | Анализ сигналов: автокорреляция (фундаментальная частота), amplitude envelope (RMS-окна), freqOverTime (zero-crossing) |
+| `src/spectrogram.ts` | STFT-анализ: Hanning window, FFT, peak detection, кластеризация гармоник в траектории, fit osc envelopes |
+| `src/fft.ts` | Cooley-Tukey radix-2 FFT, extraction доминантных гармоник с bias к фундаментальным |
+| `src/simple-init-vector.ts` | Инициализация: Goertzel + STFT-гармоники для начальной точки оптимизации |
+| `src/fft-init-vector.ts` | FFT-инициализация на коротком окне (~23ms) |
+| `src/stft-init-vector.ts` | STFT-инициализация с траекториями (autocorr fundamental + STFT clustering) |
+| `src/adaptive-init-vector.ts` | Адаптивная иницализация: детекция биений через amplitude modulation, разбиение фундаментального на два близких тона |
 | `src/cancellation-assessment.ts` | Оценка качества подавления (RMS-based) |
 | `src/rms.ts` | Расчёт RMS энергии сигнала |
 | `src/visualize.ts` | Генерация SVG-графиков |
@@ -90,7 +97,7 @@ Generate → Compare → Save WAV + SVG
 | `src/match-visualize.ts` | Визуализация результатов мэтчинга (сигналы + прогресс) |
 | `src/match-entry.ts` | Точка входа для запуска подбора параметров |
 
-### Оптимизатор (src/optimize.ts)
+### Оптимизатор (src/optimize/)
 
 #### Раскладка вектора
 50 осцилляторов × 10 параметров (`OSC_PARAMS = 10`).
@@ -111,10 +118,14 @@ Generate → Compare → Save WAV + SVG
   к строго `0` или `1`
 
 #### Текущее поведение (изменяемое, НЕ инвариант)
-- Флаг `on` всегда `1` в процессе оптимизации; отключение происходит только в финальном прунинге на основе порога громкости.
-- Параметр громкости (`ampEnv.startLevel`, offset 9) имеет логарифмический шаг и ограничен снизу `VOLUME_MIN` (≈ 0.01).
-- После завершения спуска осцилляторы с `startLevel` ниже `VOLUME_PRUNE_THRESHOLD` (≈ 0.02) последовательно отключаются; откат происходит, если `suppressionPercent` падает более чем на 0.05 п.п.
-- Размер шага фиксирован (`FINE_STEP_BASE`), одинаков для всех параметров.
+- Мульти-цикловый подход: `EXPLORATION` (0.05→0.01) → `REFINEMENT` (0.02→0.005) → `PRECISION` (0.005→0.001)
+- Плато-пинки: при `3` итерациях без улучшения — случайный пинк одного параметра; после `5` пинков — полный рандомный рестарт
+- Затухание шага: при `4` итерациях без улучшения шаг × `0.8`; выход из цикла, если шаг < minStep
+- Ранний выход при достижении `98%` suppression
+- Флаг `on` всегда `1` в процессе оптимизации; `enforceFlagInvariant` включает осцилляторы с `volume > VOLUME_MIN` и все до rightmostEnabled
+- После completion — финальный прунинг: осцилляторы с `startLevel < VOLUME_PRUNE_THRESHOLD` (≈ 0.02) отключаются; откат если score падает > 0.05 п.п.
+- Scale fitting: подбор оптимального масштаба громкости (`findOptimalScale`) после оптимизации
+- Volume (offset 9): мультипликативный шаг (`center * (1 ± step)`), ограничен `clampVolume` → `[VOLUME_MIN, 1]`
 
 #### Известное узкое место
 `evaluateSuppression` пересинтезирует весь сигнал на каждую пробу

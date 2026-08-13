@@ -1,15 +1,29 @@
-import { SYNTH_MULTI_PRESET } from './match-preset';
-import { mapSynthConfigToVector } from './synth-config-to-vector';
+import { SAMPLE_RATE } from './consts';
+import { readWav } from './read-wav';
 import { match } from './match';
+import { simpleInitVector } from './simple-init-vector';
 
-const NUM_OSCILLATORS = 3;
+// ===== CONFIG =====
+const MAX_OSCILLATORS = 2; // Число доступных осцилляторов
+// ==================
+
+const targetWavPath = './output15.wav';
+const outputWavPath = './output15_recreation_2' + Date().toString() + '.wav';
+
+console.log(`Reading target: ${targetWavPath}`);
+const targetWav = readWav(targetWavPath);
+const initialVector = simpleInitVector(
+  targetWav.samples,
+  SAMPLE_RATE,
+  MAX_OSCILLATORS,
+);
+
+console.log('Initialization complete');
 
 match({
-  targetWavPath: './output14.wav',
-  outputWavPath: './output14_reacreation_16.wav',
-  maxIterations: 100,
-  initialVector: mapSynthConfigToVector(
-    SYNTH_MULTI_PRESET(NUM_OSCILLATORS),
-  ),
+  targetWavPath,
+  outputWavPath,
+  maxIterations: 600,
+  initialVector,
   onProgress: () => {},
 });

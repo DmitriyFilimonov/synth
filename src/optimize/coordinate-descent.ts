@@ -1,18 +1,34 @@
 import {
   OSC_PARAMS,
-  FINE_STEP_BASE,
+  clamp01,
   clampVolume,
   initGenome,
 } from './consts';
-import { VOLUME_PRUNE_THRESHOLD } from '../consts';
-import { evaluateSuppression } from './evaluate';
+import { VOLUME_MIN, VOLUME_PRUNE_THRESHOLD } from '../consts';
+import {
+  evaluateSuppression,
+  evaluateSuppressionWindowed,
+  findOptimalScale,
+  createWaveForm,
+} from './evaluate';
 import type {
   ProgressEntry,
   ProgressCallback,
   ArgOptimize,
 } from './types';
 
-const STAGNATION_EXIT_THRESHOLD = 10;
+const STAGNATION_EXIT_THRESHOLD = 4;
+const DECAY = 0.8;
+const PLATEAU_RESTART_THRESHOLD = 3;
+const PERTURBATION = 0.05;
+const STEP_GROWTH_THRESHOLD = 5;
+const STEP_GROWTH_FACTOR = 1.3;
+
+const RESTART_SCHEDULE = [
+  { startStep: 0.05, minStep: 0.01, label: 'EXPLORATION' },
+  { startStep: 0.02, minStep: 0.005, label: 'REFINEMENT' },
+  { startStep: 0.005, minStep: 0.001, label: 'PRECISION' },
+];
 
 const optimizeSingleParameter = (
   genome: readonly number[],
@@ -41,10 +57,9 @@ const optimizeSingleParameter = (
   for (const candVal of candidates) {
     const candGenome = [...genome] as number[];
     candGenome[paramIndex] = candVal;
-    const score = evaluateSuppression(
-      candGenome,
+    const score = evaluateSuppressionWindowed(
+      createWaveForm(candGenome, sampleRate, targetSignal.length),
       targetSignal,
-      sampleRate,
     );
     if (score > bestScore) {
       bestScore = score;
@@ -61,20 +76,28 @@ const optimizeSingleParameter = (
 const optimizeIteration = (
   genome: number[],
   numOsc: number,
+  initOscCount: number,
   targetSignal: readonly number[],
   sampleRate: number,
   currentBest: number,
+  step: number,
+  firstOscMinVol: number,
 ): { genome: number[]; score: number } => {
   let score = currentBest;
 
+  genome[0] = 1;
+
   for (let osc = 0; osc < numOsc; osc++) {
     const base = osc * OSC_PARAMS;
+    if ((genome[base] ?? 0) < 0.5) {
+      continue;
+    }
     for (let p = 1; p < OSC_PARAMS; p++) {
       const i = base + p;
       const result = optimizeSingleParameter(
         genome,
         i,
-        FINE_STEP_BASE,
+        step,
         targetSignal,
         sampleRate,
         score,
@@ -82,7 +105,13 @@ const optimizeIteration = (
       genome.length = 0;
       genome.push(...result.genome);
       score = result.score;
+
+      if (osc === 0 && p === 9) {
+        genome[9] = Math.max(firstOscMinVol, genome[9] ?? 0);
+      }
     }
+
+    enforceFlagInvariant(genome, numOsc, initOscCount);
   }
 
   return { genome, score };
@@ -131,6 +160,40 @@ const normalizeFlags = (genome: number[], numOsc: number): void => {
   }
 };
 
+const enforceFlagInvariant = (
+  genome: number[],
+  numOsc: number,
+  initOscCount: number,
+): void => {
+  let rightmostEnabled = -1;
+  for (let osc = numOsc - 1; osc >= 0; osc--) {
+    if ((genome[osc * OSC_PARAMS] ?? 0) >= 0.5) {
+      rightmostEnabled = osc;
+      break;
+    }
+  }
+
+  for (let osc = 0; osc < numOsc; osc++) {
+    if (osc < initOscCount) {
+      genome[osc * OSC_PARAMS] = 1;
+      continue;
+    }
+
+    const vol = genome[osc * OSC_PARAMS + 9] ?? 0;
+
+    if (osc < rightmostEnabled) {
+      genome[osc * OSC_PARAMS] = 1;
+      continue;
+    }
+
+    if (vol < VOLUME_MIN) {
+      genome[osc * OSC_PARAMS] = 0;
+    } else {
+      genome[osc * OSC_PARAMS] = 1;
+    }
+  }
+};
+
 const emitProgress = (
   history: ProgressEntry[],
   onProgress: ProgressCallback | undefined,
@@ -162,54 +225,209 @@ export const coordinateDescent = (
 
   let genome = initGenome(initialVector);
 
-  let currentBest = evaluateSuppression(
+  const firstOscInitVolume = genome[9] ?? 0;
+
+  const initOscCount = initialVector.filter(
+    (v, i) => i % OSC_PARAMS === 0 && v >= 0.5,
+  ).length;
+
+  const initialGenerated = createWaveForm(
     genome,
-    targetSignal,
     sampleRate,
+    targetSignal.length,
+  );
+  let currentBest = evaluateSuppressionWindowed(
+    initialGenerated,
+    targetSignal,
   );
   const history: ProgressEntry[] = [];
   let stagnation = 0;
+  let plateauCount = 0;
+  let restartCount = 0;
+  let consecutiveSuccesses = 0;
+  let bestGenome = genome.slice();
+  let bestScore = currentBest;
 
   console.log(
     `[CoordDescent] Starting at ${currentBest.toFixed(4)}%, ${genomeLength} params`,
   );
 
-  for (let iter = 0; iter < maxIterations; iter++) {
-    const result = optimizeIteration(
-      genome,
-      numOsc,
-      targetSignal,
-      sampleRate,
-      currentBest,
+  for (let osc = 0; osc < numOsc; osc++) {
+    const base = osc * OSC_PARAMS;
+    const freqBase = genome[base + 1];
+    const freqStart = genome[base + 2];
+    const vol = genome[base + 9];
+    console.log(
+      `[Init] Osc[${osc}]: freq=${freqBase?.toFixed(2)}-${freqStart?.toFixed(2)}, vol=${vol?.toFixed(3)}, on=${genome[base]}`,
     );
-    genome = result.genome;
-    currentBest = result.score;
+  }
 
-    console.log(`Iteration ${iter + 1}: ${currentBest.toFixed(4)}%`);
-    emitProgress(history, onProgress, iter + 1, currentBest);
+  let iter = 0;
+  let cycleIndex = 0;
+  while (cycleIndex < RESTART_SCHEDULE.length) {
+    const cycle = RESTART_SCHEDULE[cycleIndex];
+    let step = cycle.startStep;
+    stagnation = 0;
+
+    console.log(
+      `[CoordDescent] Cycle: ${cycle.label}, startStep=${cycle.startStep}, minStep=${cycle.minStep}, score=${currentBest.toFixed(4)}%`,
+    );
+
+    const cycleIterStart = iter;
+    let genomeChanged = false;
+
+    while (iter < maxIterations) {
+      const prevGenome = genome.slice();
+      const result = optimizeIteration(
+        genome,
+        numOsc,
+        initOscCount,
+        targetSignal,
+        sampleRate,
+        currentBest,
+        step,
+        firstOscInitVolume,
+      );
+      genome = result.genome;
+      const scoreImproved = result.score > currentBest;
+      currentBest = result.score;
+
+      if (currentBest > bestScore) {
+        bestScore = currentBest;
+        bestGenome = genome.slice();
+      }
+
+      const genomeActuallyChanged =
+        genome.length !== prevGenome.length ||
+        genome.some((v, i) => v !== prevGenome[i]);
+
+      if (genomeActuallyChanged) {
+        genomeChanged = true;
+      }
+
+      console.log(
+        `Iteration ${iter + 1}: ${currentBest.toFixed(4)}%`,
+      );
+      emitProgress(history, onProgress, iter + 1, currentBest);
+
+      iter++;
+      if (currentBest >= 98) {
+        break;
+      }
+
+      if (scoreImproved) {
+        stagnation = 0;
+        plateauCount = 0;
+        consecutiveSuccesses++;
+        if (consecutiveSuccesses >= STEP_GROWTH_THRESHOLD) {
+          step = Math.min(
+            step * STEP_GROWTH_FACTOR,
+            cycle.startStep * 3,
+          );
+          console.log(
+            `[CoordDescent] Step grown to ${step.toFixed(4)} (${consecutiveSuccesses} consecutive improvements)`,
+          );
+          consecutiveSuccesses = 0;
+        }
+      } else {
+        stagnation++;
+        plateauCount++;
+        consecutiveSuccesses = 0;
+      }
+
+      if (plateauCount >= PLATEAU_RESTART_THRESHOLD) {
+        restartCount++;
+        if (restartCount >= 5) {
+          console.log(
+            `[CoordDescent] Random restart at iter ${iter} (best=${bestScore.toFixed(4)}%, restarts=${restartCount})`,
+          );
+          genome = initGenome(initialVector).map((v, idx) => {
+            if (idx % OSC_PARAMS === 0) return v;
+            return Math.random();
+          });
+          enforceFlagInvariant(genome, numOsc, initOscCount);
+          restartCount = 0;
+        } else {
+          // Kick: randomly change ONE parameter of an ENABLED oscillator
+          const enabledOscs: number[] = [];
+          for (let osc = 0; osc < numOsc; osc++) {
+            if ((genome[osc * OSC_PARAMS] ?? 0) >= 0.5) {
+              enabledOscs.push(osc);
+            }
+          }
+          if (enabledOscs.length === 0) {
+            enabledOscs.push(0);
+          }
+          const kickOsc =
+            enabledOscs[
+              Math.floor(Math.random() * enabledOscs.length)
+            ] ?? 0;
+          const kickParam =
+            1 + Math.floor(Math.random() * (OSC_PARAMS - 1));
+          const kickIdx = kickOsc * OSC_PARAMS + kickParam;
+
+          console.log(
+            `[CoordDescent] Plateau kick at iter ${iter}: osc[${kickOsc}].p[${kickParam}] (restart=${restartCount})`,
+          );
+
+          genome[kickIdx] = Math.random();
+
+          enforceFlagInvariant(genome, numOsc, initOscCount);
+
+          currentBest = evaluateSuppressionWindowed(
+            createWaveForm(genome, sampleRate, targetSignal.length),
+            targetSignal,
+          );
+
+          if (currentBest < bestScore * 0.8) {
+            console.log(
+              `[CoordDescent] Kick failed, restarting from best`,
+            );
+            genome = bestGenome.slice();
+            currentBest = bestScore;
+          }
+        }
+
+        emitProgress(history, onProgress, iter, currentBest);
+        plateauCount = 0;
+        consecutiveSuccesses = 0;
+        step = Math.max(cycle.minStep * 0.5, 0.001);
+        console.log(
+          `[CoordDescent] Step reduced to ${step.toFixed(4)} after failed kick`,
+        );
+      }
+
+      if (stagnation >= STAGNATION_EXIT_THRESHOLD) {
+        step *= DECAY;
+
+        if (step < cycle.minStep) {
+          console.log(
+            `[CoordDescent] Cycle ${cycle.label} finished at iter ${iter} (step ${step.toFixed(5)} < minStep ${cycle.minStep})`,
+          );
+          break;
+        }
+
+        console.log(
+          `[CoordDescent] Decay step to ${step.toFixed(5)} (${stagnation} stagnant)`,
+        );
+        stagnation = 0;
+      }
+    }
 
     if (currentBest >= 98) {
       break;
     }
 
-    if (
-      currentBest >
-      (history[history.length - 2]?.suppressionPercent ?? -Infinity)
-    ) {
-      stagnation = 0;
-    } else {
-      stagnation++;
+    if (!genomeChanged && iter - cycleIterStart > 0) {
+      console.log(
+        `[CoordDescent] No genome change in cycle ${cycle.label}, advancing`,
+      );
     }
 
-    if (stagnation >= STAGNATION_EXIT_THRESHOLD) {
-      console.log(
-        `[CoordDescent] Early exit at iter ${iter + 1} (${stagnation} stagnant)`,
-      );
-      break;
-    }
+    cycleIndex++;
   }
 
-  currentBest = finalPruneOscillators(
+  const finalPruningScore = finalPruneOscillators(
     genome,
     targetSignal,
     sampleRate,
@@ -217,7 +435,50 @@ export const coordinateDescent = (
     numOsc,
   );
 
+  enforceFlagInvariant(genome, numOsc, initOscCount);
+
+  console.log(
+    `[CoordDescent] Post-pruning score: ${finalPruningScore.toFixed(4)}%`,
+  );
+
+  console.log(`[CoordDescent] Phase 2: Scale fitting...`);
+  const generated = createWaveForm(
+    genome,
+    sampleRate,
+    targetSignal.length,
+  );
+  const { scale, suppressionPercent: scaleScore } = findOptimalScale(
+    generated,
+    targetSignal,
+  );
+
+  console.log(`[CoordDescent] Optimal scale: ${scale.toFixed(4)}`);
+
+  if (scale !== 1) {
+    for (let osc = 0; osc < numOsc; osc++) {
+      const base = osc * OSC_PARAMS;
+      const volIdx = base + 9;
+      const currentVol = genome[volIdx] ?? 0;
+      genome[volIdx] = clampVolume(currentVol * scale);
+    }
+  }
+
+  currentBest = scaleScore;
+
+  console.log(
+    `[CoordDescent] After scale fitting: ${currentBest.toFixed(4)}%`,
+  );
+
+  if (bestScore > currentBest) {
+    genome = bestGenome.slice();
+    currentBest = bestScore;
+    console.log(
+      `[CoordDescent] Restored best genome: ${currentBest.toFixed(4)}%`,
+    );
+  }
+
   normalizeFlags(genome, numOsc);
+  enforceFlagInvariant(genome, numOsc, initOscCount);
 
   emitProgress(history, onProgress, maxIterations, currentBest);
 

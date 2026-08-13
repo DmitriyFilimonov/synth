@@ -125,5 +125,4 @@ export const matchVisualize = (arg: ArgMatchVisualize): void => {
   console.log(
     `Optimization progress saved to ${arg.outputPath}-progress.svg`,
   );
-
 };
