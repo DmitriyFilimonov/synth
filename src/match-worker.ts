@@ -59,36 +59,24 @@ export function matchWithWorker(
       ...(execArgv ? { execArgv } : {}),
     });
 
-    const timeout = setTimeout(
-      () => {
-        worker.terminate();
-        rejectFn(new Error('Worker timed out'));
-      },
-      30 * 60 * 1000,
-    );
-
     worker.on('message', (msg: { type: string; data: unknown }) => {
       if (msg.type === 'log') {
         process.stdout.write((msg.data as string) + '\n');
       } else if (msg.type === 'progress') {
         arg.onProgress?.(msg.data as MatchWorkerProgress);
       } else if (msg.type === 'done') {
-        clearTimeout(timeout);
         resolveFn(msg.data as MatchWorkerResult);
       } else if (msg.type === 'error') {
-        clearTimeout(timeout);
         rejectFn(new Error(msg.data as string));
       }
     });
 
     worker.on('error', (err) => {
-      clearTimeout(timeout);
       rejectFn(err);
     });
 
     worker.on('exit', (code) => {
       if (code !== 0) {
-        clearTimeout(timeout);
         rejectFn(new Error(`Worker stopped with exit code ${code}`));
       }
     });
