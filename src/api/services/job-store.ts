@@ -30,6 +30,7 @@ export interface JobRecord {
     stepGrowthAdd?: number;
     stepDecayFactor?: number;
     stageDurationMultiplier?: number;
+    hpoTrials?: number;
   };
   inputFileName: string;
   resultFileName: string;
@@ -115,6 +116,7 @@ export async function createJob(
     stepGrowthAdd?: number;
     stepDecayFactor?: number;
     stageDurationMultiplier?: number;
+    hpoTrials?: number;
   },
   inputFileName: string,
 ): Promise<JobRecord> {

@@ -8,6 +8,8 @@ import {
   stagedOptimize,
   runHPO,
   type ArgHPO,
+  type CoordinateDescentConfig,
+  type ResolvedHyperparams,
 } from './optimize';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 import { createSynth, ArgCreateSynth } from './synth';
@@ -23,9 +25,7 @@ interface ArgMatch {
   onProgress?: ProgressCallback;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
-  useStagedOptimize?: boolean;
   stageDurationMultiplier?: number;
-  useHPO?: boolean;
   hpoTrials?: number;
   hpoConfig?: Partial<ArgHPO['tpeConfig']>;
 }
@@ -119,8 +119,26 @@ export const match = (arg: ArgMatch): MatchResult => {
   let vector: number[];
   let history: { iteration: number; suppressionPercent: number }[];
 
-  if (arg.useHPO) {
-    const nTrials = arg.hpoTrials ?? 10;
+  const hasUserOverride =
+    arg.stepGrowthAdd !== undefined &&
+    arg.stepDecayFactor !== undefined &&
+    arg.stageDurationMultiplier !== undefined;
+
+  if (hasUserOverride) {
+    const result = stagedOptimize({
+      initialVector,
+      targetSignal,
+      sampleRate: SAMPLE_RATE,
+      maxIterations,
+      onProgress: arg.onProgress,
+      stepGrowthAdd: arg.stepGrowthAdd,
+      stepDecayFactor: arg.stepDecayFactor,
+      stageDurationMultiplier: arg.stageDurationMultiplier,
+    });
+    vector = result.vector;
+    history = result.history;
+  } else {
+    const nTrials = arg.hpoTrials ?? 30;
     const numOscillators = initialVector.length / 10;
 
     console.log(
@@ -137,41 +155,34 @@ export const match = (arg: ArgMatch): MatchResult => {
       tpeConfig: arg.hpoConfig,
     });
 
-    vector = hpoResult.bestVector;
-    history = hpoResult.history.map((h, i) => ({
-      iteration: i + 1,
-      suppressionPercent: h.value ?? 0,
+    const config = buildCoordDescentConfig(
+      hpoResult.bestHyperparams,
+    );
+
+    const stagedResult = stagedOptimize({
+      initialVector: hpoResult.bestVector,
+      targetSignal,
+      sampleRate: SAMPLE_RATE,
+      maxIterations: hpoResult.bestHyperparams.iterations,
+      stepGrowthAdd: hpoResult.bestHyperparams.stepGrowthAdd,
+      stepDecayFactor: hpoResult.bestHyperparams.stepDecayFactor,
+      stageDurationMultiplier:
+        hpoResult.bestHyperparams.stageDurationMultiplier,
+      initialStageMs: hpoResult.bestHyperparams.initialStageMs,
+      config,
+      onProgress: arg.onProgress,
+    });
+
+    vector = stagedResult.vector;
+    history = stagedResult.history.map((h) => ({
+      iteration: h.iteration,
+      suppressionPercent: h.suppressionPercent,
     }));
 
     console.log(
-      `HPO complete. Best: ${hpoResult.bestValue.toFixed(2)}%`,
+      `HPO + StagedOpt complete. Best: ${hpoResult.bestValue.toFixed(2)}%`,
     );
-    console.log(`Best hyperparams:`, hpoResult.bestParams);
-  } else if (arg.useStagedOptimize) {
-    const result = stagedOptimize({
-      initialVector,
-      targetSignal,
-      sampleRate: SAMPLE_RATE,
-      maxIterations,
-      onProgress: arg.onProgress,
-      stepGrowthAdd: arg.stepGrowthAdd,
-      stepDecayFactor: arg.stepDecayFactor,
-      stageDurationMultiplier: arg.stageDurationMultiplier,
-    });
-    vector = result.vector;
-    history = result.history;
-  } else {
-    const result = optimize({
-      initialVector,
-      targetSignal,
-      sampleRate: SAMPLE_RATE,
-      maxIterations,
-      onProgress: arg.onProgress,
-      stepGrowthAdd: arg.stepGrowthAdd,
-      stepDecayFactor: arg.stepDecayFactor,
-    });
-    vector = result.vector;
-    history = result.history;
+    console.log(`Best hyperparams:`, hpoResult.bestHyperparams);
   }
 
   const bestSuppression =
@@ -205,3 +216,38 @@ export const match = (arg: ArgMatch): MatchResult => {
     },
   };
 };
+
+function buildCoordDescentConfig(
+  hyperparams: ResolvedHyperparams,
+): Partial<CoordinateDescentConfig> {
+  return {
+    stagnationExitThreshold: hyperparams.stagnationExitThreshold ?? 5,
+    plateauRestartThreshold: hyperparams.plateauRestartThreshold ?? 3,
+    stepGrowthThreshold: hyperparams.stepGrowthThreshold ?? 4,
+    stagnationStepDecayFactor:
+      hyperparams.stagnationDecayFactor ?? 0.8,
+    significantImprovementThreshold:
+      hyperparams.significantImprovementThreshold ?? 0.01,
+    earlyExitSuppression: hyperparams.earlyExitSuppression ?? 98,
+    maxRestartsBeforeRandomRestart:
+      hyperparams.maxRestartsBeforeRandomRestart ?? 5,
+    kickFallbackThreshold: hyperparams.kickFallbackThreshold ?? 0.8,
+    restartSchedule: [
+      {
+        startStep: hyperparams.explorationStartStep ?? 0.05,
+        minStep: hyperparams.explorationMinStep ?? 0.01,
+        label: 'EXPLORATION',
+      },
+      {
+        startStep: hyperparams.refinementStartStep ?? 0.02,
+        minStep: hyperparams.refinementMinStep ?? 0.005,
+        label: 'REFINEMENT',
+      },
+      {
+        startStep: hyperparams.precisionStartStep ?? 0.005,
+        minStep: hyperparams.precisionMinStep ?? 0.001,
+        label: 'PRECISION',
+      },
+    ],
+  };
+}

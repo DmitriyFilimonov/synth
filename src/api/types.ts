@@ -26,6 +26,7 @@ export interface GenerateRequest {
 export interface MatchRequestBody {
   numOscillators?: number;
   maxIterations?: number;
+  hpoTrials?: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
   stageDurationMultiplier?: number;
@@ -54,6 +55,7 @@ export interface MatchResult {
 export interface CreateMatchJobRequest {
   numOscillators?: number;
   maxIterations?: number;
+  hpoTrials?: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
   stageDurationMultiplier?: number;
@@ -63,6 +65,7 @@ export interface CreateMatchJobRequest {
 export interface MatchParams {
   numOscillators: number;
   maxIterations: number;
+  hpoTrials?: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
   stageDurationMultiplier?: number;

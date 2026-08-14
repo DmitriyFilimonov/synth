@@ -105,6 +105,7 @@ export const matchHandler = async (
       body.stepGrowthAdd,
       body.stepDecayFactor,
       body.stageDurationMultiplier,
+      body.hpoTrials,
     );
 
     res.json({
@@ -171,6 +172,10 @@ export const createMatchJobHandler = async (
       queryParams.maxIterations ?? String(MATCH_DEFAULT_ITERATIONS),
       10,
     );
+    const hpoTrialsInt = parseInt(
+      queryParams.hpoTrials ?? '',
+      10,
+    );
     const stepGrowthAddFloat = parseFloat(
       queryParams.stepGrowthAdd ?? '',
     );
@@ -181,6 +186,9 @@ export const createMatchJobHandler = async (
       queryParams.stageDurationMultiplier ?? '',
     );
 
+    const hpoTrials = isNaN(hpoTrialsInt)
+      ? undefined
+      : hpoTrialsInt;
     const stepGrowthAdd = isNaN(stepGrowthAddFloat)
       ? undefined
       : stepGrowthAddFloat;
@@ -202,6 +210,7 @@ export const createMatchJobHandler = async (
       stepGrowthAdd,
       stepDecayFactor,
       stageDurationMultiplier,
+      hpoTrials,
     );
 
     res.status(202).json({ id: jobId });
@@ -240,6 +249,7 @@ export const createMatchJobJsonHandler = async (
       body.stepGrowthAdd,
       body.stepDecayFactor,
       body.stageDurationMultiplier,
+      body.hpoTrials,
     );
 
     res.status(202).json({ id: jobId });

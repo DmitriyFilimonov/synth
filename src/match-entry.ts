@@ -4,10 +4,7 @@ import { match } from './match';
 import { simpleInitVector } from './simple-init-vector';
 import {
   MATCH_DEFAULT_OSCILLATORS,
-  MATCH_DEFAULT_ITERATIONS,
-  MATCH_DEFAULT_STEP_GROWTH_ADD,
-  MATCH_DEFAULT_STEP_DECAY_FACTOR,
-  MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
+  MATCH_DEFAULT_HPO_TRIALS,
 } from './match-defaults';
 
 const targetWavPath = './targets/techno_1.wav';
@@ -27,11 +24,7 @@ console.log('Initialization complete');
 match({
   targetWavPath,
   outputWavPath,
-  maxIterations: MATCH_DEFAULT_ITERATIONS,
   initialVector,
   onProgress: () => {},
-  stepGrowthAdd: MATCH_DEFAULT_STEP_GROWTH_ADD,
-  stepDecayFactor: MATCH_DEFAULT_STEP_DECAY_FACTOR,
-  useStagedOptimize: true,
-  stageDurationMultiplier: MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
+  hpoTrials: MATCH_DEFAULT_HPO_TRIALS,
 });

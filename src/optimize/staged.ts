@@ -3,6 +3,7 @@ import type {
   ProgressEntry,
   ProgressCallback,
   ArgOptimize,
+  CoordinateDescentConfig,
 } from './types';
 import { OSC_PARAMS } from './consts';
 
@@ -172,7 +173,7 @@ export const extrapolateVectorBetweenStages = (
 };
 
 export const stagedOptimize = (
-  arg: ArgStagedOptimize,
+  arg: ArgStagedOptimize & { config?: Partial<CoordinateDescentConfig> },
 ): StagedOptimizeResult => {
   const {
     targetSignal,
@@ -185,6 +186,7 @@ export const stagedOptimize = (
     maxStageMs = 500,
     stepGrowthAdd,
     stepDecayFactor,
+    config,
   } = arg;
 
   const totalSamples = targetSignal.length;
@@ -232,6 +234,7 @@ export const stagedOptimize = (
       stageOnProgress,
       stepGrowthAdd,
       stepDecayFactor,
+      config,
     );
 
     currentVector = vector;

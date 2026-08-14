@@ -7,7 +7,7 @@ import {
 import { Study, type OptimizationDirection } from './study';
 import { Trial } from './trial';
 import { TPESampler, type TPEConfig } from './sampler-tpe';
-import { resolveHyperparams } from './param-space';
+import { resolveHyperparams, type ResolvedHyperparams } from './param-space';
 
 export interface HPOProgressEntry extends ProgressEntry {
   trialIndex: number;
@@ -19,6 +19,7 @@ export interface HPOResult {
   bestParams: Record<string, number | string | boolean>;
   bestValue: number;
   bestVector: number[];
+  bestHyperparams: ResolvedHyperparams;
   history: {
     trial: number;
     value: number | null;
@@ -76,6 +77,12 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
         ? (history[history.length - 1]?.suppressionPercent ?? 0)
         : 0;
 
+    const trialIdx = trial.getNumber();
+    onProgress?.({
+      iteration: trialIdx + 1,
+      suppressionPercent: suppression,
+    });
+
     return suppression;
   });
 
@@ -116,6 +123,7 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
     bestParams: result.bestParams,
     bestValue: result.bestValue ?? 0,
     bestVector,
+    bestHyperparams,
     history,
   };
 };

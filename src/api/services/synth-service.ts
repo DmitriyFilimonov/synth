@@ -7,11 +7,6 @@ import {
 import { matchWithWorker } from '../../match-worker';
 import { simpleInitVector } from '../../simple-init-vector';
 import { readWav } from '../../read-wav';
-import {
-  MATCH_DEFAULT_STEP_GROWTH_ADD,
-  MATCH_DEFAULT_STEP_DECAY_FACTOR,
-  MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
-} from '../../match-defaults';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -90,6 +85,7 @@ export async function matchWav(
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
   stageDurationMultiplier?: number,
+  hpoTrials?: number,
 ): Promise<MatchedFile> {
   const tempInput = join(tmpdir(), `${randomUUID()}_input.wav`);
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
@@ -112,18 +108,24 @@ export async function matchWav(
       numOscillators,
     );
 
+    const hasUserOverride =
+      stepGrowthAdd !== undefined &&
+      stepDecayFactor !== undefined &&
+      stageDurationMultiplier !== undefined;
+
     const result = await matchWithWorker({
       targetWavPath: tempInput,
       outputWavPath: tempOutput,
       initialVector,
       sampleRate: 44100,
       maxIterations,
-      stepGrowthAdd: stepGrowthAdd ?? MATCH_DEFAULT_STEP_GROWTH_ADD,
-      stepDecayFactor:
-        stepDecayFactor ?? MATCH_DEFAULT_STEP_DECAY_FACTOR,
-      stageDurationMultiplier:
-        stageDurationMultiplier ??
-        MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
+      ...(hasUserOverride
+        ? {
+            stepGrowthAdd,
+            stepDecayFactor,
+            stageDurationMultiplier,
+          }
+        : { hpoTrials }),
       onProgress: (entry) => {
         history.push(entry);
       },
@@ -157,6 +159,7 @@ export async function matchWavWithJob(
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
   stageDurationMultiplier?: number,
+  hpoTrials?: number,
 ): Promise<string> {
   const jobId = randomUUID();
   const inputFileName = `${jobId}_input.wav`;
@@ -169,6 +172,7 @@ export async function matchWavWithJob(
       stepGrowthAdd,
       stepDecayFactor,
       stageDurationMultiplier,
+      hpoTrials,
     },
     inputFileName,
   );
@@ -185,6 +189,7 @@ export async function matchWavWithJob(
       stepGrowthAdd,
       stepDecayFactor,
       stageDurationMultiplier,
+      hpoTrials,
     );
   });
 
@@ -199,6 +204,7 @@ async function runMatchJob(
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
   stageDurationMultiplier?: number,
+  hpoTrials?: number,
 ): Promise<void> {
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
   const history: {
@@ -221,18 +227,24 @@ async function runMatchJob(
       numOscillators,
     );
 
+    const hasUserOverride =
+      stepGrowthAdd !== undefined &&
+      stepDecayFactor !== undefined &&
+      stageDurationMultiplier !== undefined;
+
     const result = await matchWithWorker({
       targetWavPath: inputPath,
       outputWavPath: tempOutput,
       initialVector,
       sampleRate: 44100,
       maxIterations,
-      stepGrowthAdd: stepGrowthAdd ?? MATCH_DEFAULT_STEP_GROWTH_ADD,
-      stepDecayFactor:
-        stepDecayFactor ?? MATCH_DEFAULT_STEP_DECAY_FACTOR,
-      stageDurationMultiplier:
-        stageDurationMultiplier ??
-        MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
+      ...(hasUserOverride
+        ? {
+            stepGrowthAdd,
+            stepDecayFactor,
+            stageDurationMultiplier,
+          }
+        : { hpoTrials }),
       onProgress: (entry) => {
         history.push(entry);
         const now = Date.now();

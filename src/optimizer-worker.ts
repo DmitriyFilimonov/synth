@@ -3,12 +3,9 @@ import { stagedOptimize, runHPO } from './optimize';
 import { generateOutput } from './match';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 import { readWav } from './read-wav';
-import {
-  MATCH_DEFAULT_STEP_GROWTH_ADD,
-  MATCH_DEFAULT_STEP_DECAY_FACTOR,
-  MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
-} from './match-defaults';
-import type { TPEConfig } from './optimize/hpo';
+import { MATCH_DEFAULT_HPO_TRIALS } from './match-defaults';
+import type { TPEConfig, ResolvedHyperparams } from './optimize/hpo';
+import type { CoordinateDescentConfig } from './optimize/types';
 
 if (!parentPort) {
   throw new Error('Must run as worker thread');
@@ -41,7 +38,6 @@ interface WorkerMessage {
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
   stageDurationMultiplier?: number;
-  useHPO?: boolean;
   hpoTrials?: number;
   hpoTpeConfig?: Partial<TPEConfig>;
 }
@@ -51,17 +47,22 @@ parentPort.on('message', (msg: WorkerMessage) => {
     const targetWav = readWav(msg.targetWavPath);
     const targetSignal = [...targetWav.samples];
 
-    let vector: number[];
-    let history: typeof msg extends { useHPO: true }
-      ? {
-          trial: number;
-          value: number | null;
-          params: Record<string, number | string | boolean>;
-        }[]
-      : Array<{ iteration: number; suppressionPercent: number }>;
+    const hasUserOverride =
+      msg.stepGrowthAdd !== undefined &&
+      msg.stepDecayFactor !== undefined &&
+      msg.stageDurationMultiplier !== undefined;
 
-    if (msg.useHPO) {
-      const nTrials = msg.hpoTrials ?? 10;
+    let vector: number[];
+    let history: Array<{
+      iteration: number;
+      suppressionPercent: number;
+      stageIndex?: number;
+      totalStages?: number;
+      stageDurationMs?: number;
+    }>;
+
+    if (!hasUserOverride) {
+      const nTrials = msg.hpoTrials ?? MATCH_DEFAULT_HPO_TRIALS;
       const numOscillators = msg.initialVector.length / 10;
 
       console.log(
@@ -80,28 +81,44 @@ parentPort.on('message', (msg: WorkerMessage) => {
         },
       });
 
-      vector = hpoResult.bestVector;
-      history = hpoResult.history.map((h, i) => ({
-        iteration: i + 1,
-        suppressionPercent: h.value ?? 0,
-      })) as typeof history;
+      console.log(`Running staged optimization with best hyperparams`);
+
+      const config = buildCoordDescentConfig(
+        hpoResult.bestHyperparams,
+      );
+
+      const stagedResult = stagedOptimize({
+        initialVector: hpoResult.bestVector,
+        targetSignal,
+        sampleRate: msg.sampleRate,
+        maxIterations: hpoResult.bestHyperparams.iterations,
+        stepGrowthAdd: hpoResult.bestHyperparams.stepGrowthAdd,
+        stepDecayFactor: hpoResult.bestHyperparams.stepDecayFactor,
+        stageDurationMultiplier:
+          hpoResult.bestHyperparams.stageDurationMultiplier,
+        initialStageMs: hpoResult.bestHyperparams.initialStageMs,
+        config,
+        onProgress: (entry) => {
+          parentPort?.postMessage({ type: 'progress', data: entry });
+        },
+      });
+
+      vector = stagedResult.vector;
+      history = stagedResult.history;
 
       console.log(
-        `HPO complete. Best: ${hpoResult.bestValue.toFixed(2)}%`,
+        `HPO + StagedOpt complete. Best: ${hpoResult.bestValue.toFixed(2)}%`,
       );
+      console.log(`Best hyperparams:`, hpoResult.bestHyperparams);
     } else {
       const result = stagedOptimize({
         initialVector: msg.initialVector,
         targetSignal,
         sampleRate: msg.sampleRate,
         maxIterations: msg.maxIterations,
-        stepGrowthAdd:
-          msg.stepGrowthAdd ?? MATCH_DEFAULT_STEP_GROWTH_ADD,
-        stepDecayFactor:
-          msg.stepDecayFactor ?? MATCH_DEFAULT_STEP_DECAY_FACTOR,
-        stageDurationMultiplier:
-          msg.stageDurationMultiplier ??
-          MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
+        stepGrowthAdd: msg.stepGrowthAdd,
+        stepDecayFactor: msg.stepDecayFactor,
+        stageDurationMultiplier: msg.stageDurationMultiplier,
         onProgress: (entry) => {
           parentPort?.postMessage({ type: 'progress', data: entry });
         },
@@ -117,19 +134,7 @@ parentPort.on('message', (msg: WorkerMessage) => {
       numSamples: targetWav.samples.length,
       sampleRate: msg.sampleRate,
       outputWavPath: msg.outputWavPath,
-      history: history.map((h) => ({
-        iteration:
-          'suppressionPercent' in h
-            ? (h as { iteration: number; suppressionPercent: number })
-                .iteration
-            : (h as { trial: number; value: number | null }).trial,
-        suppressionPercent:
-          'suppressionPercent' in h
-            ? (h as { iteration: number; suppressionPercent: number })
-                .suppressionPercent
-            : ((h as { trial: number; value: number | null }).value ??
-              0),
-      })),
+      history,
     });
 
     const optimizedConfig = mapVectorToSynthConfig(vector);
@@ -159,3 +164,39 @@ parentPort.on('message', (msg: WorkerMessage) => {
     });
   }
 });
+
+function buildCoordDescentConfig(
+  hyperparams: ResolvedHyperparams,
+): CoordinateDescentConfig {
+  return {
+    stagnationExitThreshold: hyperparams.stagnationExitThreshold ?? 5,
+    plateauRestartThreshold: hyperparams.plateauRestartThreshold ?? 3,
+    stepGrowthThreshold: hyperparams.stepGrowthThreshold ?? 4,
+    stagnationStepDecayFactor:
+      hyperparams.stagnationDecayFactor ?? 0.8,
+    significantImprovementThreshold:
+      hyperparams.significantImprovementThreshold ?? 0.01,
+    earlyExitSuppression:
+      hyperparams.earlyExitSuppression ?? 98,
+    maxRestartsBeforeRandomRestart:
+      hyperparams.maxRestartsBeforeRandomRestart ?? 5,
+    kickFallbackThreshold: hyperparams.kickFallbackThreshold ?? 0.8,
+    restartSchedule: [
+      {
+        startStep: hyperparams.explorationStartStep ?? 0.05,
+        minStep: hyperparams.explorationMinStep ?? 0.01,
+        label: 'EXPLORATION',
+      },
+      {
+        startStep: hyperparams.refinementStartStep ?? 0.02,
+        minStep: hyperparams.refinementMinStep ?? 0.005,
+        label: 'REFINEMENT',
+      },
+      {
+        startStep: hyperparams.precisionStartStep ?? 0.005,
+        minStep: hyperparams.precisionMinStep ?? 0.001,
+        label: 'PRECISION',
+      },
+    ],
+  };
+}
