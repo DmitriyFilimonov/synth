@@ -94,7 +94,10 @@ function createFallbackRecord(id: string): JobRecord {
   };
 }
 
-async function safeWriteJson(filePath: string, data: string): Promise<void> {
+async function safeWriteJson(
+  filePath: string,
+  data: string,
+): Promise<void> {
   const tmpPath = `${filePath}.tmp`;
   await writeFile(tmpPath, data);
   await rename(tmpPath, filePath);
@@ -183,10 +186,7 @@ export async function updateJobStatus(
       JSON.stringify(record, null, 2),
     );
   } catch (writeError) {
-    console.error(
-      `Failed to write job file for ${id}:`,
-      writeError,
-    );
+    console.error(`Failed to write job file for ${id}:`, writeError);
   }
   return record;
 }
