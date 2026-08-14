@@ -5,8 +5,7 @@ import type {
   GenerateRequest,
   OscillatorConfig,
 } from '../model/types';
-import { AudioPlayer } from './AudioPlayer';
-import { Button, Input, Select } from '@/shared/ui';
+import { AudioPlayer, Button, Input, Select } from '@/shared/ui';
 import styles from './GeneratorForm.module.css';
 
 const DEFAULT_OSCILLATOR: OscillatorConfig = {
@@ -106,16 +105,17 @@ export function GeneratorForm() {
 
   return (
     <form className={styles.form} onSubmit={handleSubmit}>
-      <div className={styles.row}>
+      <div className={styles.toolbar}>
         <Button
           type="button"
           variant="secondary"
           onClick={loadPresets}
         >
-          Load presets
+          Load Presets
         </Button>
       </div>
 
+      <div className={styles.sectionTitle}>Mode</div>
       <div className={styles.modeToggle}>
         <label>
           <input
@@ -123,7 +123,7 @@ export function GeneratorForm() {
             checked={mode === 'preset'}
             onChange={() => setMode('preset')}
           />
-          Preset
+          <span>Preset</span>
         </label>
         <label>
           <input
@@ -131,7 +131,7 @@ export function GeneratorForm() {
             checked={mode === 'oscillators'}
             onChange={() => setMode('oscillators')}
           />
-          Oscillators
+          <span>Oscillators</span>
         </label>
       </div>
 
@@ -152,108 +152,127 @@ export function GeneratorForm() {
       )}
 
       {mode === 'oscillators' && (
-        <div className={styles.oscillators}>
-          {oscillators.map((osc, i) => (
-            <div key={i} className={styles.oscillatorCard}>
-              <div className={styles.oscHeader}>
-                <span>Oscillator {i + 1}</span>
-                {oscillators.length > 1 && (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => removeOscillator(i)}
-                  >
-                    Remove
-                  </Button>
-                )}
-              </div>
-              <div className={styles.oscGrid}>
-                <Input
-                  label="freqBase"
-                  type="number"
-                  step="1"
-                  value={osc.freqBase}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    handleOscillatorChange(
-                      i,
-                      'freqBase',
-                      e.target.value,
-                    )
-                  }
-                />
-                <Input
-                  label="freqStart"
-                  type="number"
-                  step="1"
-                  value={osc.freqStart}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    handleOscillatorChange(
-                      i,
-                      'freqStart',
-                      e.target.value,
-                    )
-                  }
-                />
-                <Input
-                  label="duration"
-                  type="number"
-                  step="0.1"
-                  value={osc.duration}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    handleOscillatorChange(
-                      i,
-                      'duration',
-                      e.target.value,
-                    )
-                  }
-                />
-                <Input
-                  label="slope"
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  max="1"
-                  value={osc.slope}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    handleOscillatorChange(i, 'slope', e.target.value)
-                  }
-                />
-                <Input
-                  label="phase"
-                  type="number"
-                  step="0.1"
-                  value={osc.phase}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    handleOscillatorChange(i, 'phase', e.target.value)
-                  }
-                />
-                <label className={styles.checkbox}>
-                  <input
-                    type="checkbox"
-                    checked={osc.on}
-                    onChange={(e) =>
+        <>
+          <div className={styles.sectionTitle}>
+            Oscillators ({oscillators.length})
+          </div>
+          <div className={styles.oscillators}>
+            {oscillators.map((osc, i) => (
+              <div key={i} className={styles.oscillatorCard}>
+                <div className={styles.oscHeader}>
+                  <span>
+                    <span className={styles.oscNumber}>
+                      OSC {String(i + 1).padStart(2, '0')}
+                    </span>
+                    {osc.on ? 'Active' : 'Muted'}
+                  </span>
+                  {oscillators.length > 1 && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => removeOscillator(i)}
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </div>
+                <div className={styles.oscGrid}>
+                  <Input
+                    label="freqBase"
+                    type="number"
+                    step="1"
+                    value={osc.freqBase}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
                       handleOscillatorChange(
                         i,
-                        'on',
-                        e.target.checked,
+                        'freqBase',
+                        e.target.value,
                       )
                     }
                   />
-                  On
-                </label>
+                  <Input
+                    label="freqStart"
+                    type="number"
+                    step="1"
+                    value={osc.freqStart}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      handleOscillatorChange(
+                        i,
+                        'freqStart',
+                        e.target.value,
+                      )
+                    }
+                  />
+                  <Input
+                    label="duration"
+                    type="number"
+                    step="0.1"
+                    value={osc.duration}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      handleOscillatorChange(
+                        i,
+                        'duration',
+                        e.target.value,
+                      )
+                    }
+                  />
+                  <Input
+                    label="slope"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="1"
+                    value={osc.slope}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      handleOscillatorChange(
+                        i,
+                        'slope',
+                        e.target.value,
+                      )
+                    }
+                  />
+                  <Input
+                    label="phase"
+                    type="number"
+                    step="0.1"
+                    value={osc.phase}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      handleOscillatorChange(
+                        i,
+                        'phase',
+                        e.target.value,
+                      )
+                    }
+                  />
+                  <label className={styles.checkbox}>
+                    <input
+                      type="checkbox"
+                      checked={osc.on}
+                      onChange={(e) =>
+                        handleOscillatorChange(
+                          i,
+                          'on',
+                          e.target.checked,
+                        )
+                      }
+                    />
+                    On
+                  </label>
+                </div>
               </div>
-            </div>
-          ))}
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={addOscillator}
-          >
-            + Add oscillator
-          </Button>
-        </div>
+            ))}
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={addOscillator}
+            >
+              + Add oscillator
+            </Button>
+          </div>
+        </>
       )}
 
+      <div className={styles.sectionTitle}>Output</div>
       <div className={styles.row}>
         <Input
           label="Duration (s)"

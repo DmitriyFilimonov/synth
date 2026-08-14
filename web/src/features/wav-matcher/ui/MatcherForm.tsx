@@ -11,9 +11,13 @@ import type {
   JobStatus,
   JobListEntry,
 } from '../model/types';
-import { Button, Input } from '@/shared/ui';
+import { AudioPlayer, Button, Input } from '@/shared/ui';
 import styles from './MatcherForm.module.css';
-import { AudioPlayer } from '@/features/synth-generator/ui/AudioPlayer';
+
+const CHART_COLOR_LINE = '#3b82f6';
+const CHART_COLOR_GRID = '#2a2a2a';
+const CHART_COLOR_AXIS = '#555555';
+const CHART_COLOR_STAGE = '#f59e0b';
 
 type ViewMode = 'upload' | 'list' | 'detail';
 const POLLING_INTERVAL = 1000;
@@ -85,7 +89,7 @@ function OptimizationChart({
             y1={y(v)}
             x2={width - padding.right}
             y2={y(v)}
-            stroke="#e5e7eb"
+            stroke={CHART_COLOR_GRID}
             strokeDasharray={v === 0 ? undefined : '2 4'}
           />
           <text
@@ -93,7 +97,7 @@ function OptimizationChart({
             y={y(v) + 3}
             textAnchor="end"
             fontSize="10"
-            fill="#9ca3af"
+            fill={CHART_COLOR_AXIS}
           >
             {v.toFixed(1)}%
           </text>
@@ -108,19 +112,24 @@ function OptimizationChart({
             y1={padding.top}
             x2={x(iter)}
             y2={padding.top + chartH}
-            stroke="#f59e0b"
+            stroke={CHART_COLOR_STAGE}
             strokeDasharray="3 3"
             strokeWidth="1"
           />
         );
       })}
-      <path d={pathD} fill="none" stroke="#3b82f6" strokeWidth="2" />
+      <path
+        d={pathD}
+        fill="none"
+        stroke={CHART_COLOR_LINE}
+        strokeWidth="2"
+      />
       <text
         x={width / 2}
         y={height - 4}
         textAnchor="middle"
         fontSize="10"
-        fill="#9ca3af"
+        fill={CHART_COLOR_AXIS}
       >
         Iteration ({firstIter}–{lastIter})
       </text>
@@ -247,18 +256,22 @@ function JobDetail({
       <div className={styles.detailHeader}>
         <div>
           <h3 className={styles.detailTitle}>
-            Job: {jobId.slice(0, 12)}...
+            JOB: {jobId.slice(0, 12).toUpperCase()}
           </h3>
           <div className={styles.detailMeta}>
-            Osc: {job?.params.numOscillators ?? '–'}, Iters:{' '}
-            {job?.params.maxIterations ?? '–'} · Created:{' '}
+            OSC: {job?.params.numOscillators ?? '–'} · IT:{' '}
+            {job?.params.maxIterations ?? '–'} ·{' '}
             {job?.createdAt
               ? new Date(job.createdAt).toLocaleString()
               : '–'}
           </div>
         </div>
         <div
-          style={{ display: 'flex', gap: 8, alignItems: 'center' }}
+          style={{
+            display: 'flex',
+            gap: 'var(--space-2)',
+            alignItems: 'center',
+          }}
         >
           {job && (
             <span
@@ -274,17 +287,17 @@ function JobDetail({
       </div>
 
       <div className={styles.suppressionValue}>
-        Suppression: {currentSup.toFixed(2)}%
+        {currentSup.toFixed(2)}%
       </div>
 
       {stageInfo &&
         (job?.status === 'running' || job?.status === 'queued') && (
           <div className={styles.stageInfo}>
             <span className={styles.stageLabel}>
-              Stage {stageInfo.current}/{stageInfo.total}
+              STAGE {stageInfo.current}/{stageInfo.total}
             </span>
             <span className={styles.stageDuration}>
-              {stageInfo.durationMs}ms fragment
+              {stageInfo.durationMs}ms
             </span>
             <div className={styles.stageProgressBar}>
               <div
@@ -362,13 +375,15 @@ function JobListCard({
   return (
     <div className={styles.jobCard} onClick={() => onOpen(job.id)}>
       <div className={styles.jobHeader}>
-        <span className={styles.jobId}>{job.id.slice(0, 8)}</span>
+        <span className={styles.jobId}>
+          {job.id.slice(0, 8).toUpperCase()}
+        </span>
         <span className={`${styles.jobStatus} ${styles[job.status]}`}>
           {getStatusLabel(job.status)}
         </span>
       </div>
       <div className={styles.jobMeta}>
-        Osc: {job.params.numOscillators}, Iters:{' '}
+        OSC: {job.params.numOscillators} · IT:{' '}
         {job.params.maxIterations}
       </div>
       <div className={styles.jobSuppression}>
@@ -536,8 +551,8 @@ export function MatcherForm() {
   };
 
   return (
-    <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+    <div className={styles.container}>
+      <div className={styles.toolbar}>
         <Button
           variant={viewMode === 'upload' ? 'primary' : 'secondary'}
           onClick={handleNewMatch}
@@ -570,6 +585,7 @@ export function MatcherForm() {
         </div>
       ) : (
         <form className={styles.form} onSubmit={handleSubmit}>
+          <div className={styles.sectionTitle}>Input</div>
           <div className={styles.uploadSection}>
             <label className={styles.fileLabel}>
               <input
@@ -590,6 +606,7 @@ export function MatcherForm() {
             )}
           </div>
 
+          <div className={styles.sectionTitle}>Parameters</div>
           <div className={styles.row}>
             <Input
               label="Oscillators"

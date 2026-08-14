@@ -1,0 +1,31 @@
+.wrapper {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-surface);
+}
+
+.audio {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  filter: invert(1) hue-rotate(180deg);
+  border-radius: var(--radius-sm);
+}
+
+.download {
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--color-accent);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color var(--transition-base);
+}
+
+.download:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}

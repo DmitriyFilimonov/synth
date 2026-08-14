@@ -185,9 +185,9 @@ web/src/
 
 | Слой | Назначение |
 |---|---|
-| `shared/ui/` | Примитивы: `Button`, `Input`, `Select` |
+| `shared/ui/` | Примитивы: `Button`, `Input`, `Select`, `AudioPlayer` |
 | `shared/api/` | `fetchApi<T>` (JSON), `fetchBlob` (binary) |
-| `features/synth-generator/` | Форма генерации: выбор пресета, настройка осцилляторов, плеер |
+| `features/synth-generator/` | Форма генерации: выбор пресета, настройка осцилляторов |
 | `features/wav-matcher/` | Форма подбора: загрузка WAV, создание job, отслеживание прогресса, скачивание |
 | `app/` | Точка входа, корневой компонент |
 
@@ -195,6 +195,24 @@ web/src/
 1. `features` может импортировать из `shared`, но не из других `features`
 2. `shared` не зависит от `features` и `app`
 3. UI-компоненты используют CSS Modules (`*.module.css`)
+
+### Дизайн-система веб-интерфейса
+
+UI построен на основе тёмной инженерной темы (Ableton-стиль):
+- Корневые цвета: `#121212`, поверхности `#1e1e1e` / `#2a2a2a`
+- Акцент: `#e67e22` (оранжевый)
+- Шрифты: `Inter` (UI), `JetBrains Mono` (значения/данные)
+- Компактная, плотная компоновка с радиусами `2px`
+- Все токены через CSS custom properties в `web/src/global.css`
+- При изменениях UI — используй токены из `global.css`, не хардкодь цвета
+
+| Файл | Назначение |
+|---|---|
+| `web/src/global.css` | Токены, глобальный ресет, тёмная тема (CSS variables) |
+| `web/src/app/App.tsx` / `.module.css` | Корневой лейаут, тёмный хедер, секции |
+| `web/src/shared/ui/` | Shared-компоненты: `Button`, `Input`, `Select`, `AudioPlayer` |
+| `web/src/features/synth-generator/ui/GeneratorForm.tsx` | Форма генерации (тёмные карточки, OSC-карточки) |
+| `web/src/features/wav-matcher/ui/MatcherForm.tsx` | Форма подбора (тёмные job-карточки, прогресс-бары, графики) |
 
 ### Деплой (Timeweb Cloud)
 

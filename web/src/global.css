@@ -1,0 +1,195 @@
+/* ============================================================
+ * Design Tokens — Ableton-inspired dark engineering theme
+ * ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* — Colors — */
+:root {
+  /* Backgrounds */
+  --color-bg-root: #121212;
+  --color-bg-surface: #1e1e1e;
+  --color-bg-surface-raised: #2a2a2a;
+  --color-bg-surface-overlay: #333333;
+  --color-bg-input: #1a1a1a;
+  --color-bg-hover: #383838;
+  --color-bg-active: #444444;
+
+  /* Borders */
+  --color-border-base: #333333;
+  --color-border-subtle: #2a2a2a;
+  --color-border-strong: #555555;
+  --color-border-focus: #3b82f6;
+
+  /* Text */
+  --color-text-primary: #e5e5e5;
+  --color-text-secondary: #a3a3a3;
+  --color-text-muted: #737373;
+  --color-text-inverse: #121212;
+
+  /* Accents */
+  --color-accent: #e67e22; /* Ableton orange */
+  --color-accent-hover: #d35400;
+  --color-primary: #3b82f6; /* Blue-500 for data/actions */
+  --color-primary-hover: #2563eb;
+
+  /* Semantic */
+  --color-success: #22c55e;
+  --color-success-bg: rgba(34, 197, 94, 0.12);
+  --color-success-border: rgba(34, 197, 94, 0.3);
+  --color-warning: #f59e0b;
+  --color-warning-bg: rgba(245, 158, 11, 0.12);
+  --color-warning-border: rgba(245, 158, 11, 0.3);
+  --color-danger: #ef4444;
+  --color-danger-bg: rgba(239, 68, 68, 0.12);
+  --color-danger-border: rgba(239, 68, 68, 0.3);
+  --color-info: #3b82f6;
+  --color-info-bg: rgba(59, 130, 246, 0.12);
+  --color-info-border: rgba(59, 130, 246, 0.3);
+
+  /* Chart */
+  --color-chart-line: #3b82f6;
+  --color-chart-fill: rgba(59, 130, 246, 0.08);
+  --color-chart-grid: #2a2a2a;
+  --color-chart-axis: #555555;
+
+  /* Waveform / meters */
+  --color-waveform: #22c55e;
+  --color-meter-level: #22c55e;
+  --color-meter-warn: #f59e0b;
+  --color-meter-clip: #ef4444;
+}
+
+/* — Typography — */
+:root {
+  --font-sans:
+    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    sans-serif;
+  --font-mono:
+    'JetBrains Mono', ui-monospace, SFMono-Regular, 'Menlo', monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  --text-3xl: 28px;
+
+  --font-normal: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+}
+
+/* — Spacing — */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+}
+
+/* — Radius — */
+:root {
+  --radius-sm: 2px; /* Ableton: near-squared */
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-full: 9999px;
+}
+
+/* — Shadows — */
+:root {
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* — Transitions — */
+:root {
+  --transition-fast: 100ms ease;
+  --transition-base: 150ms ease;
+  --transition-slow: 250ms ease;
+}
+
+/* — Z-index — */
+:root {
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-overlay: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+}
+
+/* — Layout — */
+:root {
+  --max-width-form: 640px;
+  --max-width-wide: 800px;
+}
+
+/* ============================================================
+ * Global Reset & Base
+ * ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: var(--font-normal);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  background-color: var(--color-bg-root);
+}
+
+input,
+button,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* Scrollbar (Webkit) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-bg-hover);
+}
+
+/* Selection */
+::selection {
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+}

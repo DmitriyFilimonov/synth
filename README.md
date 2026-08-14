@@ -160,6 +160,11 @@ cd web && npm run build  # → web/dist/
 - Прослушивание результата в браузере
 - Скачивание сгенерированного `.wav`
 
+Дизайн-система: тёмная инженерная тема (Ableton-стиль)
+с CSS custom properties (`web/src/global.css`). Корневые цвета
+`#121212` / `#1e1e1e`, акцент `#e67e22`, шрифты Inter + JetBrains Mono,
+компактная плотная компоновка.
+
 ### 5. Форматирование и линтинг
 
 ```bash
@@ -228,10 +233,12 @@ npm run lint:fix       # ESLint (автофикс)
 | `src/vector-to-synth-config.ts` | Денормализация вектора → конфиг (50 осцилляторов) |
 | `src/consts.ts` | Константы: `SAMPLE_RATE`, `VOLUME_MIN`, `VOLUME_PRUNE_THRESHOLD` |
 | `web/` | Веб-интерфейс (React + Vite, FSD) |
-| `web/src/app/` | Инициализация приложения |
+| `web/src/global.css` | Дизайн-система: токены, тёмная тема, шрифты (CSS custom properties) |
+| `web/src/app/` | Инициализация приложения, корневой лейаут |
 | `web/src/features/synth-generator/` | Фича генерации WAV |
 | `web/src/features/wav-matcher/` | Фича подбора параметров к WAV |
- | `web/src/shared/` | Переиспользуемые компоненты и API-клиент |
+| `web/src/shared/ui/` | Переиспользуемые UI-компоненты: `Button`, `Input`, `Select`, `AudioPlayer` |
+| `web/src/shared/api/` | Базовый HTTP-клиент (`fetchApi`, `fetchBlob`) |
 
 **Соглашения**
 
