@@ -298,7 +298,8 @@ export const coordinateDescent = (
       );
       genome = result.genome;
       const scoreImproved =
-        result.score > currentBest + SIGNIFICANT_IMPROVEMENT_THRESHOLD;
+        result.score >
+        currentBest + SIGNIFICANT_IMPROVEMENT_THRESHOLD;
       currentBest = result.score;
 
       if (currentBest > bestScore) {

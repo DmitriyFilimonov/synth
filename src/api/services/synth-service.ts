@@ -208,6 +208,8 @@ async function runMatchJob(
     totalStages?: number;
     stageDurationMs?: number;
   }[] = [];
+  let lastUpdateMs = 0;
+  const UPDATE_THROTTLE_MS = 1000;
 
   try {
     await updateJobStatus(jobId, 'running');
@@ -233,10 +235,14 @@ async function runMatchJob(
         MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
       onProgress: (entry) => {
         history.push(entry);
-        void updateJobStatus(jobId, 'running', {
-          progress: [...history],
-          suppressionPercent: entry.suppressionPercent,
-        });
+        const now = Date.now();
+        if (now - lastUpdateMs >= UPDATE_THROTTLE_MS) {
+          lastUpdateMs = now;
+          void updateJobStatus(jobId, 'running', {
+            progress: [...history],
+            suppressionPercent: entry.suppressionPercent,
+          });
+        }
       },
     });
 

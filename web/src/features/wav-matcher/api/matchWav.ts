@@ -46,7 +46,10 @@ export async function createMatchJob(
 }
 
 export async function getJobStatus(jobId: string): Promise<JobEntry> {
-  const response = await fetch(`/api/match/jobs/${jobId}`);
+  const response = await fetch(
+    `/api/match/jobs/${jobId}?_=${Date.now()}`,
+    { cache: 'no-store' },
+  );
   if (!response.ok) {
     throw new Error('Failed to fetch job status');
   }
@@ -54,7 +57,9 @@ export async function getJobStatus(jobId: string): Promise<JobEntry> {
 }
 
 export async function listJobs(): Promise<JobListEntry[]> {
-  const response = await fetch('/api/match/jobs');
+  const response = await fetch(`/api/match/jobs?_=${Date.now()}`, {
+    cache: 'no-store',
+  });
   if (!response.ok) {
     throw new Error('Failed to fetch jobs list');
   }

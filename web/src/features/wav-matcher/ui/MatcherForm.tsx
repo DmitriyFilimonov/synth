@@ -16,7 +16,7 @@ import styles from './MatcherForm.module.css';
 import { AudioPlayer } from '@/features/synth-generator/ui/AudioPlayer';
 
 type ViewMode = 'upload' | 'list' | 'detail';
-const POLLING_INTERVAL = 5000;
+const POLLING_INTERVAL = 1000;
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
