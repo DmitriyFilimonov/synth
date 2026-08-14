@@ -5,6 +5,7 @@ import {
   mkdir,
   readdir,
   unlink,
+  rename,
 } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import type { ArgCreateSynth } from '../../synth';
@@ -74,6 +75,31 @@ export function getInputFilePath(id: string): string {
   return inputFilePath(id);
 }
 
+function createFallbackRecord(id: string): JobRecord {
+  const now = new Date().toISOString();
+  return {
+    id,
+    status: 'running' as JobStatus,
+    progress: [],
+    params: { numOscillators: 0, maxIterations: 0 },
+    inputFileName: '',
+    resultFileName: `${id}_result.wav`,
+    errorMessage: null,
+    createdAt: now,
+    updatedAt: now,
+    suppressionPercent: 0,
+    targetInfo: null,
+    bestVector: null,
+    synthConfig: null,
+  };
+}
+
+async function safeWriteJson(filePath: string, data: string): Promise<void> {
+  const tmpPath = `${filePath}.tmp`;
+  await writeFile(tmpPath, data);
+  await rename(tmpPath, filePath);
+}
+
 export async function createJob(
   id: string,
   params: {
@@ -101,7 +127,10 @@ export async function createJob(
     bestVector: null,
     synthConfig: null,
   };
-  await writeFile(jobFilePath(id), JSON.stringify(record, null, 2));
+  await safeWriteJson(
+    jobFilePath(id),
+    JSON.stringify(record, null, 2),
+  );
   return record;
 }
 
@@ -120,7 +149,12 @@ export async function updateJobStatus(
     >
   >,
 ): Promise<JobRecord> {
-  const record = await getJob(id);
+  let record: JobRecord;
+  try {
+    record = await getJob(id);
+  } catch {
+    record = createFallbackRecord(id);
+  }
   record.status = status;
   record.updatedAt = new Date().toISOString();
   if (partial) {
@@ -143,13 +177,27 @@ export async function updateJobStatus(
       record.synthConfig = partial.synthConfig;
     }
   }
-  await writeFile(jobFilePath(id), JSON.stringify(record, null, 2));
+  try {
+    await safeWriteJson(
+      jobFilePath(id),
+      JSON.stringify(record, null, 2),
+    );
+  } catch (writeError) {
+    console.error(
+      `Failed to write job file for ${id}:`,
+      writeError,
+    );
+  }
   return record;
 }
 
 export async function getJob(id: string): Promise<JobRecord> {
   const data = await readFile(jobFilePath(id), 'utf-8');
-  return JSON.parse(data) as JobRecord;
+  const trimmed = data.trim();
+  if (!trimmed) {
+    throw new Error(`Job file for ${id} is empty`);
+  }
+  return JSON.parse(trimmed) as JobRecord;
 }
 
 export async function listJobs(): Promise<JobRecord[]> {

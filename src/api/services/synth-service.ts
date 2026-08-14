@@ -227,9 +227,16 @@ async function runMatchJob(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Unknown error';
-    await updateJobStatus(jobId, 'failed', {
-      errorMessage: message,
-    });
+    try {
+      await updateJobStatus(jobId, 'failed', {
+        errorMessage: message,
+      });
+    } catch (reportError) {
+      console.error(
+        `Failed to report error for job ${jobId}:`,
+        reportError,
+      );
+    }
   } finally {
     await unlink(tempOutput).catch(() => {});
   }
