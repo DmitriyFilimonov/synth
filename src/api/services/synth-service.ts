@@ -10,6 +10,7 @@ import { readWav } from '../../read-wav';
 import {
   MATCH_DEFAULT_STEP_GROWTH_ADD,
   MATCH_DEFAULT_STEP_DECAY_FACTOR,
+  MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
 } from '../../match-defaults';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,7 +37,13 @@ interface GeneratedFile {
 
 interface MatchedFile {
   buffer: Buffer;
-  history: { iteration: number; suppressionPercent: number }[];
+  history: {
+    iteration: number;
+    suppressionPercent: number;
+    stageIndex?: number;
+    totalStages?: number;
+    stageDurationMs?: number;
+  }[];
   targetInfo: {
     sampleRate: number;
     numSamples: number;
@@ -82,6 +89,7 @@ export async function matchWav(
   maxIterations: number,
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
+  stageDurationMultiplier?: number,
 ): Promise<MatchedFile> {
   const tempInput = join(tmpdir(), `${randomUUID()}_input.wav`);
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
@@ -92,6 +100,9 @@ export async function matchWav(
     const history: {
       iteration: number;
       suppressionPercent: number;
+      stageIndex?: number;
+      totalStages?: number;
+      stageDurationMs?: number;
     }[] = [];
 
     const targetWavData = readWav(tempInput);
@@ -110,6 +121,9 @@ export async function matchWav(
       stepGrowthAdd: stepGrowthAdd ?? MATCH_DEFAULT_STEP_GROWTH_ADD,
       stepDecayFactor:
         stepDecayFactor ?? MATCH_DEFAULT_STEP_DECAY_FACTOR,
+      stageDurationMultiplier:
+        stageDurationMultiplier ??
+        MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
       onProgress: (entry) => {
         history.push(entry);
       },
@@ -142,13 +156,20 @@ export async function matchWavWithJob(
   maxIterations: number,
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
+  stageDurationMultiplier?: number,
 ): Promise<string> {
   const jobId = randomUUID();
   const inputFileName = `${jobId}_input.wav`;
 
   await createJob(
     jobId,
-    { numOscillators, maxIterations, stepGrowthAdd, stepDecayFactor },
+    {
+      numOscillators,
+      maxIterations,
+      stepGrowthAdd,
+      stepDecayFactor,
+      stageDurationMultiplier,
+    },
     inputFileName,
   );
 
@@ -163,6 +184,7 @@ export async function matchWavWithJob(
       inputPath,
       stepGrowthAdd,
       stepDecayFactor,
+      stageDurationMultiplier,
     );
   });
 
@@ -176,11 +198,15 @@ async function runMatchJob(
   inputPath: string,
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
+  stageDurationMultiplier?: number,
 ): Promise<void> {
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
   const history: {
     iteration: number;
     suppressionPercent: number;
+    stageIndex?: number;
+    totalStages?: number;
+    stageDurationMs?: number;
   }[] = [];
 
   try {
@@ -202,6 +228,9 @@ async function runMatchJob(
       stepGrowthAdd: stepGrowthAdd ?? MATCH_DEFAULT_STEP_GROWTH_ADD,
       stepDecayFactor:
         stepDecayFactor ?? MATCH_DEFAULT_STEP_DECAY_FACTOR,
+      stageDurationMultiplier:
+        stageDurationMultiplier ??
+        MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
       onProgress: (entry) => {
         history.push(entry);
         void updateJobStatus(jobId, 'running', {

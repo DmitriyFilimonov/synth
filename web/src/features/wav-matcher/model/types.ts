@@ -11,11 +11,15 @@ export interface MatchHistoryEntry {
   iteration: number;
   suppressionPercent: number;
   status?: string;
+  stageIndex?: number;
+  totalStages?: number;
+  stageDurationMs?: number;
 }
 
 export interface MatchConfig {
   numOscillators?: number;
   maxIterations?: number;
+  stageDurationMultiplier?: number;
 }
 
 export interface SynthOscConfig {
@@ -48,6 +52,7 @@ export interface JobEntry {
   params: {
     numOscillators: number;
     maxIterations: number;
+    stageDurationMultiplier?: number;
   };
   suppressionPercent: number;
   targetInfo?: MatchTargetInfo;
@@ -64,6 +69,7 @@ export interface JobListEntry {
   params: {
     numOscillators: number;
     maxIterations: number;
+    stageDurationMultiplier?: number;
   };
   createdAt: string;
   updatedAt: string;

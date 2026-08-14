@@ -20,7 +20,9 @@ for (const pt of freqOverTime.slice(0, 10)) {
     `  t=${(pt.timeSeconds * 1000).toFixed(0)}ms: ${pt.freq.toFixed(0)} Hz`,
   );
 }
-if (freqOverTime.length > 10) console.log('  ...');
+if (freqOverTime.length > 10) {
+  console.log('  ...');
+}
 
 // Amplitude envelope
 const ampEnv = computeAmplitudeEnvelope(wav.samples, SAMPLE_RATE);
@@ -30,4 +32,6 @@ for (const pt of ampEnv.slice(0, 10)) {
     `  t=${(pt.timeSeconds * 1000).toFixed(0)}ms: RMS=${pt.rms.toFixed(0)}`,
   );
 }
-if (ampEnv.length > 10) console.log('  ...');
+if (ampEnv.length > 10) {
+  console.log('  ...');
+}

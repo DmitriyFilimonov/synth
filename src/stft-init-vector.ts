@@ -22,7 +22,9 @@ const normalize = (
   min: number,
   max: number,
 ): number => {
-  if (max === min) return 0.5;
+  if (max === min) {
+    return 0.5;
+  }
   const clamped = Math.max(min, Math.min(max, value));
   return (clamped - min) / (max - min);
 };
@@ -169,7 +171,9 @@ export const stftInitVector = (
   const mainOscForEnergy = oscillators[0]!;
 
   for (const param of oscParams) {
-    if (oscillators.length >= maxOscillators) break;
+    if (oscillators.length >= maxOscillators) {
+      break;
+    }
 
     const ratio = param.freqBase / fundamental;
     const roundedRatio = Math.round(ratio);
@@ -233,7 +237,9 @@ export const stftInitVector = (
     i++
   ) {
     const osc = oscillators[i];
-    if (!osc) continue;
+    if (!osc) {
+      continue;
+    }
     const offset = i * OSC_PARAMS_PER_OSCILLATOR;
 
     const freqBaseNorm = normalize(

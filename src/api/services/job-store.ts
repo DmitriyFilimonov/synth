@@ -15,6 +15,9 @@ export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
 export interface JobEntry {
   iteration: number;
   suppressionPercent: number;
+  stageIndex?: number;
+  totalStages?: number;
+  stageDurationMs?: number;
 }
 
 export interface JobRecord {
@@ -26,6 +29,7 @@ export interface JobRecord {
     maxIterations: number;
     stepGrowthAdd?: number;
     stepDecayFactor?: number;
+    stageDurationMultiplier?: number;
   };
   inputFileName: string;
   resultFileName: string;
@@ -79,7 +83,7 @@ function createFallbackRecord(id: string): JobRecord {
   const now = new Date().toISOString();
   return {
     id,
-    status: 'running' as JobStatus,
+    status: 'running',
     progress: [],
     params: { numOscillators: 0, maxIterations: 0 },
     inputFileName: '',
@@ -110,6 +114,7 @@ export async function createJob(
     maxIterations: number;
     stepGrowthAdd?: number;
     stepDecayFactor?: number;
+    stageDurationMultiplier?: number;
   },
   inputFileName: string,
 ): Promise<JobRecord> {

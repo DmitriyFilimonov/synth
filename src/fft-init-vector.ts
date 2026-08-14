@@ -58,7 +58,9 @@ export const fftInitVector = (
     console.log(`FFT detected ${harmonics.length} harmonics:`);
     for (let i = 0; i < harmonics.length; i++) {
       const h = harmonics[i];
-      if (!h) continue;
+      if (!h) {
+        continue;
+      }
       console.log(
         `  [${i}] freq=${h.frequency.toFixed(1)}Hz, mag=${h.magnitude.toFixed(1)}, phase=${h.phase.toFixed(3)} rad`,
       );
@@ -68,7 +70,9 @@ export const fftInitVector = (
   const harmonicCount = Math.min(harmonics.length, MAX_OSCILLATORS);
   for (let i = 0; i < harmonicCount; i++) {
     const h = harmonics[i];
-    if (!h) continue;
+    if (!h) {
+      continue;
+    }
     const offset = i * OSC_PARAMS_PER_OSCILLATOR;
 
     const freqBaseNorm = normalize(

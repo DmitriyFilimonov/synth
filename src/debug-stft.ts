@@ -24,7 +24,9 @@ console.log(
 );
 for (let f = 0; f < Math.min(15, frames.length); f++) {
   const frame = frames[f];
-  if (!frame) continue;
+  if (!frame) {
+    continue;
+  }
   const top5 = frame.peaks.slice(0, 5);
   const peakStr = top5
     .map((p, i) => `${i}:${p.frequency.toFixed(0)}`)
@@ -40,9 +42,10 @@ if (midFrame) {
     `\nFrame ${midIdx} (${midFrame.timeSeconds.toFixed(3)}s):`,
   );
   midFrame.peaks.slice(0, 8).forEach((p, i) => {
-    if (p)
+    if (p) {
       console.log(
         `  [${i}] ${p.frequency.toFixed(0)}Hz mag=${p.magnitude.toFixed(0)}`,
       );
+    }
   });
 }

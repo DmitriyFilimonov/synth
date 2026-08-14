@@ -7,7 +7,9 @@ type ComplexVal = [number, number];
 
 const fft = (signal: Float64Array): ComplexVal[] => {
   const n = signal.length;
-  if (n <= 1) return [[signal[0] ?? 0, 0]];
+  if (n <= 1) {
+    return [[signal[0] ?? 0, 0]];
+  }
 
   const omega = (-2.0 * Math.PI) / n;
   const result: ComplexVal[] = Array.from({ length: n });
@@ -82,7 +84,9 @@ const applyHanning = (samples: Float64Array): Float64Array => {
     const multiplier =
       0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)));
     const s = samples[i];
-    if (s !== undefined) windowed[i] = s * multiplier;
+    if (s !== undefined) {
+      windowed[i] = s * multiplier;
+    }
   }
   return windowed;
 };
@@ -114,7 +118,9 @@ const findPeaksInSpectrum = (
   }[] = [];
   for (let k = 1; k < numBins; k++) {
     const mag = magnitudeBin(k);
-    if (mag < threshold) continue;
+    if (mag < threshold) {
+      continue;
+    }
     const prev = magnitudeBin(k - 1);
     const next = magnitudeBin(k + 1);
     if (mag > prev && mag > next) {
@@ -219,11 +225,15 @@ export const clusterHarmonics = (
 
   for (let frameIdx = 0; frameIdx < frames.length; frameIdx++) {
     const frame = frames[frameIdx];
-    if (!frame) continue;
+    if (!frame) {
+      continue;
+    }
 
     for (let peakIdx = 0; peakIdx < frame.peaks.length; peakIdx++) {
       const peak = frame.peaks[peakIdx];
-      if (!peak) continue;
+      if (!peak) {
+        continue;
+      }
 
       let bestCluster: Cluster | null = null;
       let bestDist = Infinity;
@@ -231,12 +241,18 @@ export const clusterHarmonics = (
       for (const cluster of clusters) {
         const lastActive =
           cluster.activeFrames[cluster.activeFrames.length - 1];
-        if (lastActive === undefined) continue;
+        if (lastActive === undefined) {
+          continue;
+        }
         // Only match recent frames (within 8 frames)
-        if (frameIdx - lastActive > 8) continue;
+        if (frameIdx - lastActive > 8) {
+          continue;
+        }
 
         const lastFreq = cluster.frequencies[lastActive];
-        if (lastFreq === undefined || lastFreq === 0) continue;
+        if (lastFreq === undefined || lastFreq === 0) {
+          continue;
+        }
 
         const dist = Math.abs(peak.frequency - lastFreq);
         if (dist < frequencyTolerance && dist < bestDist) {
@@ -319,15 +335,20 @@ export const fitOscEnvelopes = (
     const mag = magnitudes[i];
     const phase = phases[i];
     if (freq !== undefined && freq !== 0) {
-      if (firstFreq === null) firstFreq = freq;
+      if (firstFreq === null) {
+        firstFreq = freq;
+      }
       lastFreq = freq;
       activeFreqs.push(freq);
       if (mag !== undefined) {
         activeMags.push(mag);
-        if (firstMag === null) firstMag = mag;
+        if (firstMag === null) {
+          firstMag = mag;
+        }
         lastMag = mag;
-        if (firstPhase === null && phase !== undefined)
+        if (firstPhase === null && phase !== undefined) {
           firstPhase = phase;
+        }
       }
     }
   }

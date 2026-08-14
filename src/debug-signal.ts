@@ -70,7 +70,9 @@ for (let t = 0; t < 10; t++) {
   let maxAmp = 0;
   for (let i = start; i < end && i < samples.length; i++) {
     const abs = Math.abs(samples[i] ?? 0);
-    if (abs > maxAmp) maxAmp = abs;
+    if (abs > maxAmp) {
+      maxAmp = abs;
+    }
   }
   const timeMs = ((start / SAMPLE_RATE) * 1000).toFixed(0);
   console.log(

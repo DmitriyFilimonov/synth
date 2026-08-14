@@ -1,17 +1,17 @@
 import { parentPort, workerData } from 'worker_threads';
-import { optimize } from './optimize';
-import { createSynth } from './synth';
+import { stagedOptimize } from './optimize';
+import { generateOutput } from './match';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
-import { writeWav } from './write-wav';
-import { matchVisualize } from './match-visualize';
 import { readWav } from './read-wav';
-import { MAX_AMPLITUDE_16_BIT_WAV_ENCODED } from './consts';
 import {
   MATCH_DEFAULT_STEP_GROWTH_ADD,
   MATCH_DEFAULT_STEP_DECAY_FACTOR,
+  MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
 } from './match-defaults';
 
-if (!parentPort) throw new Error('Must run as worker thread');
+if (!parentPort) {
+  throw new Error('Must run as worker thread');
+}
 
 const sendLog = (message: string): void => {
   try {
@@ -39,6 +39,7 @@ interface WorkerMessage {
   maxIterations: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
+  stageDurationMultiplier?: number;
 }
 
 parentPort.on('message', (msg: WorkerMessage) => {
@@ -46,7 +47,7 @@ parentPort.on('message', (msg: WorkerMessage) => {
     const targetWav = readWav(msg.targetWavPath);
     const targetSignal = [...targetWav.samples];
 
-    const { vector, history } = optimize({
+    const { vector, history } = stagedOptimize({
       initialVector: msg.initialVector,
       targetSignal,
       sampleRate: msg.sampleRate,
@@ -55,37 +56,24 @@ parentPort.on('message', (msg: WorkerMessage) => {
         msg.stepGrowthAdd ?? MATCH_DEFAULT_STEP_GROWTH_ADD,
       stepDecayFactor:
         msg.stepDecayFactor ?? MATCH_DEFAULT_STEP_DECAY_FACTOR,
+      stageDurationMultiplier:
+        msg.stageDurationMultiplier ??
+        MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
       onProgress: (entry) => {
         parentPort?.postMessage({ type: 'progress', data: entry });
       },
     });
 
-    const optimizedConfig = mapVectorToSynthConfig(vector);
-    const synth = createSynth(optimizedConfig);
-    const samples = new Int16Array(targetWav.samples.length);
-
-    for (let i = 0; i < targetWav.samples.length; i++) {
-      const timeSeconds = i / msg.sampleRate;
-      const sample = synth({ x: timeSeconds });
-      samples[i] = Math.round(
-        sample * MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
-      );
-    }
-
-    writeWav({
-      samples,
-      sampleRate: msg.sampleRate,
-      filePath: msg.outputWavPath,
-    });
-
-    const visualizationPath = `${msg.outputWavPath}-match`;
-    matchVisualize({
+    generateOutput({
+      vector,
       targetSignal,
-      synthSignal: [...samples],
+      numSamples: targetWav.samples.length,
       sampleRate: msg.sampleRate,
-      outputPath: visualizationPath,
+      outputWavPath: msg.outputWavPath,
       history,
     });
+
+    const optimizedConfig = mapVectorToSynthConfig(vector);
 
     parentPort?.postMessage({
       type: 'done',

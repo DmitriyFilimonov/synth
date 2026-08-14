@@ -21,7 +21,9 @@ const normalize = (
   min: number,
   max: number,
 ): number => {
-  if (max === min) return 0.5;
+  if (max === min) {
+    return 0.5;
+  }
   const clamped = Math.max(min, Math.min(max, value));
   return (clamped - min) / (max - min);
 };
@@ -37,7 +39,9 @@ const estimateCloseTones = (
 ):
   | { freqBase: number; freqStart: number; phaseOffset: number }[]
   | null => {
-  if (ampEnv.length < 4) return null;
+  if (ampEnv.length < 4) {
+    return null;
+  }
 
   const rmsValues = ampEnv.map((e) => e.rms);
   const avgRms =
@@ -48,14 +52,18 @@ const estimateCloseTones = (
   // Amplitude modulation ratio: if > 2x, likely beats from close tones
   const modulationRatio = maxRms / Math.max(minRms, 1);
 
-  if (modulationRatio < 1.5) return null; // No strong beats
+  if (modulationRatio < 1.5) {
+    return null;
+  } // No strong beats
 
   // Estimate beat frequency from zero-crossings of amplitude envelope
   let beatCrossings = 0;
   for (let i = 1; i < rmsValues.length; i++) {
     const prev = (rmsValues[i - 1] ?? avgRms) - avgRms;
     const curr = (rmsValues[i] ?? avgRms) - avgRms;
-    if (prev * curr < 0) beatCrossings++;
+    if (prev * curr < 0) {
+      beatCrossings++;
+    }
   }
 
   const lastEntry = ampEnv[ampEnv.length - 1];
@@ -70,7 +78,9 @@ const estimateCloseTones = (
   const tone1Freq = estimatedFreq - beatFreq / 2;
   const tone2Freq = estimatedFreq + beatFreq / 2;
 
-  if (tone1Freq < 20 || tone2Freq > 20000) return null;
+  if (tone1Freq < 20 || tone2Freq > 20000) {
+    return null;
+  }
 
   console.log(
     `  Beats detected: modulation=${modulationRatio.toFixed(2)}x, beat_freq=${beatFreq.toFixed(1)} Hz`,
@@ -177,7 +187,9 @@ export const adaptiveInitVector = (
 
     // Add other STFT components (harmonics, etc.) minus the fundamental
     for (const param of oscParams.slice(1)) {
-      if (oscInitList.length >= maxOscillators) break;
+      if (oscInitList.length >= maxOscillators) {
+        break;
+      }
       const relMag = param.avgMagnitude / mainMag;
       oscInitList.push({
         freqBase: param.freqBase,
@@ -195,7 +207,9 @@ export const adaptiveInitVector = (
     );
 
     for (const param of validParams) {
-      if (oscInitList.length >= maxOscillators) break;
+      if (oscInitList.length >= maxOscillators) {
+        break;
+      }
       const relMag = param.avgMagnitude / maxMag;
       oscInitList.push({
         freqBase: param.freqBase,

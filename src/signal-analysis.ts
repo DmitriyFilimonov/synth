@@ -42,14 +42,20 @@ export const estimateFundamentalFreq = (
     }
   }
 
-  if (bestLag <= 0) return null;
+  if (bestLag <= 0) {
+    return null;
+  }
 
   // Verify: correlation should be strong
   const zeroLagCorr = autocorrelation(signal, 0);
-  if (zeroLagCorr === 0) return null;
+  if (zeroLagCorr === 0) {
+    return null;
+  }
 
   const normalizedCorr = bestCorr / zeroLagCorr;
-  if (normalizedCorr < 0.1) return null; // No clear periodicity
+  if (normalizedCorr < 0.1) {
+    return null;
+  } // No clear periodicity
 
   return sampleRate / bestLag;
 };

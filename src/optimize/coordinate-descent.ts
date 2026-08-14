@@ -22,6 +22,7 @@ const PLATEAU_RESTART_THRESHOLD = 3;
 const PERTURBATION = 0.05;
 const STEP_GROWTH_THRESHOLD = 5;
 const STEP_DECAY_FACTOR = 0.9;
+const SIGNIFICANT_IMPROVEMENT_THRESHOLD = 0.01;
 
 const RESTART_SCHEDULE = [
   { startStep: 0.025, minStep: 0.01, label: 'EXPLORATION' },
@@ -270,7 +271,9 @@ export const coordinateDescent = (
   let cycleIndex = 0;
   while (cycleIndex < RESTART_SCHEDULE.length) {
     const cycle = RESTART_SCHEDULE[cycleIndex];
-    if (!cycle) break;
+    if (!cycle) {
+      break;
+    }
     let step = cycle.startStep;
     stagnation = 0;
 
@@ -294,7 +297,8 @@ export const coordinateDescent = (
         firstOscInitVolume,
       );
       genome = result.genome;
-      const scoreImproved = result.score > currentBest;
+      const scoreImproved =
+        result.score > currentBest + SIGNIFICANT_IMPROVEMENT_THRESHOLD;
       currentBest = result.score;
 
       if (currentBest > bestScore) {
@@ -344,7 +348,9 @@ export const coordinateDescent = (
             `[CoordDescent] Random restart at iter ${iter} (best=${bestScore.toFixed(4)}%, restarts=${restartCount})`,
           );
           genome = initGenome(initialVector).map((v, idx) => {
-            if (idx % OSC_PARAMS === 0) return v;
+            if (idx % OSC_PARAMS === 0) {
+              return v;
+            }
             return Math.random();
           });
           enforceFlagInvariant(genome, numOsc, initOscCount);

@@ -123,7 +123,9 @@ const findDominantFrequencies = (
   const minSeparationHz = 15;
 
   for (const peak of spectrum) {
-    if (result.length >= count) break;
+    if (result.length >= count) {
+      break;
+    }
     const tooClose = result.some(
       (r) => Math.abs(r - peak.freq) < minSeparationHz,
     );
@@ -184,7 +186,9 @@ export const evaluateSuppressionWindowed = (
     const end = Math.min(start + windowSize, length);
     const count = end - start;
 
-    if (count === 0) break;
+    if (count === 0) {
+      break;
+    }
 
     const targetWindow: number[] = [];
     const generatedWindow: number[] = [];
@@ -196,7 +200,9 @@ export const evaluateSuppressionWindowed = (
 
     const targetRMS = calculateRMS(targetWindow);
 
-    if (targetRMS < 1) continue;
+    if (targetRMS < 1) {
+      continue;
+    }
 
     const { suppressionPercent: localBestScore } =
       findOptimalScaleFor(generatedWindow, targetWindow);
@@ -246,7 +252,9 @@ const computeSpectralScore = (
     numPeaks,
   );
 
-  if (targetFreqs.length === 0) return 0;
+  if (targetFreqs.length === 0) {
+    return 0;
+  }
 
   return spectralOverlap(
     targetSignal,

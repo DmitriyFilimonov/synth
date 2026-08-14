@@ -8,6 +8,9 @@ export interface MatchWorkerProgress {
   iteration: number;
   suppressionPercent: number;
   status?: string;
+  stageIndex?: number;
+  totalStages?: number;
+  stageDurationMs?: number;
 }
 
 export interface MatchWorkerResult {
@@ -31,6 +34,7 @@ interface MatchWorkerArgs {
   maxIterations: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
+  stageDurationMultiplier?: number;
   onProgress?: (entry: MatchWorkerProgress) => void;
 }
 
@@ -89,6 +93,7 @@ export function matchWithWorker(
       maxIterations: arg.maxIterations,
       stepGrowthAdd: arg.stepGrowthAdd,
       stepDecayFactor: arg.stepDecayFactor,
+      stageDurationMultiplier: arg.stageDurationMultiplier,
     });
   });
 }

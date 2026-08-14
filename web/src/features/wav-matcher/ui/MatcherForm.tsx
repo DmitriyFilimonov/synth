@@ -6,7 +6,11 @@ import {
   downloadJobResult,
   downloadJobParams,
 } from '../api/matchWav';
-import type { JobEntry, JobStatus, JobListEntry } from '../model/types';
+import type {
+  JobEntry,
+  JobStatus,
+  JobListEntry,
+} from '../model/types';
 import { Button, Input } from '@/shared/ui';
 import styles from './MatcherForm.module.css';
 import { AudioPlayer } from '@/features/synth-generator/ui/AudioPlayer';
@@ -22,7 +26,11 @@ function OptimizationChart({
   progress,
   height = 120,
 }: {
-  progress: { iteration: number; suppressionPercent: number }[];
+  progress: {
+    iteration: number;
+    suppressionPercent: number;
+    stageIndex?: number;
+  }[];
   height?: number;
 }) {
   if (progress.length < 2) return null;
@@ -55,11 +63,21 @@ function OptimizationChart({
 
   const ticksY = [0, 0.25, 0.5, 0.75, 1].map((f) => maxSup * f);
 
+  const hasStages = progress.some((p) => p.stageIndex !== undefined);
+  const stageBoundaries: number[] = [];
+  if (hasStages) {
+    const seenStages = new Set<number>();
+    for (const p of progress) {
+      const si = p.stageIndex;
+      if (si !== undefined && !seenStages.has(si)) {
+        seenStages.add(si);
+        stageBoundaries.push(p.iteration);
+      }
+    }
+  }
+
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className={styles.chart}
-    >
+    <svg viewBox={`0 0 ${width} ${height}`} className={styles.chart}>
       {ticksY.map((v, i) => (
         <g key={i}>
           <line
@@ -81,6 +99,21 @@ function OptimizationChart({
           </text>
         </g>
       ))}
+      {stageBoundaries.map((iter, i) => {
+        if (i === 0) return null;
+        return (
+          <line
+            key={i}
+            x1={x(iter)}
+            y1={padding.top}
+            x2={x(iter)}
+            y2={padding.top + chartH}
+            stroke="#f59e0b"
+            strokeDasharray="3 3"
+            strokeWidth="1"
+          />
+        );
+      })}
       <path d={pathD} fill="none" stroke="#3b82f6" strokeWidth="2" />
       <text
         x={width / 2}
@@ -116,7 +149,10 @@ function JobDetail({
         if (cancelled) return;
         setJob(status);
 
-        if (status.status === 'queued') {
+        if (
+          status.status === 'queued' ||
+          status.status === 'running'
+        ) {
           pollRef.current = true;
           await sleep(POLLING_INTERVAL);
           if (pollRef.current && !cancelled) {
@@ -195,6 +231,17 @@ function JobDetail({
     return job.suppressionPercent;
   })();
 
+  const stageInfo = (() => {
+    if (!job || job.progress.length === 0) return null;
+    const last = job.progress[job.progress.length - 1];
+    if (!last || last.stageIndex === undefined) return null;
+    return {
+      current: last.stageIndex + 1,
+      total: last.totalStages ?? 0,
+      durationMs: last.stageDurationMs ?? 0,
+    };
+  })();
+
   return (
     <div className={styles.detail}>
       <div className={styles.detailHeader}>
@@ -210,7 +257,9 @@ function JobDetail({
               : '–'}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div
+          style={{ display: 'flex', gap: 8, alignItems: 'center' }}
+        >
           {job && (
             <span
               className={`${styles.jobStatus} ${styles[job.status]}`}
@@ -227,6 +276,26 @@ function JobDetail({
       <div className={styles.suppressionValue}>
         Suppression: {currentSup.toFixed(2)}%
       </div>
+
+      {stageInfo &&
+        (job?.status === 'running' || job?.status === 'queued') && (
+          <div className={styles.stageInfo}>
+            <span className={styles.stageLabel}>
+              Stage {stageInfo.current}/{stageInfo.total}
+            </span>
+            <span className={styles.stageDuration}>
+              {stageInfo.durationMs}ms fragment
+            </span>
+            <div className={styles.stageProgressBar}>
+              <div
+                className={styles.stageProgressFill}
+                style={{
+                  width: `${(stageInfo.current / stageInfo.total) * 100}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
 
       {job && job.progress.length > 0 && (
         <OptimizationChart progress={job.progress} />
@@ -291,15 +360,10 @@ function JobListCard({
   };
 
   return (
-    <div
-      className={styles.jobCard}
-      onClick={() => onOpen(job.id)}
-    >
+    <div className={styles.jobCard} onClick={() => onOpen(job.id)}>
       <div className={styles.jobHeader}>
         <span className={styles.jobId}>{job.id.slice(0, 8)}</span>
-        <span
-          className={`${styles.jobStatus} ${styles[job.status]}`}
-        >
+        <span className={`${styles.jobStatus} ${styles[job.status]}`}>
           {getStatusLabel(job.status)}
         </span>
       </div>
@@ -310,7 +374,9 @@ function JobListCard({
       <div className={styles.jobSuppression}>
         Suppression: {job.suppressionPercent.toFixed(2)}%
       </div>
-      <div className={styles.jobTime}>{formatTime(job.createdAt)}</div>
+      <div className={styles.jobTime}>
+        {formatTime(job.createdAt)}
+      </div>
     </div>
   );
 }
@@ -319,6 +385,8 @@ export function MatcherForm() {
   const [file, setFile] = useState<File | null>(null);
   const [numOscillators, setNumOscillators] = useState('5');
   const [maxIterations, setMaxIterations] = useState('20');
+  const [stageDurationMultiplier, setStageDurationMultiplier] =
+    useState('1');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const [uploadError, setUploadError] = useState<string>('');
@@ -423,6 +491,7 @@ export function MatcherForm() {
       await createMatchJob(file, {
         numOscillators: Number(numOscillators),
         maxIterations: Number(maxIterations),
+        stageDurationMultiplier: Number(stageDurationMultiplier),
       });
 
       await listJobs().then(setJobList);
@@ -538,6 +607,16 @@ export function MatcherForm() {
               step="1"
               value={maxIterations}
               onChange={(e) => setMaxIterations(e.target.value)}
+            />
+            <Input
+              label="Stage multiplier"
+              type="number"
+              min="1"
+              step="0.5"
+              value={stageDurationMultiplier}
+              onChange={(e) =>
+                setStageDurationMultiplier(e.target.value)
+              }
             />
           </div>
 

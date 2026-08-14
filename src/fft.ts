@@ -8,7 +8,9 @@ type ComplexVal = [number, number]; // [real, imag]
 
 const fft = (signal: Float64Array): ComplexVal[] => {
   const n = signal.length;
-  if (n <= 1) return [[signal[0] ?? 0, 0]];
+  if (n <= 1) {
+    return [[signal[0] ?? 0, 0]];
+  }
 
   const omega = (-2.0 * Math.PI) / n;
   const result: ComplexVal[] = Array.from({ length: n });
@@ -91,7 +93,9 @@ export const fftExtractHarmonics = (
   // Find nearest power of 2, pad with zeros
   const n = signal.length;
   let fftSize = 1;
-  while (fftSize < n) fftSize <<= 1;
+  while (fftSize < n) {
+    fftSize <<= 1;
+  }
   // Cap to avoid huge FFTs
   fftSize = Math.min(fftSize, 65536);
 
@@ -122,7 +126,9 @@ export const fftExtractHarmonics = (
   const peaks: PeakCandidate[] = [];
   for (let k = 1; k < numBins; k++) {
     const mag = magnitudeBin(k);
-    if (mag < threshold) continue;
+    if (mag < threshold) {
+      continue;
+    }
     const prev = magnitudeBin(k - 1);
     const next = magnitudeBin(k + 1);
     // Must be a local maximum
@@ -151,7 +157,9 @@ export const fftExtractHarmonics = (
     i++
   ) {
     const p = peaks[i];
-    if (!p) continue;
+    if (!p) {
+      continue;
+    }
     result.push({
       frequency: p.frequency,
       magnitude: p.magnitude,

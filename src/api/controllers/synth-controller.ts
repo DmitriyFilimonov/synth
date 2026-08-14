@@ -104,6 +104,7 @@ export const matchHandler = async (
       maxIterations,
       body.stepGrowthAdd,
       body.stepDecayFactor,
+      body.stageDurationMultiplier,
     );
 
     res.json({
@@ -176,6 +177,9 @@ export const createMatchJobHandler = async (
     const stepDecayFactorFloat = parseFloat(
       queryParams.stepDecayFactor ?? '',
     );
+    const stageDurationMultiplierFloat = parseFloat(
+      queryParams.stageDurationMultiplier ?? '',
+    );
 
     const stepGrowthAdd = isNaN(stepGrowthAddFloat)
       ? undefined
@@ -183,6 +187,11 @@ export const createMatchJobHandler = async (
     const stepDecayFactor = isNaN(stepDecayFactorFloat)
       ? undefined
       : stepDecayFactorFloat;
+    const stageDurationMultiplier = isNaN(
+      stageDurationMultiplierFloat,
+    )
+      ? undefined
+      : stageDurationMultiplierFloat;
 
     const jobId = await matchWavWithJob(
       req.body,
@@ -192,6 +201,7 @@ export const createMatchJobHandler = async (
       isNaN(maxIterations) ? MATCH_DEFAULT_ITERATIONS : maxIterations,
       stepGrowthAdd,
       stepDecayFactor,
+      stageDurationMultiplier,
     );
 
     res.status(202).json({ id: jobId });
@@ -229,6 +239,7 @@ export const createMatchJobJsonHandler = async (
       maxIterations,
       body.stepGrowthAdd,
       body.stepDecayFactor,
+      body.stageDurationMultiplier,
     );
 
     res.status(202).json({ id: jobId });

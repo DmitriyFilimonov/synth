@@ -26,7 +26,9 @@ for (const ws of windowSizes) {
   );
   for (let f = 0; f < Math.min(5, frames.length); f++) {
     const frame = frames[f];
-    if (!frame) continue;
+    if (!frame) {
+      continue;
+    }
     const peaks = frame.peaks.filter((p) => p.frequency < 5000);
     const peakStr = peaks
       .slice(0, 8)

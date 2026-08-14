@@ -18,6 +18,11 @@ export async function createMatchJob(
     params.set('numOscillators', String(config.numOscillators));
   if (config.maxIterations)
     params.set('maxIterations', String(config.maxIterations));
+  if (config.stageDurationMultiplier !== undefined)
+    params.set(
+      'stageDurationMultiplier',
+      String(config.stageDurationMultiplier),
+    );
 
   const response = await fetch(
     `/api/match/job?${params.toString()}`,
@@ -98,6 +103,7 @@ export async function matchWav(
       wavBase64: base64,
       numOscillators: config.numOscillators,
       maxIterations: config.maxIterations,
+      stageDurationMultiplier: config.stageDurationMultiplier,
     }),
   });
 

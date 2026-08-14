@@ -20,7 +20,9 @@ const normalize = (
   min: number,
   max: number,
 ): number => {
-  if (max === min) return 0.5;
+  if (max === min) {
+    return 0.5;
+  }
   const clamped = Math.max(min, Math.min(max, value));
   return (clamped - min) / (max - min);
 };
@@ -101,7 +103,9 @@ const findDominantFrequencies = (
   const minSeparation = 5;
 
   for (const peak of spectrum) {
-    if (result.length >= count) break;
+    if (result.length >= count) {
+      break;
+    }
     const tooClose = result.some(
       (r) => Math.abs(r.frequency - peak.frequency) < minSeparation,
     );
@@ -153,7 +157,9 @@ const findDominantFrequenciesWide = (
   const minSeparation = 5;
 
   for (const peak of spectrum) {
-    if (result.length >= count) break;
+    if (result.length >= count) {
+      break;
+    }
     const tooClose = result.some(
       (r) => Math.abs(r.frequency - peak.frequency) < minSeparation,
     );
@@ -303,7 +309,9 @@ export const simpleInitVector = (
     >[] = [];
     for (const traj of trajectories) {
       const p = fitOscEnvelopes(traj, sampleRate, signalDuration);
-      if (p) oscParams.push(p);
+      if (p) {
+        oscParams.push(p);
+      }
     }
     oscParams.sort((a, b) => b.avgMagnitude - a.avgMagnitude);
 
@@ -312,7 +320,9 @@ export const simpleInitVector = (
 
     const mainMag = initList[0]!.relAmp || 1;
     for (const param of oscParams) {
-      if (initList.length >= maxOscillators) break;
+      if (initList.length >= maxOscillators) {
+        break;
+      }
       const ratio = param.freqBase / estimatedFreq;
       const rounded = Math.round(ratio);
       const isHarmonic =
