@@ -172,10 +172,7 @@ export const createMatchJobHandler = async (
       queryParams.maxIterations ?? String(MATCH_DEFAULT_ITERATIONS),
       10,
     );
-    const hpoTrialsInt = parseInt(
-      queryParams.hpoTrials ?? '',
-      10,
-    );
+    const hpoTrialsInt = parseInt(queryParams.hpoTrials ?? '', 10);
     const stepGrowthAddFloat = parseFloat(
       queryParams.stepGrowthAdd ?? '',
     );
@@ -186,9 +183,7 @@ export const createMatchJobHandler = async (
       queryParams.stageDurationMultiplier ?? '',
     );
 
-    const hpoTrials = isNaN(hpoTrialsInt)
-      ? undefined
-      : hpoTrialsInt;
+    const hpoTrials = isNaN(hpoTrialsInt) ? undefined : hpoTrialsInt;
     const stepGrowthAdd = isNaN(stepGrowthAddFloat)
       ? undefined
       : stepGrowthAddFloat;

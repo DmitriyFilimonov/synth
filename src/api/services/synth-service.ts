@@ -181,7 +181,7 @@ export async function matchWavWithJob(
   await writeFile(inputPath, wavBuffer);
 
   setImmediate(() => {
-    void runMatchJob(
+    runMatchJob(
       jobId,
       numOscillators,
       maxIterations,
@@ -190,7 +190,13 @@ export async function matchWavWithJob(
       stepDecayFactor,
       stageDurationMultiplier,
       hpoTrials,
-    );
+    ).catch((err) => {
+      const message =
+        err instanceof Error ? err.message : 'Unknown error';
+      updateJobStatus(jobId, 'failed', {
+        errorMessage: message,
+      }).catch(() => {});
+    });
   });
 
   return jobId;

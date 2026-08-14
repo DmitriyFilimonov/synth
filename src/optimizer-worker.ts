@@ -1,15 +1,17 @@
 import { parentPort, workerData } from 'worker_threads';
-import { stagedOptimize, runHPO } from './optimize';
+import { stagedOptimize } from './optimize';
 import { generateOutput } from './match';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 import { readWav } from './read-wav';
 import { MATCH_DEFAULT_HPO_TRIALS } from './match-defaults';
-import type { TPEConfig, ResolvedHyperparams } from './optimize/hpo';
-import type { CoordinateDescentConfig } from './optimize/types';
+import type { TPEConfig } from './optimize/hpo';
 
 if (!parentPort) {
   throw new Error('Must run as worker thread');
 }
+
+const CONSOLE_LOG_THROTTLE_MS = 200;
+let lastLogTime = 0;
 
 const sendLog = (message: string): void => {
   try {
@@ -20,12 +22,21 @@ const sendLog = (message: string): void => {
 };
 
 console.log = (...args: unknown[]) => {
+  const now = Date.now();
+  if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS) return;
+  lastLogTime = now;
   sendLog(args.map((a) => String(a)).join(' '));
 };
 console.error = (...args: unknown[]) => {
+  const now = Date.now();
+  if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS / 2) return;
+  lastLogTime = now;
   sendLog('[ERR] ' + args.map((a) => String(a)).join(' '));
 };
 console.warn = (...args: unknown[]) => {
+  const now = Date.now();
+  if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS / 2) return;
+  lastLogTime = now;
   sendLog('[WARN] ' + args.map((a) => String(a)).join(' '));
 };
 
@@ -62,54 +73,38 @@ parentPort.on('message', (msg: WorkerMessage) => {
     }>;
 
     if (!hasUserOverride) {
+      // HPO выполняется внутри stagedOptimize для каждой стадии
       const nTrials = msg.hpoTrials ?? MATCH_DEFAULT_HPO_TRIALS;
       const numOscillators = msg.initialVector.length / 10;
 
       console.log(
-        `Starting HPO: ${nTrials} trials, ${numOscillators} oscillators`,
+        `Starting staged optimization with per-stage HPO: ${nTrials} trials/stage, ${numOscillators} oscillators`,
       );
 
-      const hpoResult = runHPO({
-        targetSignal,
-        sampleRate: msg.sampleRate,
-        initialVector: msg.initialVector,
-        numOscillators,
-        nTrials,
-        tpeConfig: msg.hpoTpeConfig,
-        onProgress: (entry) => {
-          parentPort?.postMessage({ type: 'progress', data: entry });
-        },
-      });
-
-      console.log(`Running staged optimization with best hyperparams`);
-
-      const config = buildCoordDescentConfig(
-        hpoResult.bestHyperparams,
-      );
+      // Throttle progress to prevent IPC queue overflow
+      const PROGRESS_THROTTLE_MS = 100;
+      let lastProgressMs = 0;
 
       const stagedResult = stagedOptimize({
-        initialVector: hpoResult.bestVector,
+        initialVector: msg.initialVector,
         targetSignal,
         sampleRate: msg.sampleRate,
-        maxIterations: hpoResult.bestHyperparams.iterations,
-        stepGrowthAdd: hpoResult.bestHyperparams.stepGrowthAdd,
-        stepDecayFactor: hpoResult.bestHyperparams.stepDecayFactor,
-        stageDurationMultiplier:
-          hpoResult.bestHyperparams.stageDurationMultiplier,
-        initialStageMs: hpoResult.bestHyperparams.initialStageMs,
-        config,
+        maxIterations:100,
+        hpoTrials: nTrials,
+        tpeConfig: msg.hpoTpeConfig,
         onProgress: (entry) => {
-          parentPort?.postMessage({ type: 'progress', data: entry });
+          const now = Date.now();
+          if (now - lastProgressMs >= PROGRESS_THROTTLE_MS) {
+            lastProgressMs = now;
+            parentPort?.postMessage({ type: 'progress', data: entry });
+          }
         },
       });
 
       vector = stagedResult.vector;
       history = stagedResult.history;
 
-      console.log(
-        `HPO + StagedOpt complete. Best: ${hpoResult.bestValue.toFixed(2)}%`,
-      );
-      console.log(`Best hyperparams:`, hpoResult.bestHyperparams);
+      console.log(`StagedOpt complete.`);
     } else {
       const result = stagedOptimize({
         initialVector: msg.initialVector,
@@ -164,39 +159,3 @@ parentPort.on('message', (msg: WorkerMessage) => {
     });
   }
 });
-
-function buildCoordDescentConfig(
-  hyperparams: ResolvedHyperparams,
-): CoordinateDescentConfig {
-  return {
-    stagnationExitThreshold: hyperparams.stagnationExitThreshold ?? 5,
-    plateauRestartThreshold: hyperparams.plateauRestartThreshold ?? 3,
-    stepGrowthThreshold: hyperparams.stepGrowthThreshold ?? 4,
-    stagnationStepDecayFactor:
-      hyperparams.stagnationDecayFactor ?? 0.8,
-    significantImprovementThreshold:
-      hyperparams.significantImprovementThreshold ?? 0.01,
-    earlyExitSuppression:
-      hyperparams.earlyExitSuppression ?? 98,
-    maxRestartsBeforeRandomRestart:
-      hyperparams.maxRestartsBeforeRandomRestart ?? 5,
-    kickFallbackThreshold: hyperparams.kickFallbackThreshold ?? 0.8,
-    restartSchedule: [
-      {
-        startStep: hyperparams.explorationStartStep ?? 0.05,
-        minStep: hyperparams.explorationMinStep ?? 0.01,
-        label: 'EXPLORATION',
-      },
-      {
-        startStep: hyperparams.refinementStartStep ?? 0.02,
-        minStep: hyperparams.refinementMinStep ?? 0.005,
-        label: 'REFINEMENT',
-      },
-      {
-        startStep: hyperparams.precisionStartStep ?? 0.005,
-        minStep: hyperparams.precisionMinStep ?? 0.001,
-        label: 'PRECISION',
-      },
-    ],
-  };
-}

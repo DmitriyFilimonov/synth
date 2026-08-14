@@ -7,7 +7,10 @@ import {
 import { Study, type OptimizationDirection } from './study';
 import { Trial } from './trial';
 import { TPESampler, type TPEConfig } from './sampler-tpe';
-import { resolveHyperparams, type ResolvedHyperparams } from './param-space';
+import {
+  resolveHyperparams,
+  type ResolvedHyperparams,
+} from './param-space';
 
 export interface HPOProgressEntry extends ProgressEntry {
   trialIndex: number;
@@ -33,7 +36,7 @@ export interface ArgHPO {
   initialVector: readonly number[];
   numOscillators: number;
   nTrials: number;
-  onProgress?: ProgressCallback;
+  onProgress?: (entry: HPOProgressEntry) => void;
   tpeConfig?: Partial<TPEConfig>;
   direction?: OptimizationDirection;
 }
@@ -60,13 +63,31 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
     const params = suggestTrialParams(trial);
     const hyperparams = resolveHyperparams(params);
     const coordConfig = buildCoordDescentConfig(hyperparams);
+    const trialIdx = trial.getNumber();
+
+    // Emit trial start so UI shows HPO isn't stalled
+    onProgress?.({
+      iteration: trialIdx + 1,
+      suppressionPercent: 0,
+      trialIndex: trialIdx,
+      totalTrials: nTrials,
+      trialValue: null,
+    });
 
     const { history } = coordinateDescent(
       initialVector,
       targetSignal,
       sampleRate,
       hyperparams.iterations,
-      undefined,
+      (entry) => {
+        onProgress?.({
+          iteration: trialIdx + 1,
+          suppressionPercent: entry.suppressionPercent,
+          trialIndex: trialIdx,
+          totalTrials: nTrials,
+          trialValue: entry.suppressionPercent,
+        });
+      },
       hyperparams.stepGrowthAdd,
       hyperparams.stepDecayFactor,
       coordConfig,
@@ -77,10 +98,12 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
         ? (history[history.length - 1]?.suppressionPercent ?? 0)
         : 0;
 
-    const trialIdx = trial.getNumber();
     onProgress?.({
       iteration: trialIdx + 1,
       suppressionPercent: suppression,
+      trialIndex: trialIdx,
+      totalTrials: nTrials,
+      trialValue: suppression,
     });
 
     return suppression;
@@ -117,6 +140,9 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
   onProgress?.({
     iteration: nTrials,
     suppressionPercent: result.bestValue ?? 0,
+    trialIndex: nTrials - 1,
+    totalTrials: nTrials,
+    trialValue: result.bestValue,
   });
 
   return {

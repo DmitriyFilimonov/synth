@@ -155,9 +155,7 @@ export const match = (arg: ArgMatch): MatchResult => {
       tpeConfig: arg.hpoConfig,
     });
 
-    const config = buildCoordDescentConfig(
-      hpoResult.bestHyperparams,
-    );
+    const config = buildCoordDescentConfig(hpoResult.bestHyperparams);
 
     const stagedResult = stagedOptimize({
       initialVector: hpoResult.bestVector,

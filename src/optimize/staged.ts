@@ -1,4 +1,7 @@
 import { coordinateDescent } from './coordinate-descent';
+import { runHPO } from './hpo';
+import type { TPEConfig } from './hpo/sampler-tpe';
+import type { ResolvedHyperparams } from './hpo/param-space';
 import type {
   ProgressEntry,
   ProgressCallback,
@@ -12,12 +15,15 @@ export interface ArgStagedOptimize extends Omit<
   'targetSignal'
 > {
   targetSignal: readonly number[];
+
   sampleRate: number;
   maxIterations: number;
   onProgress?: ProgressCallback;
   initialStageMs?: number;
   stageDurationMultiplier?: number;
   maxStageMs?: number;
+  hpoTrials?: number;
+  tpeConfig?: Partial<TPEConfig>;
 }
 
 export interface StageResult {
@@ -41,6 +47,26 @@ const OSC_DURATION_MAX = 5;
 // Нормализация ampEnv.duration: min=0.5, max=5
 const AMP_ENV_DURATION_MIN = 0.5;
 const AMP_ENV_DURATION_MAX = 5;
+
+// Бюджет вычислений HPO: при коротких стадиях — больше trials,
+// при длинных — меньше, координатный спуск стоит дорого.
+// База: 20 trials на ~441 сэмпле (10ms), масштабируем обратно
+// пропорционально длине сигнала, ограничивая сверху и снизу.
+const HPO_TRIALS_REF_SAMPLES = 441;
+const HPO_TRIALS_MIN = 3;
+const HPO_TRIALS_MAX = 25;
+
+const computeHpoTrialsForStage = (
+  stageSamples: number,
+  requestedTrials: number,
+): number => {
+  if (stageSamples <= HPO_TRIALS_REF_SAMPLES) {
+    return Math.min(requestedTrials, HPO_TRIALS_MAX);
+  }
+  const scaleFactor = HPO_TRIALS_REF_SAMPLES / stageSamples;
+  const scaled = Math.round(requestedTrials * scaleFactor);
+  return Math.max(HPO_TRIALS_MIN, Math.min(scaled, requestedTrials));
+};
 
 // Индексы параметров в векторе осциллятора (см. vector-to-synth-config.ts)
 const IDX_ON = 0;
@@ -173,7 +199,9 @@ export const extrapolateVectorBetweenStages = (
 };
 
 export const stagedOptimize = (
-  arg: ArgStagedOptimize & { config?: Partial<CoordinateDescentConfig> },
+  arg: ArgStagedOptimize & {
+    config?: Partial<CoordinateDescentConfig>;
+  },
 ): StagedOptimizeResult => {
   const {
     targetSignal,
@@ -187,6 +215,8 @@ export const stagedOptimize = (
     stepGrowthAdd,
     stepDecayFactor,
     config,
+    hpoTrials,
+    tpeConfig,
   } = arg;
 
   const totalSamples = targetSignal.length;
@@ -197,6 +227,8 @@ export const stagedOptimize = (
     stageDurationMultiplier,
     maxStageMs,
   );
+
+  const numOscillators = initialVector.length / OSC_PARAMS;
 
   let currentVector = [...initialVector];
   const allHistory: ProgressEntry[] = [];
@@ -213,8 +245,25 @@ export const stagedOptimize = (
     const stageSamples = Math.round((durationMs / 1000) * sampleRate);
     const truncatedSignal = targetSignal.slice(0, stageSamples);
 
+    // Throttle progress updates to avoid OOM from postMessage queue flooding
+    // and cap `allHistory` size for safe JSON serialization
+    const PROGRESS_THROTTLE_MS = 200;
+    let lastStageProgressTime = 0;
+
     const stageOnProgress: ProgressCallback = (entry) => {
       globalIteration++;
+
+      const now = Date.now();
+      if (now - lastStageProgressTime < PROGRESS_THROTTLE_MS) {
+        return;
+      }
+      lastStageProgressTime = now;
+
+      // Cap history size to prevent OOM on postMessage serialization
+      if (allHistory.length > 10000) {
+        allHistory.length = 5000;
+      }
+
       const wrappedEntry: ProgressEntry = {
         iteration: globalIteration,
         suppressionPercent: entry.suppressionPercent,
@@ -226,15 +275,88 @@ export const stagedOptimize = (
       onProgress?.(wrappedEntry);
     };
 
+    let cdMaxIterations: number;
+    let cdStepGrowthAdd: number | undefined;
+    let cdStepDecayFactor: number | undefined;
+    let usedConfig: Partial<CoordinateDescentConfig> = { ...config };
+
+    if (hpoTrials && hpoTrials > 0) {
+      const effectiveHpoTrials = computeHpoTrialsForStage(
+        stageSamples,
+        hpoTrials,
+      );
+
+      // HPO на укороченном сигнале этой стадии
+      console.log(
+        `[StagedOpt] Stage ${stageIdx + 1}: HPO start (${hpoTrials}→${effectiveHpoTrials} trials, ${durationMs}ms, ${stageSamples} samples)`,
+      );
+
+      const hpoResult = runHPO({
+        targetSignal: truncatedSignal,
+        sampleRate,
+        initialVector: currentVector,
+        numOscillators,
+        nTrials: effectiveHpoTrials,
+        tpeConfig,
+        onProgress: stageOnProgress,
+      });
+
+      const bestHyper = hpoResult.bestHyperparams;
+      currentVector = hpoResult.bestVector;
+      cdMaxIterations = bestHyper.iterations;
+      cdStepGrowthAdd = bestHyper.stepGrowthAdd;
+      cdStepDecayFactor = bestHyper.stepDecayFactor;
+      usedConfig = {
+        ...usedConfig,
+        stagnationExitThreshold: bestHyper.stagnationExitThreshold,
+        plateauRestartThreshold: bestHyper.plateauRestartThreshold,
+        stepGrowthThreshold: bestHyper.stepGrowthThreshold,
+        stagnationStepDecayFactor: bestHyper.stagnationDecayFactor,
+        significantImprovementThreshold:
+          bestHyper.significantImprovementThreshold,
+        earlyExitSuppression: bestHyper.earlyExitSuppression,
+        maxRestartsBeforeRandomRestart:
+          bestHyper.maxRestartsBeforeRandomRestart,
+        kickFallbackThreshold: bestHyper.kickFallbackThreshold,
+        restartSchedule: [
+          {
+            startStep: bestHyper.explorationStartStep,
+            minStep: bestHyper.explorationMinStep,
+            label: 'EXPLORATION',
+          },
+          {
+            startStep: bestHyper.refinementStartStep,
+            minStep: bestHyper.refinementMinStep,
+            label: 'REFINEMENT',
+          },
+          {
+            startStep: bestHyper.precisionStartStep,
+            minStep: bestHyper.precisionMinStep,
+            label: 'PRECISION',
+          },
+        ],
+      };
+
+      const hpoSuppression = hpoResult.bestValue;
+      console.log(
+        `[StagedOpt] Stage ${stageIdx + 1}: HPO done, best=${hpoSuppression.toFixed(2)}%`,
+      );
+    } else {
+      cdMaxIterations = maxIterations;
+      cdStepGrowthAdd = stepGrowthAdd;
+      cdStepDecayFactor = stepDecayFactor;
+    }
+
+    // Coordinate descent с лучшими гиперпараметрами для этой стадии
     const { vector, history } = coordinateDescent(
       currentVector,
       truncatedSignal,
       sampleRate,
-      maxIterations,
+      cdMaxIterations,
       stageOnProgress,
-      stepGrowthAdd,
-      stepDecayFactor,
-      config,
+      cdStepGrowthAdd,
+      cdStepDecayFactor,
+      usedConfig,
     );
 
     currentVector = vector;
