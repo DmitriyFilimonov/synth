@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 import type { ArgCreateSynth } from './synth';
+import type { TPEConfig } from './optimize/hpo';
 
 export interface MatchWorkerProgress {
   iteration: number;
@@ -36,6 +37,9 @@ interface MatchWorkerArgs {
   stepDecayFactor?: number;
   stageDurationMultiplier?: number;
   onProgress?: (entry: MatchWorkerProgress) => void;
+  useHPO?: boolean;
+  hpoTrials?: number;
+  hpoTpeConfig?: Partial<TPEConfig>;
 }
 
 function resolveWorkerPath(): {
@@ -94,6 +98,9 @@ export function matchWithWorker(
       stepGrowthAdd: arg.stepGrowthAdd,
       stepDecayFactor: arg.stepDecayFactor,
       stageDurationMultiplier: arg.stageDurationMultiplier,
+      useHPO: arg.useHPO,
+      hpoTrials: arg.hpoTrials,
+      hpoTpeConfig: arg.hpoTpeConfig,
     });
   });
 }

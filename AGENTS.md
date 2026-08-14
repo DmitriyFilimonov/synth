@@ -78,7 +78,8 @@ Generate → Compare → Save WAV + SVG
 | `src/write-wav.ts` | Запись `Int16Array` в WAV-файл |
 | `src/synth-config-to-vector.ts` | Нормализация конфига → вектор `number[]` `[0, 1]` |
 | `src/vector-to-synth-config.ts` | Денормализация вектора → конфиг (50 осцилляторов) |
-| `src/optimize/` | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка suppression), `consts.ts` (константы), `types.ts` (типы) |
+| `src/optimize/` | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка suppression), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (поэтапная оптимизация) |
+| `src/optimize/hpo/` | Hyperparameter optimization (Optuna-style): `run-hpo.ts` (координатор), `study.ts` (Study), `trial.ts` (Trial), `sampler.ts` (Sampler + RandomSampler), `sampler-tpe.ts` (TPE), `param-space.ts` (пространство гиперпараметров), `types.ts` |
 | `src/signal-analysis.ts` | Анализ сигналов: автокорреляция (фундаментальная частота), amplitude envelope (RMS-окна), freqOverTime (zero-crossing) |
 | `src/spectrogram.ts` | STFT-анализ: Hanning window, FFT, peak detection, кластеризация гармоник в траектории, fit osc envelopes |
 | `src/fft.ts` | Cooley-Tukey radix-2 FFT, extraction доминантных гармоник с bias к фундаментальным |
@@ -126,6 +127,53 @@ Generate → Compare → Save WAV + SVG
 - После completion — финальный прунинг: осцилляторы с `startLevel < VOLUME_PRUNE_THRESHOLD` (≈ 0.02) отключаются; откат если score падает > 0.05 п.п.
 - Scale fitting: подбор оптимального масштаба громкости (`findOptimalScale`) после оптимизации
 - Volume (offset 9): мультипликативный шаг (`center * (1 ± step)`), ограничен `clampVolume` → `[VOLUME_MIN, 1]`
+- Все константы алгоритма вынесены в `CoordinateDescentConfig` и могут быть переопределены через HPO. Значения по умолчанию — `DEFAULT_COORD_DESCENT_CONFIG`.
+
+### HPO (src/optimize/hpo/)
+
+Оптимизация гиперпараметров координатного спуска в стиле Optuna.
+
+**Принцип работы:**
+1. FFT инициализирует параметры осцилляторов (начальный вектор)
+2. HPO-координатор запускает N trials
+3. В каждом trial TPE-сэмплер предлагает гиперпараметры (шаги, пороги, decay factors)
+4. Coordinate descent запускается с этими гиперпараметрами на полном сигнале (500ms)
+5. Полученный suppressionPercent возвращается в TPE для обновления модели
+6. После всех trials возвращается лучшая комбинация гиперпараметров + вектор
+
+**Компоненты:**
+- `Study` + `Trial` — управление trials, Optuna-style API (`suggestFloat`, `suggestInt`, `suggestCategorical`)
+- `Sampler` — интерфейс алгоритмов выборки
+- `RandomSampler` — равномерная выборка (baseline + warmup)
+- `TPESampler` — Tree-structured Parzen Estimator (основной алгоритм)
+- `runHPO` — координатор: trial → hyperparams → coordinateDescent → suppression → TPE update
+- `param-space.ts` — пространство гиперпараметров с диапазонами и дефолтами
+
+**Архитектура TPE:**
+- Разделяет trials на «good» (лучшие γ%) и «bad» (остальные)
+- Строит KDE l(x) = P(x|good) и g(x) = P(x|bad) для каждого параметра
+- Сэмплирует кандидатов из l(x), выбирает по max l(x)/g(x) ratio
+- Первые nStartupTrials — random sampling (exploration)
+
+**Пространство гиперпараметров (HYPERPARAM_SPACE):**
+- `iterations` — 50..500
+- `stepGrowthAdd` — [0.0001, 0.01] (log)
+- `stepDecayFactor` — [0.85, 0.995]
+- `explorationStartStep` — [0.005, 0.1]
+- `explorationMinStep` — [0.001, 0.05]
+- `refinementStartStep` — [0.001, 0.05]
+- `refinementMinStep` — [0.0005, 0.02]
+- `precisionStartStep` — [0.0005, 0.02]
+- `precisionMinStep` — [1e-6, 0.002] (log)
+- `stagnationExitThreshold` — 2..12
+- `stagnationDecayFactor` — [0.5, 0.95]
+- `plateauRestartThreshold` — 2..10
+- `stepGrowthThreshold` — 2..15
+- `significantImprovementThreshold` — [0.0005, 0.1] (log)
+- `earlyExitSuppression` — [90, 99.9]
+- `maxRestartsBeforeRandomRestart` — 2..10
+- `kickFallbackThreshold` — [0.5, 0.95]
+- `initialStageMs` — 5..100
 
 #### Известное узкое место
 `evaluateSuppression` пересинтезирует весь сигнал на каждую пробу
@@ -133,6 +181,12 @@ Generate → Compare → Save WAV + SVG
 оптимизатора не должна ухудшать число вызовов evaluate; уменьшение
 их стоимости (инкрементальный пересчёт, кэш waveform на осциллятор) —
 приоритетное направление.
+
+#### Параметры coordinate descent
+Все константы алгоритма параметризованы через `CoordinateDescentConfig`
+и могут быть переопределены при вызове `coordinateDescent()`. Значения
+по умолчанию — `DEFAULT_COORD_DESCENT_CONFIG`. HPO подбирает оптимальные
+значения этих параметров через TPE-сэмплер.
 
 ### HTTP-сервер (`src/api/`)
 ```

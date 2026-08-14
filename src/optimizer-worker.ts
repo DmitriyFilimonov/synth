@@ -1,5 +1,5 @@
 import { parentPort, workerData } from 'worker_threads';
-import { stagedOptimize } from './optimize';
+import { stagedOptimize, runHPO } from './optimize';
 import { generateOutput } from './match';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 import { readWav } from './read-wav';
@@ -8,6 +8,7 @@ import {
   MATCH_DEFAULT_STEP_DECAY_FACTOR,
   MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
 } from './match-defaults';
+import type { TPEConfig } from './optimize/hpo';
 
 if (!parentPort) {
   throw new Error('Must run as worker thread');
@@ -40,6 +41,9 @@ interface WorkerMessage {
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
   stageDurationMultiplier?: number;
+  useHPO?: boolean;
+  hpoTrials?: number;
+  hpoTpeConfig?: Partial<TPEConfig>;
 }
 
 parentPort.on('message', (msg: WorkerMessage) => {
@@ -47,22 +51,65 @@ parentPort.on('message', (msg: WorkerMessage) => {
     const targetWav = readWav(msg.targetWavPath);
     const targetSignal = [...targetWav.samples];
 
-    const { vector, history } = stagedOptimize({
-      initialVector: msg.initialVector,
-      targetSignal,
-      sampleRate: msg.sampleRate,
-      maxIterations: msg.maxIterations,
-      stepGrowthAdd:
-        msg.stepGrowthAdd ?? MATCH_DEFAULT_STEP_GROWTH_ADD,
-      stepDecayFactor:
-        msg.stepDecayFactor ?? MATCH_DEFAULT_STEP_DECAY_FACTOR,
-      stageDurationMultiplier:
-        msg.stageDurationMultiplier ??
-        MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
-      onProgress: (entry) => {
-        parentPort?.postMessage({ type: 'progress', data: entry });
-      },
-    });
+    let vector: number[];
+    let history: typeof msg extends { useHPO: true }
+      ? {
+          trial: number;
+          value: number | null;
+          params: Record<string, number | string | boolean>;
+        }[]
+      : Array<{ iteration: number; suppressionPercent: number }>;
+
+    if (msg.useHPO) {
+      const nTrials = msg.hpoTrials ?? 10;
+      const numOscillators = msg.initialVector.length / 10;
+
+      console.log(
+        `Starting HPO: ${nTrials} trials, ${numOscillators} oscillators`,
+      );
+
+      const hpoResult = runHPO({
+        targetSignal,
+        sampleRate: msg.sampleRate,
+        initialVector: msg.initialVector,
+        numOscillators,
+        nTrials,
+        tpeConfig: msg.hpoTpeConfig,
+        onProgress: (entry) => {
+          parentPort?.postMessage({ type: 'progress', data: entry });
+        },
+      });
+
+      vector = hpoResult.bestVector;
+      history = hpoResult.history.map((h, i) => ({
+        iteration: i + 1,
+        suppressionPercent: h.value ?? 0,
+      })) as typeof history;
+
+      console.log(
+        `HPO complete. Best: ${hpoResult.bestValue.toFixed(2)}%`,
+      );
+    } else {
+      const result = stagedOptimize({
+        initialVector: msg.initialVector,
+        targetSignal,
+        sampleRate: msg.sampleRate,
+        maxIterations: msg.maxIterations,
+        stepGrowthAdd:
+          msg.stepGrowthAdd ?? MATCH_DEFAULT_STEP_GROWTH_ADD,
+        stepDecayFactor:
+          msg.stepDecayFactor ?? MATCH_DEFAULT_STEP_DECAY_FACTOR,
+        stageDurationMultiplier:
+          msg.stageDurationMultiplier ??
+          MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
+        onProgress: (entry) => {
+          parentPort?.postMessage({ type: 'progress', data: entry });
+        },
+      });
+
+      vector = result.vector;
+      history = result.history;
+    }
 
     generateOutput({
       vector,
@@ -70,7 +117,19 @@ parentPort.on('message', (msg: WorkerMessage) => {
       numSamples: targetWav.samples.length,
       sampleRate: msg.sampleRate,
       outputWavPath: msg.outputWavPath,
-      history,
+      history: history.map((h) => ({
+        iteration:
+          'suppressionPercent' in h
+            ? (h as { iteration: number; suppressionPercent: number })
+                .iteration
+            : (h as { trial: number; value: number | null }).trial,
+        suppressionPercent:
+          'suppressionPercent' in h
+            ? (h as { iteration: number; suppressionPercent: number })
+                .suppressionPercent
+            : ((h as { trial: number; value: number | null }).value ??
+              0),
+      })),
     });
 
     const optimizedConfig = mapVectorToSynthConfig(vector);

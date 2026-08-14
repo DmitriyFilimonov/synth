@@ -17,18 +17,53 @@ import type {
   ArgOptimize,
 } from './types';
 
-const STAGNATION_EXIT_THRESHOLD = 4;
-const PLATEAU_RESTART_THRESHOLD = 3;
-const PERTURBATION = 0.05;
-const STEP_GROWTH_THRESHOLD = 5;
-const STEP_DECAY_FACTOR = 0.9;
-const SIGNIFICANT_IMPROVEMENT_THRESHOLD = 0.01;
+/**
+ * Конфигурация алгоритма coordinate descent.
+ * Вынесена из модуля, чтобы HPO мог подбирать эти параметры.
+ */
+export interface CoordinateDescentConfig {
+  /** Iterations without improvement before step decay. */
+  stagnationExitThreshold: number;
+  /** Iterations without improvement before kick/restart. */
+  plateauRestartThreshold: number;
+  /** Consecutive successes before step grows. */
+  stepGrowthThreshold: number;
+  /** Step multiplier on stagnation exit. */
+  stagnationStepDecayFactor: number;
+  /** Min score increase (%) to count as improvement. */
+  significantImprovementThreshold: number;
+  /** Suppression % for early exit. */
+  earlyExitSuppression: number;
+  /** Max plateau kicks before full random restart. */
+  maxRestartsBeforeRandomRestart: number;
+  /** Kick fallback: if score < bestScore × threshold, restore genome. */
+  kickFallbackThreshold: number;
+  /** Three-phase step schedule. */
+  restartSchedule: Array<{
+    startStep: number;
+    minStep: number;
+    label: string;
+  }>;
+}
 
-const RESTART_SCHEDULE = [
-  { startStep: 0.025, minStep: 0.01, label: 'EXPLORATION' },
-  { startStep: 0.01, minStep: 0.003, label: 'REFINEMENT' },
-  { startStep: 0.0025, minStep: 0.0001, label: 'PRECISION' },
-];
+/** Default config values (previous hardcoded constants). */
+export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
+  stagnationExitThreshold: 4,
+  plateauRestartThreshold: 3,
+  stepGrowthThreshold: 5,
+  stagnationStepDecayFactor: 0.9,
+  significantImprovementThreshold: 0.01,
+  earlyExitSuppression: 98,
+  maxRestartsBeforeRandomRestart: 5,
+  kickFallbackThreshold: 0.8,
+  restartSchedule: [
+    { startStep: 0.025, minStep: 0.01, label: 'EXPLORATION' },
+    { startStep: 0.01, minStep: 0.003, label: 'REFINEMENT' },
+    { startStep: 0.0025, minStep: 0.0001, label: 'PRECISION' },
+  ],
+};
+
+const PERTURBATION = 0.05;
 
 const optimizeSingleParameter = (
   genome: readonly number[],
@@ -221,7 +256,13 @@ export const coordinateDescent = (
   onProgress?: ProgressCallback,
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
+  config?: Partial<CoordinateDescentConfig>,
 ): OptimizeResult => {
+  const cfg: CoordinateDescentConfig = {
+    ...DEFAULT_COORD_DESCENT_CONFIG,
+    ...config,
+  };
+
   const genomeLength = initialVector.length;
   const numOsc = genomeLength / OSC_PARAMS;
 
@@ -234,7 +275,8 @@ export const coordinateDescent = (
   ).length;
 
   const actualStepGrowthAdd = stepGrowthAdd ?? 0.01;
-  const actualStepDecayFactor = stepDecayFactor ?? 0.9;
+  const actualStepDecayFactor =
+    stepDecayFactor ?? cfg.stagnationStepDecayFactor;
 
   const initialGenerated = createWaveForm(
     genome,
@@ -267,10 +309,12 @@ export const coordinateDescent = (
     );
   }
 
+  const restartSchedule = cfg.restartSchedule;
+
   let iter = 0;
   let cycleIndex = 0;
-  while (cycleIndex < RESTART_SCHEDULE.length) {
-    const cycle = RESTART_SCHEDULE[cycleIndex];
+  while (cycleIndex < restartSchedule.length) {
+    const cycle = restartSchedule[cycleIndex];
     if (!cycle) {
       break;
     }
@@ -299,7 +343,7 @@ export const coordinateDescent = (
       genome = result.genome;
       const scoreImproved =
         result.score >
-        currentBest + SIGNIFICANT_IMPROVEMENT_THRESHOLD;
+        currentBest + cfg.significantImprovementThreshold;
       currentBest = result.score;
 
       if (currentBest > bestScore) {
@@ -321,7 +365,7 @@ export const coordinateDescent = (
       emitProgress(history, onProgress, iter + 1, currentBest);
 
       iter++;
-      if (currentBest >= 98) {
+      if (currentBest >= cfg.earlyExitSuppression) {
         break;
       }
 
@@ -329,7 +373,7 @@ export const coordinateDescent = (
         stagnation = 0;
         plateauCount = 0;
         consecutiveSuccesses++;
-        if (consecutiveSuccesses >= STEP_GROWTH_THRESHOLD) {
+        if (consecutiveSuccesses >= cfg.stepGrowthThreshold) {
           step += actualStepGrowthAdd;
           console.log(
             `[CoordDescent] Step grown to ${step.toFixed(6)} (added ${actualStepGrowthAdd})`,
@@ -342,9 +386,9 @@ export const coordinateDescent = (
         consecutiveSuccesses = 0;
       }
 
-      if (plateauCount >= PLATEAU_RESTART_THRESHOLD) {
+      if (plateauCount >= cfg.plateauRestartThreshold) {
         restartCount++;
-        if (restartCount >= 5) {
+        if (restartCount >= cfg.maxRestartsBeforeRandomRestart) {
           console.log(
             `[CoordDescent] Random restart at iter ${iter} (best=${bestScore.toFixed(4)}%, restarts=${restartCount})`,
           );
@@ -357,7 +401,6 @@ export const coordinateDescent = (
           enforceFlagInvariant(genome, numOsc, initOscCount);
           restartCount = 0;
         } else {
-          // Kick: randomly change ONE parameter of an ENABLED oscillator
           const enabledOscs: number[] = [];
           for (let osc = 0; osc < numOsc; osc++) {
             if ((genome[osc * OSC_PARAMS] ?? 0) >= 0.5) {
@@ -388,7 +431,7 @@ export const coordinateDescent = (
             targetSignal,
           );
 
-          if (currentBest < bestScore * 0.8) {
+          if (currentBest < bestScore * cfg.kickFallbackThreshold) {
             console.log(
               `[CoordDescent] Kick failed, restarting from best`,
             );
@@ -406,8 +449,8 @@ export const coordinateDescent = (
         );
       }
 
-      if (stagnation >= STAGNATION_EXIT_THRESHOLD) {
-        step *= STEP_DECAY_FACTOR;
+      if (stagnation >= cfg.stagnationExitThreshold) {
+        step *= cfg.stagnationStepDecayFactor;
         console.log(
           `[CoordDescent] Decay step to ${step.toFixed(8)} (${stagnation} stagnant)`,
         );
@@ -415,7 +458,7 @@ export const coordinateDescent = (
       }
     }
 
-    if (currentBest >= 98) {
+    if (currentBest >= cfg.earlyExitSuppression) {
       break;
     }
 
@@ -500,5 +543,6 @@ export const optimize = (
     arg.onProgress,
     arg.stepGrowthAdd,
     arg.stepDecayFactor,
+    arg.config,
   );
 };

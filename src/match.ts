@@ -6,6 +6,8 @@ import {
   optimize,
   ProgressCallback,
   stagedOptimize,
+  runHPO,
+  type ArgHPO,
 } from './optimize';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 import { createSynth, ArgCreateSynth } from './synth';
@@ -23,6 +25,9 @@ interface ArgMatch {
   stepDecayFactor?: number;
   useStagedOptimize?: boolean;
   stageDurationMultiplier?: number;
+  useHPO?: boolean;
+  hpoTrials?: number;
+  hpoConfig?: Partial<ArgHPO['tpeConfig']>;
 }
 
 interface MatchResult {
@@ -111,26 +116,63 @@ export const match = (arg: ArgMatch): MatchResult => {
 
   const maxIterations = arg.maxIterations ?? 100;
 
-  const { vector, history } = arg.useStagedOptimize
-    ? stagedOptimize({
-        initialVector,
-        targetSignal,
-        sampleRate: SAMPLE_RATE,
-        maxIterations,
-        onProgress: arg.onProgress,
-        stepGrowthAdd: arg.stepGrowthAdd,
-        stepDecayFactor: arg.stepDecayFactor,
-        stageDurationMultiplier: arg.stageDurationMultiplier,
-      })
-    : optimize({
-        initialVector,
-        targetSignal,
-        sampleRate: SAMPLE_RATE,
-        maxIterations,
-        onProgress: arg.onProgress,
-        stepGrowthAdd: arg.stepGrowthAdd,
-        stepDecayFactor: arg.stepDecayFactor,
-      });
+  let vector: number[];
+  let history: { iteration: number; suppressionPercent: number }[];
+
+  if (arg.useHPO) {
+    const nTrials = arg.hpoTrials ?? 10;
+    const numOscillators = initialVector.length / 10;
+
+    console.log(
+      `Starting HPO: ${nTrials} trials, ${numOscillators} oscillators`,
+    );
+
+    const hpoResult = runHPO({
+      targetSignal,
+      sampleRate: SAMPLE_RATE,
+      initialVector,
+      numOscillators,
+      nTrials,
+      onProgress: arg.onProgress,
+      tpeConfig: arg.hpoConfig,
+    });
+
+    vector = hpoResult.bestVector;
+    history = hpoResult.history.map((h, i) => ({
+      iteration: i + 1,
+      suppressionPercent: h.value ?? 0,
+    }));
+
+    console.log(
+      `HPO complete. Best: ${hpoResult.bestValue.toFixed(2)}%`,
+    );
+    console.log(`Best hyperparams:`, hpoResult.bestParams);
+  } else if (arg.useStagedOptimize) {
+    const result = stagedOptimize({
+      initialVector,
+      targetSignal,
+      sampleRate: SAMPLE_RATE,
+      maxIterations,
+      onProgress: arg.onProgress,
+      stepGrowthAdd: arg.stepGrowthAdd,
+      stepDecayFactor: arg.stepDecayFactor,
+      stageDurationMultiplier: arg.stageDurationMultiplier,
+    });
+    vector = result.vector;
+    history = result.history;
+  } else {
+    const result = optimize({
+      initialVector,
+      targetSignal,
+      sampleRate: SAMPLE_RATE,
+      maxIterations,
+      onProgress: arg.onProgress,
+      stepGrowthAdd: arg.stepGrowthAdd,
+      stepDecayFactor: arg.stepDecayFactor,
+    });
+    vector = result.vector;
+    history = result.history;
+  }
 
   const bestSuppression =
     history.length > 0
