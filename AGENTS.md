@@ -1,6 +1,7 @@
 # AGENTS.md
 
 ## Общее правило
+
 Перед внесением изменений в любой файл проверяй его актуальное
 содержимое. Не полагайся на память: в файл могли внести правку
 другие агенты или разработчики.
@@ -10,41 +11,44 @@
 
 ## Команды разработки
 
-| Команда | Действие |
-|---|---|
-| `npm run dev` | Запуск через `tsx` без сборки |
-| `npm run build` | Компиляция в `dist/` |
-| `npm run start` | Запуск собранного `dist/index.js` |
-| `npm run serve` | Запуск собранного HTTP-сервера (`dist/server.js`) |
-| `npm run serve:dev` | Запуск HTTP-сервера через `tsx` без сборки |
-| `npm run viz` | Визуализация огибающих (SVG) |
-| `npm run prettier` | Форматирование источников через Prettier |
-| `npm run prettier:check` | Проверка форматирования (без изменений) |
-| `npm run lint` | Проверка ESLint |
-| `npm run lint:fix` | Автофикс ESLint |
-| `npm run test` | Заглушка тестов (not specified) |
+| Команда                  | Действие                                          |
+| ------------------------ | ------------------------------------------------- |
+| `npm run dev`            | Запуск через `tsx` без сборки                     |
+| `npm run build`          | Компиляция в `dist/`                              |
+| `npm run start`          | Запуск собранного `dist/index.js`                 |
+| `npm run serve`          | Запуск собранного HTTP-сервера (`dist/server.js`) |
+| `npm run serve:dev`      | Запуск HTTP-сервера через `tsx` без сборки        |
+| `npm run viz`            | Визуализация огибающих (SVG)                      |
+| `npm run prettier`       | Форматирование источников через Prettier          |
+| `npm run prettier:check` | Проверка форматирования (без изменений)           |
+| `npm run lint`           | Проверка ESLint                                   |
+| `npm run lint:fix`       | Автофикс ESLint                                   |
+| `npm run test`           | Заглушка тестов (not specified)                   |
 
 ### Веб-интерфейс (`web/`)
 
-| Команда | Действие |
-|---|---|
-| `cd web && npm run dev` | Vite dev-сервер (`http://localhost:5173`) |
-| `cd web && npm run build` | Сборка в `web/dist/` |
-| `cd web && npm run preview` | Превью собранной сборки |
+| Команда                     | Действие                                  |
+| --------------------------- | ----------------------------------------- |
+| `cd web && npm run dev`     | Vite dev-сервер (`http://localhost:5173`) |
+| `cd web && npm run build`   | Сборка в `web/dist/`                      |
+| `cd web && npm run preview` | Превью собранной сборки                   |
 
 Dev-сервер проксирует `/api`, `/health`, `/presets` на бэкенд
 `localhost:3000`.
 
 ## Порядок работы
+
 1. `npm run prettier` — отформатировать код
 2. `npm run build` — убедиться, что типы проходят проверку
 3. `npm run dev` (или `npm run start`) — запустить и проверить результат
 
 Для веб-интерфейса:
+
 1. `cd web && npm run build` — убедиться, что типы проходят проверку
 2. `cd web && npm run dev` — запустить dev-сервер
 
 ## Архитектура
+
 Проект — генератор-синтезатор. Создаёт файл `.wav` (44 100 Гц, 16 бит,
 моно) путём аддитивного синтеза до 50 осцилляторов. Включает пайплайн
 подбора параметров: оптимизатор находит конфигурацию осцилляторов,
@@ -58,6 +62,7 @@ FFT не используется в рантайм-синтезе. Исполь
 API поддерживает асинхронный режим через job-очередь.
 
 ### Пайплайн подбора параметров
+
 ```
 External WAV → Parse samples → Init vector →
 Optimize (coordinate descent, worker thread) →
@@ -66,47 +71,49 @@ Generate → Compare → Save WAV + SVG
 
 ### Core-модули (синтез и обработка)
 
-| Файл | Назначение |
-|---|---|
-| `src/index.ts` | Точка входа, генерация WAV из пресета |
-| `src/consts.ts` | Константы: `SAMPLE_RATE`, `SAMPLE_LENGTH_IN_SECONDS`, `MAX_AMPLITUDE_16_BIT_WAV_ENCODED`, `VOLUME_MIN`, `VOLUME_PRUNE_THRESHOLD` |
-| `src/synth.ts` | Создание синтезатора из конфигурации осцилляторов |
-| `src/envelope.ts` | Экспоненциальная функция огибающей. При `x > duration` значение clamp'ится к `duration` (огибающая остаётся на последнем вычисленном уровне) |
-| `src/oscillator.ts` | Расчёт сигнала осциллятора |
-| `src/presets.ts` | Пресеты конфигураций осцилляторов |
-| `src/read-wav.ts` | Чтение 16-битного WAV → `Int16Array` + метаданные (строго моно/16-бит/PCM) |
-| `src/write-wav.ts` | Запись `Int16Array` в WAV-файл |
-| `src/synth-config-to-vector.ts` | Нормализация конфига → вектор `number[]` `[0, 1]` |
-| `src/vector-to-synth-config.ts` | Денормализация вектора → конфиг (50 осцилляторов) |
-| `src/optimize/` | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка suppression), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (поэтапная оптимизация) |
-| `src/optimize/hpo/` | Hyperparameter optimization (Optuna-style): `run-hpo.ts` (координатор), `study.ts` (Study), `trial.ts` (Trial), `sampler.ts` (Sampler + RandomSampler), `sampler-tpe.ts` (TPE), `param-space.ts` (пространство гиперпараметров), `types.ts` |
-| `src/signal-analysis.ts` | Анализ сигналов: автокорреляция (фундаментальная частота), amplitude envelope (RMS-окна), freqOverTime (zero-crossing) |
-| `src/spectrogram.ts` | STFT-анализ: Hanning window, FFT, peak detection, кластеризация гармоник в траектории, fit osc envelopes |
-| `src/fft.ts` | Cooley-Tukey radix-2 FFT, extraction доминантных гармоник с bias к фундаментальным |
-| `src/simple-init-vector.ts` | Инициализация: Goertzel + STFT-гармоники для начальной точки оптимизации |
-| `src/fft-init-vector.ts` | FFT-инициализация на коротком окне (~23ms) |
-| `src/stft-init-vector.ts` | STFT-инициализация с траекториями (autocorr fundamental + STFT clustering) |
-| `src/adaptive-init-vector.ts` | Адаптивная иницализация: детекция биений через amplitude modulation, разбиение фундаментального на два близких тона |
-| `src/cancellation-assessment.ts` | Оценка качества подавления (RMS-based) |
-| `src/rms.ts` | Расчёт RMS энергии сигнала |
-| `src/visualize.ts` | Генерация SVG-графиков |
-| `src/visualize-envelopes.ts` | Визуализация огибающих первого осциллятора |
-| `src/match.ts` | Оркестратор мэтчинга: read → optimize → generate → visualize |
-| `src/match-worker.ts` | Обёртка для запуска оптимизации в worker-потоке |
-| `src/optimizer-worker.ts` | Реализация worker-потока: запускает optimize, генерирует WAV, визуализацию |
-| `src/match-preset.ts` | Начальная конфигурация для оптимизации |
-| `src/match-visualize.ts` | Визуализация результатов мэтчинга (сигналы + прогресс) |
-| `src/match-entry.ts` | Точка входа для запуска подбора параметров |
+| Файл                             | Назначение                                                                                                                                                                                                                                  |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`                   | Точка входа, генерация WAV из пресета                                                                                                                                                                                                       |
+| `src/consts.ts`                  | Константы: `SAMPLE_RATE`, `SAMPLE_LENGTH_IN_SECONDS`, `MAX_AMPLITUDE_16_BIT_WAV_ENCODED`, `VOLUME_MIN`, `VOLUME_PRUNE_THRESHOLD`                                                                                                            |
+| `src/synth.ts`                   | Создание синтезатора из конфигурации осцилляторов                                                                                                                                                                                           |
+| `src/envelope.ts`                | Экспоненциальная функция огибающей. При `x > duration` значение clamp'ится к `duration` (огибающая остаётся на последнем вычисленном уровне)                                                                                                |
+| `src/oscillator.ts`              | Расчёт сигнала осциллятора                                                                                                                                                                                                                  |
+| `src/presets.ts`                 | Пресеты конфигураций осцилляторов                                                                                                                                                                                                           |
+| `src/read-wav.ts`                | Чтение 16-битного WAV → `Int16Array` + метаданные (строго моно/16-бит/PCM)                                                                                                                                                                  |
+| `src/write-wav.ts`               | Запись `Int16Array` в WAV-файл                                                                                                                                                                                                              |
+| `src/synth-config-to-vector.ts`  | Нормализация конфига → вектор `number[]` `[0, 1]`                                                                                                                                                                                           |
+| `src/vector-to-synth-config.ts`  | Денормализация вектора → конфиг (50 осцилляторов)                                                                                                                                                                                           |
+| `src/optimize/`                  | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка suppression), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (поэтапная оптимизация)                                         |
+| `src/optimize/hpo/`              | Hyperparameter optimization (Optuna-style): `run-hpo.ts` (координатор), `study.ts` (Study), `trial.ts` (Trial), `sampler.ts` (Sampler + RandomSampler), `sampler-tpe.ts` (TPE), `param-space.ts` (пространство гиперпараметров), `types.ts` |
+| `src/signal-analysis.ts`         | Анализ сигналов: автокорреляция (фундаментальная частота), amplitude envelope (RMS-окна), freqOverTime (zero-crossing)                                                                                                                      |
+| `src/spectrogram.ts`             | STFT-анализ: Hanning window, FFT, peak detection, кластеризация гармоник в траектории, fit osc envelopes                                                                                                                                    |
+| `src/fft.ts`                     | Cooley-Tukey radix-2 FFT, extraction доминантных гармоник с bias к фундаментальным                                                                                                                                                          |
+| `src/simple-init-vector.ts`      | Инициализация: Goertzel + STFT-гармоники для начальной точки оптимизации                                                                                                                                                                    |
+| `src/fft-init-vector.ts`         | FFT-инициализация на коротком окне (~23ms)                                                                                                                                                                                                  |
+| `src/stft-init-vector.ts`        | STFT-инициализация с траекториями (autocorr fundamental + STFT clustering)                                                                                                                                                                  |
+| `src/adaptive-init-vector.ts`    | Адаптивная иницализация: детекция биений через amplitude modulation, разбиение фундаментального на два близких тона                                                                                                                         |
+| `src/cancellation-assessment.ts` | Оценка качества подавления (RMS-based)                                                                                                                                                                                                      |
+| `src/rms.ts`                     | Расчёт RMS энергии сигнала                                                                                                                                                                                                                  |
+| `src/visualize.ts`               | Генерация SVG-графиков                                                                                                                                                                                                                      |
+| `src/visualize-envelopes.ts`     | Визуализация огибающих первого осциллятора                                                                                                                                                                                                  |
+| `src/match.ts`                   | Оркестратор мэтчинга: read → optimize → generate → visualize                                                                                                                                                                                |
+| `src/match-worker.ts`            | Обёртка для запуска оптимизации в worker-потоке                                                                                                                                                                                             |
+| `src/optimizer-worker.ts`        | Реализация worker-потока: запускает optimize, генерирует WAV, визуализацию                                                                                                                                                                  |
+| `src/match-preset.ts`            | Начальная конфигурация для оптимизации                                                                                                                                                                                                      |
+| `src/match-visualize.ts`         | Визуализация результатов мэтчинга (сигналы + прогресс)                                                                                                                                                                                      |
+| `src/match-entry.ts`             | Точка входа для запуска подбора параметров                                                                                                                                                                                                  |
 
 ### Оптимизатор (src/optimize/)
 
 #### Раскладка вектора
+
 50 осцилляторов × 10 параметров (`OSC_PARAMS = 10`).
 Смещение `[0]` каждого осциллятора — флаг on/off, `[1..9]` —
 непрерывные параметры. Точный маппинг — см.
 `src/vector-to-synth-config.ts` (единственный источник истины).
 
 #### Инварианты (НЕ нарушать)
+
 - Сигнатуры `ArgOptimize`, `ProgressCallback` и возврат
   `{ vector, history }` — публичный контракт (используются в
   `optimizer-worker.ts`, `match-visualize.ts`)
@@ -119,6 +126,7 @@ Generate → Compare → Save WAV + SVG
   к строго `0` или `1`
 
 #### Текущее поведение (изменяемое, НЕ инвариант)
+
 - Мульти-цикловый подход: `EXPLORATION` (0.05→0.01) → `REFINEMENT` (0.02→0.005) → `PRECISION` (0.005→0.001)
 - Плато-пинки: при `3` итерациях без улучшения — случайный пинк одного параметра; после `5` пинков — полный рандомный рестарт
 - Затухание шага: при `4` итерациях без улучшения шаг × `0.8`; выход из цикла, если шаг < minStep
@@ -128,20 +136,58 @@ Generate → Compare → Save WAV + SVG
 - Scale fitting: подбор оптимального масштаба громкости (`findOptimalScale`) после оптимизации
 - Volume (offset 9): мультипликативный шаг (`center * (1 ± step)`), ограничен `clampVolume` → `[VOLUME_MIN, 1]`
 - Все константы алгоритма вынесены в `CoordinateDescentConfig` и могут быть переопределены через HPO. Значения по умолчанию — `DEFAULT_COORD_DESCENT_CONFIG`.
+- Логи `[CoordDescent]` (Plateau kick, Step grown/decayed) выводятся через
+  `optimizer-worker.ts` с отдельным троттлингом: important-сообщения `[...]`
+  идут через 5ms, а `Iteration X:` прогресс — через 50ms.
+
+### Поэтапная оптимизация со встроенным HPO (src/optimize/staged.ts)
+
+**Принцип работы:**
+Оптимизация идёт по нарастающим стадиям длительности сигнала (от 10ms до
+полного сигнала). Перед каждым CD-этапом HPO на коротком сигнале подбирает
+hyperparameters (шаги, пороги, decay).
+
+```
+Stage 1 (10ms): HPO → CD → extrapolate durations
+Stage 2 (30ms): HPO → CD → extrapolate durations
+...
+Stage N (full): HPO → CD → final vector
+```
+
+`stageDurationMultiplier` (по умолчанию 2) контролирует рост стадий:
+минимум 2.0, иначе экспоненциальная proliferation стадий. Две стадии
+за шаг с ±10ms offset.
+
+**Параметры HPO в стадиях:**
+
+- `hpoTrials` — число trials на стадию (дефолт 2)
+- `cdIterationsPerTrial` — фиксированные CD-итерации внутри HPO trial (дефолт 7)
+- `maxIterations` — CD после HPO, управляется пользователем (дефолт 100)
+- `stageDurationMultiplier` — передаётся извне, НЕ входит в пространство HPO
+- `hasUserOverride` — определяется только по `stepGrowthAdd` + `stepDecayFactor`
+
+**ProgressEntry поля:**
+
+- `phase` — `'hpo'` или `'cd'` (разделение в UI)
+- `iterationOffset` — кумулятивный сдвиг итераций между стадиями (только CD, HPO не считается)
 
 ### HPO (src/optimize/hpo/)
 
 Оптимизация гиперпараметров координатного спуска в стиле Optuna.
+Используется как внутри staged optimization (per-stage), так и самостоятельно.
 
-**Принцип работы:**
+**Принцип работы (standalone):**
+
 1. FFT инициализирует параметры осцилляторов (начальный вектор)
 2. HPO-координатор запускает N trials
 3. В каждом trial TPE-сэмплер предлагает гиперпараметры (шаги, пороги, decay factors)
-4. Coordinate descent запускается с этими гиперпараметрами на полном сигнале (500ms)
+4. Coordinate descent запускается с `cdIterationsPerTrial` (дефолт 7)
 5. Полученный suppressionPercent возвращается в TPE для обновления модели
 6. После всех trials возвращается лучшая комбинация гиперпараметров + вектор
+7. Финальный CD запускается с лучшими гиперпараметрами на `cdIterationsPerTrial`
 
 **Компоненты:**
+
 - `Study` + `Trial` — управление trials, Optuna-style API (`suggestFloat`, `suggestInt`, `suggestCategorical`)
 - `Sampler` — интерфейс алгоритмов выборки
 - `RandomSampler` — равномерная выборка (baseline + warmup)
@@ -150,13 +196,14 @@ Generate → Compare → Save WAV + SVG
 - `param-space.ts` — пространство гиперпараметров с диапазонами и дефолтами
 
 **Архитектура TPE:**
+
 - Разделяет trials на «good» (лучшие γ%) и «bad» (остальные)
 - Строит KDE l(x) = P(x|good) и g(x) = P(x|bad) для каждого параметра
 - Сэмплирует кандидатов из l(x), выбирает по max l(x)/g(x) ratio
 - Первые nStartupTrials — random sampling (exploration)
 
 **Пространство гиперпараметров (HYPERPARAM_SPACE):**
-- `iterations` — 50..500
+
 - `stepGrowthAdd` — [0.0001, 0.01] (log)
 - `stepDecayFactor` — [0.85, 0.995]
 - `explorationStartStep` — [0.005, 0.1]
@@ -175,7 +222,12 @@ Generate → Compare → Save WAV + SVG
 - `kickFallbackThreshold` — [0.5, 0.95]
 - `initialStageMs` — 5..100
 
+> `iterations` НЕ является гиперпараметром — пользователь контролирует через
+> `maxIterations`. `stageDurationMultiplier` также исключён из HPO и передаётся
+> независимо. Внутри HPO trial CD запускается на `cdIterationsPerTrial` (дефолт 7).
+
 #### Известное узкое место
+
 `evaluateSuppression` пересинтезирует весь сигнал на каждую пробу
 кандидата — тысячи полных синтезов за итерацию. Любая правка
 оптимизатора не должна ухудшать число вызовов evaluate; уменьшение
@@ -183,12 +235,14 @@ Generate → Compare → Save WAV + SVG
 приоритетное направление.
 
 #### Параметры coordinate descent
+
 Все константы алгоритма параметризованы через `CoordinateDescentConfig`
 и могут быть переопределены при вызове `coordinateDescent()`. Значения
 по умолчанию — `DEFAULT_COORD_DESCENT_CONFIG`. HPO подбирает оптимальные
 значения этих параметров через TPE-сэмплер.
 
 ### HTTP-сервер (`src/api/`)
+
 ```
 src/server.ts                        → Точка входа: только `createApp()` + `listen()`
 src/api/app.ts                       → Создание Express, middleware, регистрация роутов
@@ -199,17 +253,18 @@ src/api/controllers/                 → Request → Service → Response (ва�
 src/api/routes/                      → Express Router (маршрутизация)
 ```
 
-| Файл | Назначение |
-|---|---|
-| `src/server.ts` | Точка входа HTTP-сервера. Только `createApp()` + `listen(PORT)`. Не должен содержать роутов, контроллеров, бизнес-логики |
-| `src/api/app.ts` | Создаёт Express-приложение. Регистрирует middleware (`json`, `raw`), health-эндпоинты, подключает `src/api/routes/`, отдаёт статику из `web/dist/` (SPA fallback) |
-| `src/api/types.ts` | Все DTO-интерфейсы для API: `GenerateRequest`, `MatchRequestBody`, `MatchResult`, `CreateMatchJobRequest`, `JobStatusResponse`, `JobListItem`, хелперы конвертации |
-| `src/api/services/synth-service.ts` | Бизнес-логика: `generateWav()`, `matchWav()`, `matchWavWithJob()`. Работают с файловой системой, вызывают core-модули и worker-потоки. Ничего не знают про HTTP |
-| `src/api/services/job-store.ts` | Хранение job-ов в `jobs/`: создание, обновление статуса, CRUD. Файлы: `<id>.json`, `<id>_input.wav`, `<id>_result.wav` |
-| `src/api/controllers/synth-controller.ts` | Контроллеры: принимают `Request`, вызывают сервисы, формируют `Response`. Маппинг ошибок на HTTP-статусы |
-| `src/api/routes/synth-routes.ts` | Express Router: определяет URL → controller. Только маршрутизация |
+| Файл                                      | Назначение                                                                                                                                                         |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/server.ts`                           | Точка входа HTTP-сервера. Только `createApp()` + `listen(PORT)`. Не должен содержать роутов, контроллеров, бизнес-логики                                           |
+| `src/api/app.ts`                          | Создаёт Express-приложение. Регистрирует middleware (`json`, `raw`), health-эндпоинты, подключает `src/api/routes/`, отдаёт статику из `web/dist/` (SPA fallback)  |
+| `src/api/types.ts`                        | Все DTO-интерфейсы для API: `GenerateRequest`, `MatchRequestBody`, `MatchResult`, `CreateMatchJobRequest`, `JobStatusResponse`, `JobListItem`, хелперы конвертации |
+| `src/api/services/synth-service.ts`       | Бизнес-логика: `generateWav()`, `matchWav()`, `matchWavWithJob()`. Работают с файловой системой, вызывают core-модули и worker-потоки. Ничего не знают про HTTP    |
+| `src/api/services/job-store.ts`           | Хранение job-ов в `jobs/`: создание, обновление статуса, CRUD. Файлы: `<id>.json`, `<id>_input.wav`, `<id>_result.wav`                                             |
+| `src/api/controllers/synth-controller.ts` | Контроллеры: принимают `Request`, вызывают сервисы, формируют `Response`. Маппинг ошибок на HTTP-статусы                                                           |
+| `src/api/routes/synth-routes.ts`          | Express Router: определяет URL → controller. Только маршрутизация                                                                                                  |
 
 ### Правила создания API
+
 1. **server.ts не трогать для добавления роутов.** Он только запускает приложение
 2. **Новый эндпоинт** → добавить контроллер → добавить роут → сервис, если бизнес-логика новая
 3. **Контроллеры** — тонкие: только маппинг `Request → Service` и `Service output → Response`. Вся аудио-логика в `services/`
@@ -237,15 +292,16 @@ web/src/
     └── ui/                 # Переиспользуемые UI-компоненты
 ```
 
-| Слой | Назначение |
-|---|---|
-| `shared/ui/` | Примитивы: `Button`, `Input`, `Select`, `AudioPlayer` |
-| `shared/api/` | `fetchApi<T>` (JSON), `fetchBlob` (binary) |
-| `features/synth-generator/` | Форма генерации: выбор пресета, настройка осцилляторов |
-| `features/wav-matcher/` | Форма подбора: загрузка WAV, создание job, отслеживание прогресса, скачивание |
-| `app/` | Точка входа, корневой компонент |
+| Слой                        | Назначение                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------- |
+| `shared/ui/`                | Примитивы: `Button`, `Input`, `Select`, `AudioPlayer`                         |
+| `shared/api/`               | `fetchApi<T>` (JSON), `fetchBlob` (binary)                                    |
+| `features/synth-generator/` | Форма генерации: выбор пресета, настройка осцилляторов                        |
+| `features/wav-matcher/`     | Форма подбора: загрузка WAV, создание job, отслеживание прогресса, скачивание |
+| `app/`                      | Точка входа, корневой компонент                                               |
 
 **Правила:**
+
 1. `features` может импортировать из `shared`, но не из других `features`
 2. `shared` не зависит от `features` и `app`
 3. UI-компоненты используют CSS Modules (`*.module.css`)
@@ -253,6 +309,7 @@ web/src/
 ### Дизайн-система веб-интерфейса
 
 UI построен на основе тёмной инженерной темы (Ableton-стиль):
+
 - Корневые цвета: `#121212`, поверхности `#1e1e1e` / `#2a2a2a`
 - Акцент: `#e67e22` (оранжевый)
 - Шрифты: `Inter` (UI), `JetBrains Mono` (значения/данные)
@@ -260,23 +317,23 @@ UI построен на основе тёмной инженерной темы
 - Все токены через CSS custom properties в `web/src/global.css`
 - При изменениях UI — используй токены из `global.css`, не хардкодь цвета
 
-| Файл | Назначение |
-|---|---|
-| `web/src/global.css` | Токены, глобальный ресет, тёмная тема (CSS variables) |
-| `web/src/app/App.tsx` / `.module.css` | Корневой лейаут, тёмный хедер, секции |
-| `web/src/shared/ui/` | Shared-компоненты: `Button`, `Input`, `Select`, `AudioPlayer` |
-| `web/src/features/synth-generator/ui/GeneratorForm.tsx` | Форма генерации (тёмные карточки, OSC-карточки) |
-| `web/src/features/wav-matcher/ui/MatcherForm.tsx` | Форма подбора (тёмные job-карточки, прогресс-бары, графики) |
+| Файл                                                    | Назначение                                                    |
+| ------------------------------------------------------- | ------------------------------------------------------------- |
+| `web/src/global.css`                                    | Токены, глобальный ресет, тёмная тема (CSS variables)         |
+| `web/src/app/App.tsx` / `.module.css`                   | Корневой лейаут, тёмный хедер, секции                         |
+| `web/src/shared/ui/`                                    | Shared-компоненты: `Button`, `Input`, `Select`, `AudioPlayer` |
+| `web/src/features/synth-generator/ui/GeneratorForm.tsx` | Форма генерации (тёмные карточки, OSC-карточки)               |
+| `web/src/features/wav-matcher/ui/MatcherForm.tsx`       | Форма подбора (тёмные job-карточки, прогресс-бары, графики)   |
 
 ### Деплой (Timeweb Cloud)
 
 Проект поддерживает контейнеризацию через Docker для деплоя
 на timeweb.cloud:
 
-| Файл | Назначение |
-|---|---|
-| `Dockerfile` | Мультисборка: бэкенд `npm ci` + `tsc`, веб `npm ci` + `vite build` → `node dist/server.js` |
-| `.dockerignore` | Исключает `node_modules`, `dist`, `web/node_modules`, `web/dist`, `*.wav`, `*.svg` |
+| Файл            | Назначение                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| `Dockerfile`    | Мультисборка: бэкенд `npm ci` + `tsc`, веб `npm ci` + `vite build` → `node dist/server.js` |
+| `.dockerignore` | Исключает `node_modules`, `dist`, `web/node_modules`, `web/dist`, `*.wav`, `*.svg`         |
 
 ```
 docker build -t synth .
@@ -294,51 +351,56 @@ Express отдаёт статику из `web/dist/` и настроен как 
 
 #### Генерация и синхронный мэтчинг
 
-| Метод | Путь | Описание |
-|---|---|---|
-| `GET` | `/health` | Health check |
-| `GET` | `/presets` | Список доступных пресетов |
-| `POST` | `/api/generate` | Генерация WAV (JSON: `preset` или `oscillators`) → WAV binary |
-| `POST` | `/api/match` | Подбор параметров (JSON: `wavBase64`) → JSON с `wavBase64`, `history`, `suppressionPercent` |
-| `POST` | `/api/match/binary` | Подбор параметров (raw `audio/wav`) → WAV binary |
+| Метод  | Путь                | Описание                                                                                    |
+| ------ | ------------------- | ------------------------------------------------------------------------------------------- |
+| `GET`  | `/health`           | Health check                                                                                |
+| `GET`  | `/presets`          | Список доступных пресетов                                                                   |
+| `POST` | `/api/generate`     | Генерация WAV (JSON: `preset` или `oscillators`) → WAV binary                               |
+| `POST` | `/api/match`        | Подбор параметров (JSON: `wavBase64`) → JSON с `wavBase64`, `history`, `suppressionPercent` |
+| `POST` | `/api/match/binary` | Подбор параметров (raw `audio/wav`) → WAV binary                                            |
 
 #### Асинхронный мэтчинг (job-очередь)
 
-| Метод | Путь | Описание |
-|---|---|---|
-| `POST` | `/api/match/job` | Создать job подбора (base64 WAV) → `{ id }` |
-| `POST` | `/api/match/job/json` | Создать job подбора (raw WAV binary) → `{ id }` |
-| `GET` | `/api/match/jobs` | Список всех job |
-| `GET` | `/api/match/jobs/:id` | Статус конкретного job |
-| `GET` | `/api/match/jobs/:id/download` | Скачать результат WAV (completed job) |
-| `GET` | `/api/match/jobs/:id/download-params` | Скачать параметры подбора JSON (completed job) |
-| `DELETE` | `/api/match/jobs/:id` | Удалить job и связанные файлы |
+| Метод    | Путь                                  | Описание                                        |
+| -------- | ------------------------------------- | ----------------------------------------------- |
+| `POST`   | `/api/match/job`                      | Создать job подбора (base64 WAV) → `{ id }`     |
+| `POST`   | `/api/match/job/json`                 | Создать job подбора (raw WAV binary) → `{ id }` |
+| `GET`    | `/api/match/jobs`                     | Список всех job                                 |
+| `GET`    | `/api/match/jobs/:id`                 | Статус конкретного job                          |
+| `GET`    | `/api/match/jobs/:id/download`        | Скачать результат WAV (completed job)           |
+| `GET`    | `/api/match/jobs/:id/download-params` | Скачать параметры подбора JSON (completed job)  |
+| `DELETE` | `/api/match/jobs/:id`                 | Удалить job и связанные файлы                   |
 
 ## Соглашения
 
 ### TypeScript (`tsconfig.json`)
+
 - `strict: true`
 - `verbatimModuleSyntax: false`
 - `noUncheckedIndexedAccess: true`
 - `exactOptionalPropertyTypes: false`
 
 ### Субагенты
+
 Полные инструкции субагентов — в `.opencode/agent/`.
 
-| Триггер | Субагент | Цель |
-|---|---|---|
-| Создана/изменена функция | `function-decomposition-reviewer` | Ревью single responsibility |
-| Новая функция / изменена сигнатура / изменена логика | `jsdoc` | Добавить JSDoc |
+| Триггер                                              | Субагент                          | Цель                        |
+| ---------------------------------------------------- | --------------------------------- | --------------------------- |
+| Создана/изменена функция                             | `function-decomposition-reviewer` | Ревью single responsibility |
+| Новая функция / изменена сигнатура / изменена логика | `jsdoc`                           | Добавить JSDoc              |
 
 ### Запреты
+
 - **Non-null assertion (`!`) запрещён.** Вместо `arr[i]!` читай значение в локальную переменную с fallback (`?? 0`) или перепиши код так, чтобы тип вывелся корректно.
 
 ### Принцип защиты побочных операций
+
 **Любой ввод/вывод, логирование, запись статуса, обновление прогресса —
 может упасть в любой момент.** Файловая система, сеть, база данных,
 воркер-каналы — всё это не надёжно по определению.
 
 **Правила:**
+
 1. **Критический путь не зависит от не-критического.** Прогресс-репорт,
    логирование, запись метаданных — не-критичны. Синтез, оптимизация,
    результат — критичны. Ошибка не-критичной операции не должна ронять
@@ -355,6 +417,7 @@ Express отдаёт статику из `web/dist/` и настроен как 
    а не падай с `SyntaxError` или `ENOENT`.
 
 ### Prettier (`.prettierrc`)
+
 - `semi: true`
 - `singleQuote: true`
 - `trailingComma: "all"`
@@ -364,6 +427,7 @@ Express отдаёт статику из `web/dist/` и настроен как 
 ## Важные детали
 
 ### Асимметрия маппинга
+
 `mapSynthConfigToVector()` возвращает `10 * N` значений (N — число
 осцилляторов). `mapVectorToSynthConfig()` всегда создаёт
 50 осцилляторов. Round-trip расширяет 2-осцилляторный пресет до 50
@@ -371,6 +435,7 @@ Express отдаёт статику из `web/dist/` и настроен как 
 генотипа.
 
 ### Worker-потоки
+
 Оптимизация выполняется в отдельном worker-потоке
 (`optimizer-worker.ts`) через `worker_threads`. `match-worker.ts`
 предоставляет промис-обёртку для удобного вызова. Фронтенд использует
