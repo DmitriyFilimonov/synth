@@ -8,6 +8,7 @@ import type { TPEConfig } from './optimize/hpo';
 export interface MatchWorkerProgress {
   iteration: number;
   suppressionPercent: number;
+  phase?: 'hpo' | 'cd';
   status?: string;
   stageIndex?: number;
   totalStages?: number;

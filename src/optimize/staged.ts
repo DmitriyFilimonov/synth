@@ -83,18 +83,24 @@ const generateStageDurations = (
   const totalMs = (totalSamples / sampleRate) * 1000;
   const effectiveMaxStage = Math.min(maxStageMs, totalMs);
 
+  // stageDurationMultiplier must be >= 2.0 for reasonable stage count.
+  // Values below 2.0 cause exponential stage proliferation (e.g. 1.1 → 125 stages).
+  const effectiveMultiplier = Math.max(stageDurationMultiplier, 2.0);
+
   const stages: number[] = [];
   let baseMs = initialStageMs;
   let done = false;
 
   while (!done) {
     const group: number[] = [baseMs];
-    if (baseMs < effectiveMaxStage) {
+    if (baseMs + 10 <= effectiveMaxStage) {
       group.push(baseMs + 10);
     }
-    if (group.length < 3 && baseMs + 20 < effectiveMaxStage) {
+    if (group.length < 3 && baseMs + 20 <= effectiveMaxStage) {
       group.push(baseMs + 20);
     }
+
+    const lastInGroup = group[group.length - 1] ?? baseMs;
 
     for (const ms of group) {
       const capped = Math.min(ms, effectiveMaxStage);
@@ -107,7 +113,7 @@ const generateStageDurations = (
 
     if (!done) {
       baseMs = Math.min(
-        baseMs * stageDurationMultiplier,
+        lastInGroup * effectiveMultiplier,
         effectiveMaxStage,
       );
     }
@@ -229,30 +235,29 @@ export const stagedOptimize = (
   );
 
   const numOscillators = initialVector.length / OSC_PARAMS;
+  const totalStages = stageDurationsMs.length;
+
+  console.log(
+    `[Opt] Starting ${totalStages} stages: 10ms→${maxStageMs}ms, CD=${maxIterations} iter/stage, Osc=${numOscillators}`,
+  );
 
   let currentVector = [...initialVector];
   const allHistory: ProgressEntry[] = [];
   const stageResults: StageResult[] = [];
 
-  let globalIteration = 0;
+  // Cumulative iteration offset across stages (CD iterations only, not HPO)
+  let iterationOffset = 0;
 
-  for (
-    let stageIdx = 0;
-    stageIdx < stageDurationsMs.length;
-    stageIdx++
-  ) {
+  for (let stageIdx = 0; stageIdx < totalStages; stageIdx++) {
     const durationMs = stageDurationsMs[stageIdx]!;
     const stageSamples = Math.round((durationMs / 1000) * sampleRate);
     const truncatedSignal = targetSignal.slice(0, stageSamples);
 
-    // Throttle progress updates to avoid OOM from postMessage queue flooding
-    // and cap `allHistory` size for safe JSON serialization
+    // Throttled progress callback for coordinate descent (phase=cd)
     const PROGRESS_THROTTLE_MS = 200;
     let lastStageProgressTime = 0;
 
-    const stageOnProgress: ProgressCallback = (entry) => {
-      globalIteration++;
-
+    const cdOnProgress: ProgressCallback = (entry) => {
       const now = Date.now();
       if (now - lastStageProgressTime < PROGRESS_THROTTLE_MS) {
         return;
@@ -265,10 +270,11 @@ export const stagedOptimize = (
       }
 
       const wrappedEntry: ProgressEntry = {
-        iteration: globalIteration,
+        iteration: iterationOffset + entry.iteration,
         suppressionPercent: entry.suppressionPercent,
+        phase: 'cd',
         stageIndex: stageIdx,
-        totalStages: stageDurationsMs.length,
+        totalStages,
         stageDurationMs: durationMs,
       };
       allHistory.push(wrappedEntry);
@@ -286,9 +292,8 @@ export const stagedOptimize = (
         hpoTrials,
       );
 
-      // HPO на укороченном сигнале этой стадии
       console.log(
-        `[StagedOpt] Stage ${stageIdx + 1}: HPO start (${hpoTrials}→${effectiveHpoTrials} trials, ${durationMs}ms, ${stageSamples} samples)`,
+        `[HPO] Stage ${stageIdx + 1}/${totalStages}: ${effectiveHpoTrials} trials × 15 iter, signal=${durationMs}ms`,
       );
 
       const hpoResult = runHPO({
@@ -298,12 +303,25 @@ export const stagedOptimize = (
         numOscillators,
         nTrials: effectiveHpoTrials,
         tpeConfig,
-        onProgress: stageOnProgress,
+        onProgress: (hpoEntry) => {
+          // Report HPO trials briefly so UI shows activity, but
+          // keep phase='hpo' separate from CD iterations
+          const wrappedEntry: ProgressEntry = {
+            iteration: iterationOffset,
+            suppressionPercent: hpoEntry.suppressionPercent,
+            phase: 'hpo',
+            stageIndex: stageIdx,
+            totalStages,
+            stageDurationMs: durationMs,
+          };
+          onProgress?.(wrappedEntry);
+        },
       });
 
       const bestHyper = hpoResult.bestHyperparams;
       currentVector = hpoResult.bestVector;
-      cdMaxIterations = bestHyper.iterations;
+      // After HPO: user controls iterations, HPO tunes step sizes and thresholds
+      cdMaxIterations = maxIterations;
       cdStepGrowthAdd = bestHyper.stepGrowthAdd;
       cdStepDecayFactor = bestHyper.stepDecayFactor;
       usedConfig = {
@@ -339,9 +357,12 @@ export const stagedOptimize = (
 
       const hpoSuppression = hpoResult.bestValue;
       console.log(
-        `[StagedOpt] Stage ${stageIdx + 1}: HPO done, best=${hpoSuppression.toFixed(2)}%`,
+        `[HPO] Stage ${stageIdx + 1} done: ${hpoSuppression.toFixed(2)}%. Starting CD (${maxIterations} iter)...`,
       );
     } else {
+      console.log(
+        `[CD] Stage ${stageIdx + 1}/${totalStages}: ${maxIterations} iter, ${durationMs}ms`,
+      );
       cdMaxIterations = maxIterations;
       cdStepGrowthAdd = stepGrowthAdd;
       cdStepDecayFactor = stepDecayFactor;
@@ -353,13 +374,18 @@ export const stagedOptimize = (
       truncatedSignal,
       sampleRate,
       cdMaxIterations,
-      stageOnProgress,
+      cdOnProgress,
       cdStepGrowthAdd,
       cdStepDecayFactor,
       usedConfig,
     );
 
     currentVector = vector;
+
+    // Update cumulative offset for next stage's iteration numbering
+    if (history.length > 0) {
+      iterationOffset += history[history.length - 1]?.iteration ?? 0;
+    }
 
     // После завершения этапа — экстраполируем вектор для следующего
     // Увеличиваем osc.duration и ampEnv.duration до новой продолжительности,
@@ -388,10 +414,7 @@ export const stagedOptimize = (
     stageResults.push(stageResult);
 
     console.log(
-      `[StagedOpt] Stage ${stageIdx + 1}/${stageDurationsMs.length}: ` +
-        `${durationMs}ms (${stageSamples} samples), ` +
-        `suppression=${lastSuppression.toFixed(2)}%, ` +
-        `iterations=${history.length}`,
+      `[CD] Stage ${stageIdx + 1}/${totalStages} done: ${lastSuppression.toFixed(2)}% in ${history.length} iter`,
     );
   }
 

@@ -62,19 +62,6 @@ export const HYPERPARAM_SPACE: HyperparamDef[] = [
     description: 'Step size decay multiplier on plateau',
     currentValue: 0.97,
   },
-  {
-    name: 'stageDurationMultiplier',
-    distribution: {
-      type: 'float',
-      low: 1.2,
-      high: 5,
-      log: false,
-      step: null,
-    },
-    description: 'Stage duration growth multiplier (staged opt)',
-    currentValue: 2,
-  },
-
   // --- coordinate-descent.ts (скрытые константы) ---
   {
     name: 'explorationStartStep',
@@ -268,7 +255,6 @@ export const HYPERPARAM_DEFAULTS: Record<string, number> = {
   iterations: 100,
   stepGrowthAdd: 0.0007,
   stepDecayFactor: 0.97,
-  stageDurationMultiplier: 2,
   explorationStartStep: 0.025,
   explorationMinStep: 0.01,
   refinementStartStep: 0.01,
@@ -294,7 +280,6 @@ export interface ResolvedHyperparams {
   iterations: number;
   stepGrowthAdd: number;
   stepDecayFactor: number;
-  stageDurationMultiplier: number;
   // coordinate-descent
   explorationStartStep: number;
   explorationMinStep: number;
@@ -331,10 +316,6 @@ export function resolveHyperparams(
     stepDecayFactor: get(
       'stepDecayFactor',
       D.stepDecayFactor as number,
-    ),
-    stageDurationMultiplier: get(
-      'stageDurationMultiplier',
-      D.stageDurationMultiplier as number,
     ),
     explorationStartStep: get(
       'explorationStartStep',

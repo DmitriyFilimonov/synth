@@ -10,8 +10,10 @@ if (!parentPort) {
   throw new Error('Must run as worker thread');
 }
 
-const CONSOLE_LOG_THROTTLE_MS = 200;
+const CONSOLE_LOG_THROTTLE_MS = 50;
+const IMPORTANT_LOG_THROTTLE_MS = 5;
 let lastLogTime = 0;
+let lastImportantLogTime = 0;
 
 const sendLog = (message: string): void => {
   try {
@@ -22,10 +24,20 @@ const sendLog = (message: string): void => {
 };
 
 console.log = (...args: unknown[]) => {
+  const msg = args.map((a) => String(a)).join(' ');
+  const isImportant = /^\[/.test(msg);
   const now = Date.now();
-  if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS) return;
-  lastLogTime = now;
-  sendLog(args.map((a) => String(a)).join(' '));
+
+  if (isImportant) {
+    if (now - lastImportantLogTime < IMPORTANT_LOG_THROTTLE_MS)
+      return;
+    lastImportantLogTime = now;
+  } else {
+    if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS) return;
+    lastLogTime = now;
+  }
+
+  sendLog(msg);
 };
 console.error = (...args: unknown[]) => {
   const now = Date.now();
@@ -60,20 +72,19 @@ parentPort.on('message', (msg: WorkerMessage) => {
 
     const hasUserOverride =
       msg.stepGrowthAdd !== undefined &&
-      msg.stepDecayFactor !== undefined &&
-      msg.stageDurationMultiplier !== undefined;
+      msg.stepDecayFactor !== undefined;
 
     let vector: number[];
     let history: Array<{
       iteration: number;
       suppressionPercent: number;
+      phase?: 'hpo' | 'cd';
       stageIndex?: number;
       totalStages?: number;
       stageDurationMs?: number;
     }>;
 
     if (!hasUserOverride) {
-      // HPO выполняется внутри stagedOptimize для каждой стадии
       const nTrials = msg.hpoTrials ?? MATCH_DEFAULT_HPO_TRIALS;
       const numOscillators = msg.initialVector.length / 10;
 
@@ -81,7 +92,6 @@ parentPort.on('message', (msg: WorkerMessage) => {
         `Starting staged optimization with per-stage HPO: ${nTrials} trials/stage, ${numOscillators} oscillators`,
       );
 
-      // Throttle progress to prevent IPC queue overflow
       const PROGRESS_THROTTLE_MS = 100;
       let lastProgressMs = 0;
 
@@ -89,14 +99,18 @@ parentPort.on('message', (msg: WorkerMessage) => {
         initialVector: msg.initialVector,
         targetSignal,
         sampleRate: msg.sampleRate,
-        maxIterations:100,
+        maxIterations: msg.maxIterations,
         hpoTrials: nTrials,
         tpeConfig: msg.hpoTpeConfig,
+        stageDurationMultiplier: msg.stageDurationMultiplier,
         onProgress: (entry) => {
           const now = Date.now();
           if (now - lastProgressMs >= PROGRESS_THROTTLE_MS) {
             lastProgressMs = now;
-            parentPort?.postMessage({ type: 'progress', data: entry });
+            parentPort?.postMessage({
+              type: 'progress',
+              data: entry,
+            });
           }
         },
       });

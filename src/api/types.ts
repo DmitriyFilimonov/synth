@@ -37,6 +37,7 @@ export interface MatchResult {
   history: {
     iteration: number;
     suppressionPercent: number;
+    phase?: 'hpo' | 'cd';
     status?: string;
     stageIndex?: number;
     totalStages?: number;
@@ -77,6 +78,7 @@ export interface JobStatusResponse {
   progress: {
     iteration: number;
     suppressionPercent: number;
+    phase?: 'hpo' | 'cd';
     stageIndex?: number;
     totalStages?: number;
     stageDurationMs?: number;

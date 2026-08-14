@@ -265,6 +265,16 @@
   white-space: nowrap;
 }
 
+.phaseBadge {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  font-weight: var(--font-semibold);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  color: var(--color-text-on-surface);
+}
+
 .stageProgressBar {
   flex: 1;
   height: var(--space-1);

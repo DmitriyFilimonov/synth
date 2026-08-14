@@ -10,6 +10,7 @@ export interface MatchTargetInfo {
 export interface MatchHistoryEntry {
   iteration: number;
   suppressionPercent: number;
+  phase?: 'hpo' | 'cd';
   status?: string;
   stageIndex?: number;
   totalStages?: number;

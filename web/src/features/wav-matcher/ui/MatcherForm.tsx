@@ -33,6 +33,7 @@ function OptimizationChart({
   progress: {
     iteration: number;
     suppressionPercent: number;
+    phase?: 'hpo' | 'cd';
     stageIndex?: number;
   }[];
   height?: number;
@@ -58,14 +59,18 @@ function OptimizationChart({
   const y = (sup: number) =>
     padding.top + chartH - (sup / maxSup) * chartH;
 
-  const pathD = progress
+  const ticksY = [0, 0.25, 0.5, 0.75, 1].map((f) => maxSup * f);
+
+  // Separate HPO and CD entries for different visual rendering
+  const cdEntries = progress.filter((p) => p.phase !== 'hpo');
+  const hpoEntries = progress.filter((p) => p.phase === 'hpo');
+
+  const cdPathD = cdEntries
     .map(
       (p, i) =>
         `${i === 0 ? 'M' : 'L'} ${x(p.iteration).toFixed(1)} ${y(p.suppressionPercent).toFixed(1)}`,
     )
     .join(' ');
-
-  const ticksY = [0, 0.25, 0.5, 0.75, 1].map((f) => maxSup * f);
 
   const hasStages = progress.some((p) => p.stageIndex !== undefined);
   const stageBoundaries: number[] = [];
@@ -118,12 +123,28 @@ function OptimizationChart({
           />
         );
       })}
-      <path
-        d={pathD}
-        fill="none"
-        stroke={CHART_COLOR_LINE}
-        strokeWidth="2"
-      />
+      {hpoEntries.length > 0 && (
+        <g>
+          {hpoEntries.map((p, i) => (
+            <circle
+              key={i}
+              cx={x(p.iteration)}
+              cy={y(p.suppressionPercent)}
+              r="2"
+              fill="#ef4444"
+              opacity="0.6"
+            />
+          ))}
+        </g>
+      )}
+      {cdPathD && (
+        <path
+          d={cdPathD}
+          fill="none"
+          stroke={CHART_COLOR_LINE}
+          strokeWidth="2"
+        />
+      )}
       <text
         x={width / 2}
         y={height - 4}
@@ -248,6 +269,7 @@ function JobDetail({
       current: last.stageIndex + 1,
       total: last.totalStages ?? 0,
       durationMs: last.stageDurationMs ?? 0,
+      phase: last.phase ?? 'cd',
     };
   })();
 
@@ -295,6 +317,23 @@ function JobDetail({
           <div className={styles.stageInfo}>
             <span className={styles.stageLabel}>
               STAGE {stageInfo.current}/{stageInfo.total}
+            </span>
+            <span
+              className={styles.phaseBadge}
+              style={{
+                background:
+                  stageInfo.phase === 'hpo'
+                    ? '#991b1b55'
+                    : '#1e3a5f55',
+                color:
+                  stageInfo.phase === 'hpo'
+                    ? '#ef4444'
+                    : '#3b82f6',
+              }}
+            >
+              {stageInfo.phase === 'hpo'
+                ? `HPO`
+                : `CD ${job.params.maxIterations}it`}
             </span>
             <span className={styles.stageDuration}>
               {stageInfo.durationMs}ms

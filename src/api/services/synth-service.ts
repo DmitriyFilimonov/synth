@@ -35,6 +35,7 @@ interface MatchedFile {
   history: {
     iteration: number;
     suppressionPercent: number;
+    phase?: 'hpo' | 'cd';
     stageIndex?: number;
     totalStages?: number;
     stageDurationMs?: number;
@@ -96,6 +97,7 @@ export async function matchWav(
     const history: {
       iteration: number;
       suppressionPercent: number;
+      phase?: 'hpo' | 'cd';
       stageIndex?: number;
       totalStages?: number;
       stageDurationMs?: number;
@@ -109,9 +111,7 @@ export async function matchWav(
     );
 
     const hasUserOverride =
-      stepGrowthAdd !== undefined &&
-      stepDecayFactor !== undefined &&
-      stageDurationMultiplier !== undefined;
+      stepGrowthAdd !== undefined && stepDecayFactor !== undefined;
 
     const result = await matchWithWorker({
       targetWavPath: tempInput,
@@ -120,12 +120,11 @@ export async function matchWav(
       sampleRate: 44100,
       maxIterations,
       ...(hasUserOverride
-        ? {
-            stepGrowthAdd,
-            stepDecayFactor,
-            stageDurationMultiplier,
-          }
+        ? { stepGrowthAdd, stepDecayFactor }
         : { hpoTrials }),
+      ...(stageDurationMultiplier !== undefined
+        ? { stageDurationMultiplier }
+        : {}),
       onProgress: (entry) => {
         history.push(entry);
       },
@@ -216,6 +215,7 @@ async function runMatchJob(
   const history: {
     iteration: number;
     suppressionPercent: number;
+    phase?: 'hpo' | 'cd';
     stageIndex?: number;
     totalStages?: number;
     stageDurationMs?: number;
@@ -234,9 +234,7 @@ async function runMatchJob(
     );
 
     const hasUserOverride =
-      stepGrowthAdd !== undefined &&
-      stepDecayFactor !== undefined &&
-      stageDurationMultiplier !== undefined;
+      stepGrowthAdd !== undefined && stepDecayFactor !== undefined;
 
     const result = await matchWithWorker({
       targetWavPath: inputPath,
@@ -245,12 +243,11 @@ async function runMatchJob(
       sampleRate: 44100,
       maxIterations,
       ...(hasUserOverride
-        ? {
-            stepGrowthAdd,
-            stepDecayFactor,
-            stageDurationMultiplier,
-          }
+        ? { stepGrowthAdd, stepDecayFactor }
         : { hpoTrials }),
+      ...(stageDurationMultiplier !== undefined
+        ? { stageDurationMultiplier }
+        : {}),
       onProgress: (entry) => {
         history.push(entry);
         const now = Date.now();

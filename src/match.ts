@@ -2,6 +2,7 @@ import { SAMPLE_RATE } from './consts';
 import { mapSynthConfigToVector } from './synth-config-to-vector';
 import { readWav } from './read-wav';
 import { SYNTH_DEFAULT_PRESET } from './match-preset';
+import { MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER } from './match-defaults';
 import {
   optimize,
   ProgressCallback,
@@ -121,8 +122,7 @@ export const match = (arg: ArgMatch): MatchResult => {
 
   const hasUserOverride =
     arg.stepGrowthAdd !== undefined &&
-    arg.stepDecayFactor !== undefined &&
-    arg.stageDurationMultiplier !== undefined;
+    arg.stepDecayFactor !== undefined;
 
   if (hasUserOverride) {
     const result = stagedOptimize({
@@ -151,7 +151,7 @@ export const match = (arg: ArgMatch): MatchResult => {
       initialVector,
       numOscillators,
       nTrials,
-      onProgress: arg.onProgress,
+      onProgress: undefined,
       tpeConfig: arg.hpoConfig,
     });
 
@@ -161,12 +161,13 @@ export const match = (arg: ArgMatch): MatchResult => {
       initialVector: hpoResult.bestVector,
       targetSignal,
       sampleRate: SAMPLE_RATE,
-      maxIterations: hpoResult.bestHyperparams.iterations,
+      maxIterations,
       stepGrowthAdd: hpoResult.bestHyperparams.stepGrowthAdd,
       stepDecayFactor: hpoResult.bestHyperparams.stepDecayFactor,
       stageDurationMultiplier:
-        hpoResult.bestHyperparams.stageDurationMultiplier,
-      initialStageMs: hpoResult.bestHyperparams.initialStageMs,
+        arg.stageDurationMultiplier ??
+        MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
+      initialStageMs: 10,
       config,
       onProgress: arg.onProgress,
     });

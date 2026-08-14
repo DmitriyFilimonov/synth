@@ -7,9 +7,9 @@ import {
   MATCH_DEFAULT_HPO_TRIALS,
 } from './match-defaults';
 
-const targetWavPath = './targets/techno_1.wav';
+const targetWavPath = './fixtures/output15.wav';
 const outputWavPath =
-  './matches/techno_1' + Date().toString() + '.wav';
+  './matches/output15' + Date().toString() + '.wav';
 
 console.log(`Reading target: ${targetWavPath}`);
 const targetWav = readWav(targetWavPath);

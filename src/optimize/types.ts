@@ -1,6 +1,7 @@
 export interface ProgressEntry {
   iteration: number;
   suppressionPercent: number;
+  phase?: 'hpo' | 'cd';
   stageIndex?: number;
   totalStages?: number;
   stageDurationMs?: number;

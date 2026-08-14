@@ -39,6 +39,8 @@ export interface ArgHPO {
   onProgress?: (entry: HPOProgressEntry) => void;
   tpeConfig?: Partial<TPEConfig>;
   direction?: OptimizationDirection;
+  /** CD iterations per HPO trial. Controls trial cost, not final CD. Default: 15 */
+  cdIterationsPerTrial?: number;
 }
 
 export const runHPO = (arg: ArgHPO): HPOResult => {
@@ -50,6 +52,7 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
     onProgress,
     tpeConfig,
     direction,
+    cdIterationsPerTrial = 7,
   } = arg;
 
   const sampler = new TPESampler(tpeConfig);
@@ -74,11 +77,13 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
       trialValue: null,
     });
 
+    // HPO trials use fixed small cdIterationsPerTrial for fast comparison.
+    // Final CD uses user's maxIterations or bestHyper.iterations.
     const { history } = coordinateDescent(
       initialVector,
       targetSignal,
       sampleRate,
-      hyperparams.iterations,
+      cdIterationsPerTrial,
       (entry) => {
         onProgress?.({
           iteration: trialIdx + 1,
@@ -120,11 +125,13 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
     : resolveHyperparams({});
 
   const bestCoordConfig = buildCoordDescentConfig(bestHyperparams);
+  // Final HPO validation uses cdIterationsPerTrial, not iterations from
+  // hyperparams (which is now a user-controlled value, not HPO-sampled)
   const { vector: bestVector } = coordinateDescent(
     initialVector,
     targetSignal,
     sampleRate,
-    bestHyperparams.iterations,
+    cdIterationsPerTrial,
     undefined,
     bestHyperparams.stepGrowthAdd,
     bestHyperparams.stepDecayFactor,
@@ -157,10 +164,10 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
 function suggestTrialParams(
   trial: Trial,
 ): Record<string, number | string | boolean> {
-  trial.suggestInt('iterations', 50, 500, { step: 10 });
+  // Note: `iterations` is NOT a hyperparameter. User controls it via
+  // maxIterations. HPO trials use cdIterationsPerTrial (default 15).
   trial.suggestFloat('stepGrowthAdd', 0.0001, 0.01, { log: true });
   trial.suggestFloat('stepDecayFactor', 0.85, 0.995);
-  trial.suggestFloat('stageDurationMultiplier', 1.2, 5);
   trial.suggestFloat('explorationStartStep', 0.005, 0.1);
   trial.suggestFloat('explorationMinStep', 0.001, 0.05);
   trial.suggestFloat('refinementStartStep', 0.001, 0.05);
