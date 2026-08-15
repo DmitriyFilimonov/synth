@@ -64,9 +64,10 @@ export const envelopeCreator =
     const clampedX = Math.min(arg.x, argEnvelopCreator.duration);
 
     return (
+      argEnvelopCreator.max *
       Math.E **
-      (Math.log(argEnvelopCreator.min ?? MIN) *
-        (clampedX / argEnvelopCreator.duration) **
-          (argEnvelopCreator.slope ?? 1))
+        (Math.log(argEnvelopCreator.min ?? MIN) *
+          (clampedX / argEnvelopCreator.duration) **
+            (argEnvelopCreator.slope ?? 1))
     );
   };
