@@ -9,6 +9,11 @@ import type {
   CoordinateDescentConfig,
 } from './types';
 import { OSC_PARAMS } from './consts';
+import { oscConfigNormales, ampEnvConfigNormales } from '../synth';
+import {
+  evaluateSuppressionWindowed,
+  createWaveForm,
+} from './evaluate';
 
 export interface ArgStagedOptimize extends Omit<
   ArgOptimize,
@@ -42,9 +47,10 @@ export interface StagedOptimizeResult {
   stageResults: StageResult[];
 }
 
-// Нормализация osc.duration: min=0, max=5
-const OSC_DURATION_MIN = 0;
-const OSC_DURATION_MAX = 5;
+// Диапазоны нормализации длительностей — единственный источник
+// истины в synth.ts (те же, что использует vector-to-synth-config.ts)
+const OSC_DURATION_MIN = oscConfigNormales.duration.min;
+const OSC_DURATION_MAX = oscConfigNormales.duration.max;
 
 /**
  * Вычисляет начальную длительность стадии на основе фундаментальной частоты.
@@ -66,9 +72,8 @@ export const computeInitialStageMs = (
   return Math.max(10, Math.min(100, targetMs));
 };
 
-// Нормализация ampEnv.duration: min=0.5, max=5
-const AMP_ENV_DURATION_MIN = 0.5;
-const AMP_ENV_DURATION_MAX = 5;
+const AMP_ENV_DURATION_MIN = ampEnvConfigNormales.duration.min;
+const AMP_ENV_DURATION_MAX = ampEnvConfigNormales.duration.max;
 
 // Бюджет вычислений HPO: при коротких стадиях — больше trials,
 // при длинных — меньше, координатный спуск стоит дорого.
@@ -163,16 +168,25 @@ const normalizeDuration = (
 };
 
 /**
- * Экстраполяция вектора между этапами многоэтапной оптимизации.
- * Увеличивает osc.duration и ampEnv.duration осцилляторов до новой
- * продолжительности, сохраняя уже оптимизированные параметры (частоты,
- * фазы, slope, startLevel, endLevel) без изменений.
+ * Экстраполирует вектор между этапами многоэтапной оптимизации:
+ * увеличивает osc.duration и ampEnv.duration включённых
+ * осцилляторов минимум до новой продолжительности стадии,
+ * сохраняя уже оптимизированные параметры (частоты, фазы, slope,
+ * startLevel, endLevel) без изменений.
  *
- * Физический смысл: осциллятор уже "научился" звучать определённым
- * образом на первых N ms. При увеличении фрагмента до M > N ms
- * растягиваем длительность, чтобы осциллятор мог звучать всё M ms,
- * но сохраняя форму огибающей на уже выученной части без искажений
- * от оптимизатора.
+ * @param vector - Нормализованный вектор параметров в [0, 1]
+ * @param newDurationMs - Длительность следующей стадии (мс)
+ * @returns Новый вектор с растянутыми длительностями
+ * @remarks Нормализация/денормализация длительностей использует
+ *   диапазоны из `synth.ts` (`oscConfigNormales.duration`,
+ *   `ampEnvConfigNormales.duration`: [1/44100, 0.5] сек) — тот же
+ *   единственный источник истины, что и
+ *   `vector-to-synth-config.ts`. Значения вне [0, 1] клампятся.
+ *   Выключенные осцилляторы (flag < 0.5) не изменяются.
+ *   Физический смысл: осциллятор уже «научился» звучать на первых
+ *   N ms; при расширении фрагмента до M > N ms длительность
+ *   растягивается, чтобы он звучал все M ms без искажения формы
+ *   огибающей на выученной части.
  */
 export const extrapolateVectorBetweenStages = (
   vector: readonly number[],
@@ -226,6 +240,28 @@ export const extrapolateVectorBetweenStages = (
   return result;
 };
 
+/**
+ * Выполняет поэтапную оптимизацию по нарастающим длительностям
+ * сигнала: на каждой стадии HPO (опционально) подбирает
+ * гиперпараметры, затем coordinate descent уточняет вектор,
+ * после чего длительности экстраполируются на следующую стадию.
+ *
+ * @param arg - Параметры staged-оптимизации: целевой сигнал,
+ *   sample rate, начальный вектор, лимит итераций CD, настройки
+ *   стадий (initialStageMs, stageDurationMultiplier, maxStageMs),
+ *   HPO (hpoTrials, tpeConfig), fundamentalHz и переопределения
+ *   `CoordinateDescentConfig`
+ * @returns Итоговый вектор, объединённая история прогресса
+ *   (phase 'hpo'/'cd') и результаты по стадиям
+ * @remarks HPO-наблюдения кумулятивно передаются между стадиями
+ *   (TPE строит модель на всей истории). Guard против регрессии
+ *   HPO: `bestVector` из HPO принимается только если его
+ *   windowed-score на текущей стадии >= score входного
+ *   (экстраполированного) вектора; иначе входной вектор
+ *   сохраняется, а от HPO берутся только гиперпараметры.
+ *   Прогресс CD троттлится (200 мс), история ограничивается
+ *   для защиты от OOM при сериализации.
+ */
 export const stagedOptimize = (
   arg: ArgStagedOptimize & {
     config?: Partial<CoordinateDescentConfig>;
@@ -366,7 +402,27 @@ export const stagedOptimize = (
       }
 
       const bestHyper = hpoResult.bestHyperparams;
-      currentVector = hpoResult.bestVector;
+      // Guard against HPO regression: keep the incoming
+      // (extrapolated) vector if it scores better on this window
+      const incomingScore = evaluateSuppressionWindowed(
+        createWaveForm(currentVector, sampleRate, stageSamples),
+        truncatedSignal,
+      );
+      const hpoScore = evaluateSuppressionWindowed(
+        createWaveForm(
+          hpoResult.bestVector,
+          sampleRate,
+          stageSamples,
+        ),
+        truncatedSignal,
+      );
+      if (hpoScore >= incomingScore) {
+        currentVector = hpoResult.bestVector;
+      } else {
+        console.log(
+          `[HPO] Stage ${stageIdx + 1}: keeping incoming vector (${incomingScore.toFixed(2)}% > ${hpoScore.toFixed(2)}%)`,
+        );
+      }
       // After HPO: user controls iterations, HPO tunes step sizes and thresholds
       cdMaxIterations = maxIterations;
       cdStepGrowthAdd = bestHyper.stepGrowthAdd;
