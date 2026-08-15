@@ -76,8 +76,6 @@ const step = Math.floor(length / windowCount);
    на каждом файле; скачки метрики на границах 100/200/300 мс
    исчезли (проверить unit-скриптом: score(len=199ms) ≈
    score(len=200ms) для одного и того же сигнала, дельта < 0.5 п.п.).
-5. После правок `src/optimize/` запустить субагента
-   `optimizer-reviewer`.
 
 ## Файлы
 

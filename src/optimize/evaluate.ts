@@ -165,6 +165,16 @@ const findOptimalScaleFor = (
   return { scale: bestScale, suppressionPercent: bestScore };
 };
 
+/**
+ * Evaluates suppression using continuous window coverage.
+ *
+ * Strategy: contiguous non-overlapping windows of fixed size.
+ * - Full windows get weight = 1.0
+ * - A trailing partial window gets weight = tailLength / windowSize
+ *
+ * This guarantees every sample is included with proportional weight
+ * and keeps the number of findOptimalScaleFor calls at most +1 vs old.
+ */
 export const evaluateSuppressionWindowed = (
   generated: number[],
   targetSignal: readonly number[],
@@ -175,25 +185,21 @@ export const evaluateSuppressionWindowed = (
   const length = targetSignal.length;
   const windowSize = Math.round(WINDOW_SIZE_SECONDS * sampleRate);
 
-  const windowCount = Math.max(1, Math.floor(length / windowSize));
-  const step = Math.floor(length / windowCount);
+  // Full contiguous windows from start
+  const fullWindows = Math.floor(length / windowSize);
+  const tailLength = length - fullWindows * windowSize;
 
   let windowScoreSum = 0;
-  let windowCountUsed = 0;
+  let totalWeight = 0;
 
-  for (let w = 0; w < windowCount; w++) {
-    const start = w * step;
-    const end = Math.min(start + windowSize, length);
-    const count = end - start;
-
-    if (count === 0) {
-      break;
-    }
+  // Full windows (weight = 1.0 each)
+  for (let w = 0; w < fullWindows; w++) {
+    const start = w * windowSize;
 
     const targetWindow: number[] = [];
     const generatedWindow: number[] = [];
 
-    for (let i = start; i < end; i++) {
+    for (let i = start; i < start + windowSize; i++) {
       targetWindow.push(targetSignal[i] ?? 0);
       generatedWindow.push(generated[i] ?? 0);
     }
@@ -208,10 +214,33 @@ export const evaluateSuppressionWindowed = (
       findOptimalScaleFor(generatedWindow, targetWindow);
 
     windowScoreSum += localBestScore;
-    windowCountUsed++;
+    totalWeight += 1;
   }
 
-  if (windowCountUsed === 0) {
+  // Trailing partial window (weight proportional to coverage)
+  if (tailLength > 0) {
+    const start = fullWindows * windowSize;
+    const targetWindow: number[] = [];
+    const generatedWindow: number[] = [];
+
+    for (let i = start; i < length; i++) {
+      targetWindow.push(targetSignal[i] ?? 0);
+      generatedWindow.push(generated[i] ?? 0);
+    }
+
+    const targetRMS = calculateRMS(targetWindow);
+
+    if (targetRMS >= 1) {
+      const { suppressionPercent: localBestScore } =
+        findOptimalScaleFor(generatedWindow, targetWindow);
+
+      const weight = tailLength / windowSize;
+      windowScoreSum += localBestScore * weight;
+      totalWeight += weight;
+    }
+  }
+
+  if (totalWeight === 0) {
     const assessment = assessCancellationQuality({
       target: [...targetSignal],
       generated: generated.map((s) => -s),
@@ -219,7 +248,7 @@ export const evaluateSuppressionWindowed = (
     return assessment.suppressionPercent;
   }
 
-  const avgLocalScore = windowScoreSum / windowCountUsed;
+  const avgLocalScore = windowScoreSum / totalWeight;
 
   const { suppressionPercent: globalBestScore } = findOptimalScaleFor(
     generated,
