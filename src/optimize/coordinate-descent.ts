@@ -17,6 +17,10 @@ import type {
   ArgOptimize,
 } from './types';
 
+const IDX_FREQ_BASE = 1;
+const IDX_FREQ_START = 2;
+const IDX_PHASE = 5;
+
 /**
  * Конфигурация алгоритма coordinate descent.
  * Вынесена из модуля, чтобы HPO мог подбирать эти параметры.
@@ -38,12 +42,16 @@ export interface CoordinateDescentConfig {
   maxRestartsBeforeRandomRestart: number;
   /** Kick fallback: if score < bestScore × threshold, restore genome. */
   kickFallbackThreshold: number;
-  /** Three-phase step schedule. */
+  /** Three-phase step schedule (applies to non-freq/phase params). */
   restartSchedule: Array<{
     startStep: number;
     minStep: number;
     label: string;
   }>;
+  /** Frequency step scale (offsets 1, 2). Multiplier applied to base schedule step. */
+  frequencyStep: number;
+  /** Phase step scale (offset 5). Multiplier applied to base schedule step. */
+  phaseStep: number;
 }
 
 /** Default config values (previous hardcoded constants). */
@@ -61,9 +69,28 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
     { startStep: 0.01, minStep: 0.003, label: 'REFINEMENT' },
     { startStep: 0.0025, minStep: 0.0001, label: 'PRECISION' },
   ],
+  frequencyStep: 0.0000001,
+  phaseStep: 0.003125,
 };
 
 const PERTURBATION = 0.05;
+
+const getParamStep = (
+  paramIndex: number,
+  baseStep: number,
+  frequencyStep: number,
+  phaseStep: number,
+  minStep: number,
+): number => {
+  const offset = paramIndex % OSC_PARAMS;
+  if (offset === IDX_FREQ_BASE || offset === IDX_FREQ_START) {
+    return frequencyStep;
+  }
+  if (offset === IDX_PHASE) {
+    return phaseStep;
+  }
+  return Math.max(baseStep, minStep);
+};
 
 const optimizeSingleParameter = (
   genome: readonly number[],
@@ -117,6 +144,9 @@ const optimizeIteration = (
   currentBest: number,
   step: number,
   firstOscMinVol: number,
+  frequencyStep: number,
+  phaseStep: number,
+  minStep: number,
 ): { genome: number[]; score: number } => {
   let score = currentBest;
 
@@ -129,10 +159,17 @@ const optimizeIteration = (
     }
     for (let p = 1; p < OSC_PARAMS; p++) {
       const i = base + p;
+      const effectiveStep = getParamStep(
+        i,
+        step,
+        frequencyStep,
+        phaseStep,
+        minStep,
+      );
       const result = optimizeSingleParameter(
         genome,
         i,
-        step,
+        effectiveStep,
         targetSignal,
         sampleRate,
         score,
@@ -328,6 +365,9 @@ export const coordinateDescent = (
     const cycleIterStart = iter;
     let genomeChanged = false;
 
+    const frequencyStep = cfg.frequencyStep;
+    const phaseStep = cfg.phaseStep;
+
     while (iter < maxIterations) {
       const prevGenome = genome.slice();
       const result = optimizeIteration(
@@ -339,6 +379,9 @@ export const coordinateDescent = (
         currentBest,
         step,
         firstOscInitVolume,
+        frequencyStep,
+        phaseStep,
+        cycle.minStep,
       );
       genome = result.genome;
       const scoreImproved =

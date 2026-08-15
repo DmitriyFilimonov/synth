@@ -127,9 +127,10 @@ Generate → Compare → Save WAV + SVG
 
 #### Текущее поведение (изменяемое, НЕ инвариант)
 
-- Мульти-цикловый подход (дефолты `DEFAULT_COORD_DESCENT_CONFIG`): `EXPLORATION` (0.025→0.01) → `REFINEMENT` (0.01→0.003) → `PRECISION` (0.0025→0.0001)
+- Мульти-цикловый подход (дефолты `DEFAULT_COORD_DESCENT_CONFIG`): `EXPLORATION` (0.025→0.01) → `REFINEMENT` (0.01→0.003) → `PRECISION` (0.0025→0.0001) — применяется к non-freq/phase параметрам
+- Пошаговые размеры по типам параметров: `frequencyStep` (0.0000001, offsets 1-2) и `phaseStep` (0.003125, offset 5) — фиксированные, НЕ зависят от цикла; остальные параметры используют шаг из текущего цикла (EXPLORATION/REFINEMENT/PRECISION)
 - Плато-пинки: при `3` итерациях без улучшения — случайный пинк одного параметра; после `5` пинков — полный рандомный рестарт
-- Затухание шага: при `4` итерациях без улучшения шаг × `0.9` (`stagnationStepDecayFactor`); выход из цикла, если шаг < minStep
+- Затухание шага: при `4` итерациях без улучшения шаг × `0.9` (`stagnationStepDecayFactor`); выход из цикла, если шаг < minStep (только для non-freq/phase)
 - Ранний выход при достижении `98%` suppression
 - Флаг `on` всегда `1` в процессе оптимизации; `enforceFlagInvariant` включает осцилляторы с `volume > VOLUME_MIN` и все до rightmostEnabled
 - После completion — финальный прунинг: осцилляторы с `startLevel < VOLUME_PRUNE_THRESHOLD` (≈ 0.02) отключаются; откат если score падает > 0.05 п.п.
@@ -244,6 +245,8 @@ base+20ms), затем base × `stageDurationMultiplier`. Множитель
 - `maxRestartsBeforeRandomRestart` — 2..10
 - `kickFallbackThreshold` — [0.5, 0.95]
 - `initialStageMs` — 5..100
+- `frequencyStep` — [5e-8, 5e-7] (log) — шаг для freqBase/freqStart (offsets 1, 2), дефолт 0.0000001
+- `phaseStep` — [0.0015, 0.006] — шаг для phase (offset 5), дефолт 0.003125
 
 > `iterations` НЕ является гиперпараметром — пользователь контролирует через
 > `maxIterations`. `stageDurationMultiplier` также исключён из HPO и передаётся

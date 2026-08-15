@@ -28,6 +28,8 @@ export interface CoordinateDescentConfig {
     minStep: number;
     label: string;
   }>;
+  frequencyStep: number;
+  phaseStep: number;
 }
 
 export interface ArgOptimize {

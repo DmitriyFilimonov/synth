@@ -248,5 +248,7 @@ function buildCoordDescentConfig(
         label: 'PRECISION',
       },
     ],
+    frequencyStep: hyperparams.frequencyStep ?? 0.0000001,
+    phaseStep: hyperparams.phaseStep ?? 0.003125,
   };
 }

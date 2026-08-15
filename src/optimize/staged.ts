@@ -365,6 +365,8 @@ export const stagedOptimize = (
             label: 'PRECISION',
           },
         ],
+        frequencyStep: bestHyper.frequencyStep,
+        phaseStep: bestHyper.phaseStep,
       };
 
       const hpoSuppression = hpoResult.bestValue;

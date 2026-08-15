@@ -246,6 +246,34 @@ export const HYPERPARAM_SPACE: HyperparamDef[] = [
     description: 'Initial stage duration in ms',
     currentValue: 10,
   },
+
+  // --- per-parameter step sizes (narrow ranges — deviate → likely wrong) ---
+  {
+    name: 'frequencyStep',
+    distribution: {
+      type: 'float',
+      low: 5e-8,
+      high: 5e-7,
+      log: true,
+      step: null,
+    },
+    description:
+      'Step for freqBase/freqStart (offset 1,2). ~0.002 Hz in physical space',
+    currentValue: 0.0000001,
+  },
+  {
+    name: 'phaseStep',
+    distribution: {
+      type: 'float',
+      low: 0.0015,
+      high: 0.006,
+      log: false,
+      step: null,
+    },
+    description:
+      'Step for phase (offset 5). ~0.02 rad / 1.1 deg in physical space',
+    currentValue: 0.003125,
+  },
 ];
 
 /**
@@ -270,6 +298,8 @@ export const HYPERPARAM_DEFAULTS: Record<string, number> = {
   maxRestartsBeforeRandomRestart: 5,
   kickFallbackThreshold: 0.8,
   initialStageMs: 10,
+  frequencyStep: 0.0000001,
+  phaseStep: 0.003125,
 };
 
 /**
@@ -297,6 +327,9 @@ export interface ResolvedHyperparams {
   kickFallbackThreshold: number;
   // staged
   initialStageMs: number;
+  // per-parameter step sizes
+  frequencyStep: number;
+  phaseStep: number;
 }
 
 export function resolveHyperparams(
@@ -377,5 +410,7 @@ export function resolveHyperparams(
       'initialStageMs',
       D.initialStageMs as number,
     ),
+    frequencyStep: get('frequencyStep', D.frequencyStep as number),
+    phaseStep: get('phaseStep', D.phaseStep as number),
   };
 }

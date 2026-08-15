@@ -211,6 +211,8 @@ function suggestTrialParams(
   trial.suggestInt('maxRestartsBeforeRandomRestart', 2, 10);
   trial.suggestFloat('kickFallbackThreshold', 0.5, 0.95);
   trial.suggestInt('initialStageMs', 5, 100, { step: 5 });
+  trial.suggestFloat('frequencyStep', 5e-8, 5e-7, { log: true });
+  trial.suggestFloat('phaseStep', 0.0015, 0.006);
 
   return trial.getParams();
 }
@@ -247,6 +249,8 @@ function buildCoordDescentConfig(
         label: 'PRECISION',
       },
     ],
+    frequencyStep: hyperparams.frequencyStep,
+    phaseStep: hyperparams.phaseStep,
   };
 }
 
