@@ -160,11 +160,15 @@ Stage N (full): HPO → CD → final vector
 
 **Параметры HPO в стадиях:**
 
-- `hpoTrials` — число trials на стадию (дефолт 2)
+- `HPO_TRIALS` — число trials на стадию (дефолт 2)
 - `cdIterationsPerTrial` — фиксированные CD-итерации внутри HPO trial (дефолт 7)
 - `maxIterations` — CD после HPO, управляется пользователем (дефолт 100)
 - `stageDurationMultiplier` — передаётся извне, НЕ входит в пространство HPO
 - `hasUserOverride` — определяется только по `stepGrowthAdd` + `stepDecayFactor`
+- Наблюдения (params → value) кумулятивно передаются между стадиями через
+  `initialObservations` — TPE строит модель на всей истории, не теряя данные
+- `nStartupTrials` адаптивен: 1 при ≤3 trials, 2 при ≤8, 5 при ≤20, иначе 10
+- `bandwidth` адаптивен: 2.5x при 2 наблюдениях, 1.8x при ≤5, 1.3x при ≤15, 1x при 15+
 
 **ProgressEntry поля:**
 
@@ -200,7 +204,21 @@ Stage N (full): HPO → CD → final vector
 - Разделяет trials на «good» (лучшие γ%) и «bad» (остальные)
 - Строит KDE l(x) = P(x|good) и g(x) = P(x|bad) для каждого параметра
 - Сэмплирует кандидатов из l(x), выбирает по max l(x)/g(x) ratio
-- Первые nStartupTrials — random sampling (exploration)
+- `nStartupTrials` адаптивен: зависит от числа trials (см. ниже), НЕ фиксирован
+- `bandwidth` адаптивен: зависит от числа accumulated observations
+
+**Кумулятивные наблюдения между стадиями:**
+При staged-оптимизации каждое завершённое HPO-наблюдение (params → value)
+передаётся в следующую стадию через `initialObservations`. TPE строит модель
+по всей истории, а не только по текущей стадии — это предотвращает сужение
+диапазона гиперпараметров на поздних этапах.
+
+**Адаптивные параметры TPE:**
+
+- `nStartupTrials`: 1 при ≤3 trials, 2 при ≤8, 5 при ≤20, иначе 10
+  (вместо фиксированных 10, что блокировало TPE при nTrials=2)
+- `bandwidth` (KDE kernel): 2.5×base при 2 наблюдениях, 1.8× при ≤5,
+  1.3× при ≤15, 1× при 15+ (шире на ранних стадиях для эксплорации)
 
 **Пространство гиперпараметров (HYPERPARAM_SPACE):**
 

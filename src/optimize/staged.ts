@@ -1,7 +1,7 @@
 import { coordinateDescent } from './coordinate-descent';
 import { runHPO } from './hpo';
 import type { TPEConfig } from './hpo/sampler-tpe';
-import type { ResolvedHyperparams } from './hpo/param-space';
+import type { ResolvedHyperparams, TrialObservation } from './hpo';
 import type {
   ProgressEntry,
   ProgressCallback,
@@ -248,6 +248,9 @@ export const stagedOptimize = (
   // Cumulative iteration offset across stages (CD iterations only, not HPO)
   let iterationOffset = 0;
 
+  // Accumulate HPO observations across stages for TPE model building
+  const accumulatedObservations: TrialObservation[] = [];
+
   for (let stageIdx = 0; stageIdx < totalStages; stageIdx++) {
     const durationMs = stageDurationsMs[stageIdx]!;
     const stageSamples = Math.round((durationMs / 1000) * sampleRate);
@@ -293,7 +296,7 @@ export const stagedOptimize = (
       );
 
       console.log(
-        `[HPO] Stage ${stageIdx + 1}/${totalStages}: ${effectiveHpoTrials} trials × 15 iter, signal=${durationMs}ms`,
+        `[HPO] Stage ${stageIdx + 1}/${totalStages}: ${effectiveHpoTrials} trials × 7 iter, signal=${durationMs}ms`,
       );
 
       const hpoResult = runHPO({
@@ -303,6 +306,10 @@ export const stagedOptimize = (
         numOscillators,
         nTrials: effectiveHpoTrials,
         tpeConfig,
+        initialObservations:
+          accumulatedObservations.length > 0
+            ? [...accumulatedObservations]
+            : undefined,
         onProgress: (hpoEntry) => {
           // Report HPO trials briefly so UI shows activity, but
           // keep phase='hpo' separate from CD iterations
@@ -317,6 +324,11 @@ export const stagedOptimize = (
           onProgress?.(wrappedEntry);
         },
       });
+
+      // Merge new observations into accumulated set
+      for (const obs of hpoResult.observations) {
+        accumulatedObservations.push(obs);
+      }
 
       const bestHyper = hpoResult.bestHyperparams;
       currentVector = hpoResult.bestVector;

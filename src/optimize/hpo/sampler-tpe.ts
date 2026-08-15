@@ -53,6 +53,17 @@ export class TPESampler implements Sampler {
     this.observations = [];
   }
 
+  seedObservation(
+    params: Record<string, number | string | boolean>,
+    value: number,
+  ): void {
+    this.observations.push({ params, value });
+  }
+
+  getObservations(): TrialObservation[] {
+    return [...this.observations];
+  }
+
   sampleRelative(): Record<string, number | string | boolean> {
     return {};
   }
@@ -77,11 +88,19 @@ export class TPESampler implements Sampler {
     const goodTrials = sorted.slice(0, n);
     const badTrials = sorted.slice(n);
 
+    // Adaptive bandwidth: wider when observations are few to promote
+    // exploration, narrower when we have more data to exploit.
+    const effectiveBandwidth = computeAdaptiveBandwidth(
+      this.config.bandwidth,
+      sorted.length,
+    );
+
     return this.sampleByEI(
       paramName,
       distribution,
       goodTrials,
       badTrials,
+      effectiveBandwidth,
     );
   }
 
@@ -101,6 +120,7 @@ export class TPESampler implements Sampler {
     distribution: Distribution,
     goodTrials: TrialObservation[],
     badTrials: TrialObservation[],
+    adaptiveBandwidth?: number,
   ): number | string | boolean {
     if (distribution.type === 'categorical') {
       return sampleCategoricalByEI(
@@ -117,7 +137,9 @@ export class TPESampler implements Sampler {
       goodTrials,
       badTrials,
       paramName,
-      this.config,
+      adaptiveBandwidth !== undefined
+        ? adaptiveBandwidth
+        : this.config.bandwidth,
     );
   }
 }
@@ -214,7 +236,12 @@ function sampleContinuousByEI(
   goodTrials: TrialObservation[],
   badTrials: TrialObservation[],
   paramName: string,
-  config: TPEConfig,
+  bandwidth: number,
+  nEICandidates: number = 64,
+  weights: { signal: number; prior: number } = {
+    signal: 0.95,
+    prior: 0.05,
+  },
 ): number {
   const isLog = dist.log;
   const isInt = dist.type === 'int';
@@ -230,10 +257,10 @@ function sampleContinuousByEI(
   );
   const badValues = extractValues(badTrials, paramName, dist, isLog);
 
-  const band = config.bandwidth * (highLog - lowLog);
+  const band = bandwidth * (highLog - lowLog);
 
   const candidates: number[] = [];
-  for (let i = 0; i < config.nEICandidates; i++) {
+  for (let i = 0; i < nEICandidates; i++) {
     candidates.push(sampleFromKDE(goodValues, lowLog, highLog, band));
   }
 
@@ -243,12 +270,12 @@ function sampleContinuousByEI(
   for (const cand of candidates) {
     const lScore =
       kdeDensity(cand, goodValues, band) +
-      config.weights.prior / (highLog - lowLog);
+      weights.prior / (highLog - lowLog);
     const gScore =
       badValues.length > 0
         ? kdeDensity(cand, badValues, band) +
-          config.weights.prior / (highLog - lowLog)
-        : config.weights.prior / (highLog - lowLog);
+          weights.prior / (highLog - lowLog)
+        : weights.prior / (highLog - lowLog);
 
     const ratio = lScore / (gScore > 1e-14 ? gScore : 1e-14);
     if (ratio > bestRatio) {
@@ -352,4 +379,25 @@ function weightedRandomChoice<T>(
   }
 
   return (choices[choices.length - 1] ?? fallback) as T;
+}
+
+/**
+ * Adaptive bandwidth: wider when observations are few (needs more
+ * exploration), converges to base bandwidth as data accumulates.
+ * At 2-3 observations: 2.5x base, at 10: ~1.3x, at 50+: ~1x.
+ */
+function computeAdaptiveBandwidth(
+  base: number,
+  observationCount: number,
+): number {
+  if (observationCount <= 2) {
+    return base * 2.5;
+  }
+  if (observationCount <= 5) {
+    return base * 1.8;
+  }
+  if (observationCount <= 15) {
+    return base * 1.3;
+  }
+  return base;
 }

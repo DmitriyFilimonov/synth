@@ -12,6 +12,11 @@ import {
   type ResolvedHyperparams,
 } from './param-space';
 
+export interface TrialObservation {
+  params: Record<string, number | string | boolean>;
+  value: number;
+}
+
 export interface HPOProgressEntry extends ProgressEntry {
   trialIndex: number;
   totalTrials: number;
@@ -28,6 +33,8 @@ export interface HPOResult {
     value: number | null;
     params: Record<string, number | string | boolean>;
   }[];
+  /** Raw observations for carry-over between stages */
+  observations: TrialObservation[];
 }
 
 export interface ArgHPO {
@@ -39,8 +46,10 @@ export interface ArgHPO {
   onProgress?: (entry: HPOProgressEntry) => void;
   tpeConfig?: Partial<TPEConfig>;
   direction?: OptimizationDirection;
-  /** CD iterations per HPO trial. Controls trial cost, not final CD. Default: 15 */
+  /** CD iterations per HPO trial. Controls trial cost, not final CD. Default: 7 */
   cdIterationsPerTrial?: number;
+  /** Observations from prior HPO runs (carry-over across stages) */
+  initialObservations?: TrialObservation[];
 }
 
 export const runHPO = (arg: ArgHPO): HPOResult => {
@@ -53,9 +62,23 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
     tpeConfig,
     direction,
     cdIterationsPerTrial = 7,
+    initialObservations = [],
   } = arg;
 
-  const sampler = new TPESampler(tpeConfig);
+  // nStartupTrials adapts to trial count: with few trials, TPE must
+  // kick in immediately rather than doing pure random for 10 probes.
+  const effectiveNStartupTrials = computeStartupTrials(nTrials);
+
+  const sampler = new TPESampler({
+    ...tpeConfig,
+    nStartupTrials:
+      tpeConfig?.nStartupTrials ?? effectiveNStartupTrials,
+  });
+  // Seed sampler with observations from prior stages
+  for (const obs of initialObservations) {
+    sampler.seedObservation(obs.params, obs.value);
+  }
+
   const study = new Study(
     'hpo-coordinate-descent',
     sampler,
@@ -152,12 +175,15 @@ export const runHPO = (arg: ArgHPO): HPOResult => {
     trialValue: result.bestValue,
   });
 
+  const observations = sampler.getObservations();
+
   return {
     bestParams: result.bestParams,
     bestValue: result.bestValue ?? 0,
     bestVector,
     bestHyperparams,
     history,
+    observations,
   };
 };
 
@@ -165,7 +191,7 @@ function suggestTrialParams(
   trial: Trial,
 ): Record<string, number | string | boolean> {
   // Note: `iterations` is NOT a hyperparameter. User controls it via
-  // maxIterations. HPO trials use cdIterationsPerTrial (default 15).
+  // maxIterations. HPO trials use cdIterationsPerTrial (default 7).
   trial.suggestFloat('stepGrowthAdd', 0.0001, 0.01, { log: true });
   trial.suggestFloat('stepDecayFactor', 0.85, 0.995);
   trial.suggestFloat('explorationStartStep', 0.005, 0.1);
@@ -222,4 +248,22 @@ function buildCoordDescentConfig(
       },
     ],
   };
+}
+
+/**
+ * Adaptive nStartupTrials: with few trials, TPE must kick in immediately.
+ * Default nStartupTrials = 10 is designed for 30-50+ trial runs.
+ * For staged HPO with 2-5 trials, we need TPE from trial 2.
+ */
+function computeStartupTrials(nTrials: number): number {
+  if (nTrials <= 3) {
+    return 1;
+  }
+  if (nTrials <= 8) {
+    return 2;
+  }
+  if (nTrials <= 20) {
+    return 5;
+  }
+  return 10;
 }

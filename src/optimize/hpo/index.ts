@@ -3,6 +3,7 @@ export {
   type ArgHPO,
   type HPOResult,
   type HPOProgressEntry,
+  type TrialObservation,
 } from './run-hpo';
 export {
   Study,
