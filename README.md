@@ -88,14 +88,17 @@ $$
 ```mermaid
 flowchart TD
     A["Target WAV<br/>(16 бит / 44.1 кГц / моно)"] --> B["Инициализация вектора<br/>autocorr + Goertzel + STFT<br/>(частоты, фазы, амплитуды гармоник)"]
-    B --> C["Staged optimization<br/>стадии: 10, 20, 30, 60, 70, 80,<br/>160 ... ms → полный сигнал"]
+    B --> C{staged?}
+    C -->|true (по умолч.)| D["Staged optimization<br/>стадии: 10, 20, 30, 60, 70, 80,<br/>160 ... ms → полный сигнал"]
+    C -->|false| E["Flat optimization<br/>HPO + CD на полном сигнале<br/>(без стадий)"]
     subgraph stage ["Каждая стадия (сигнал усечён до N мс)"]
-        D["HPO (TPE, Optuna-style)<br/>подбор гиперпараметров CD:<br/>шаги, decay, пороги плато"] --> E["Coordinate descent<br/>maxIterations итераций<br/>+ плато-кики + random restarts"]
-        E --> F["Экстраполяция длительностей<br/>огибающих на следующую стадию"]
+        F["HPO (TPE, Optuna-style)<br/>подбор гиперпараметров CD:<br/>шаги, decay, пороги плато"] --> G["Coordinate descent<br/>maxIterations итераций<br/>+ плато-кики + random restarts"]
+        G --> H["Экстраполяция длительностей<br/>огибающих на следующую стадию"]
     end
-    C --> stage
-    stage --> G["Финализация:<br/>прунинг тихих осцилляторов,<br/>scale fitting"]
-    G --> H["Output WAV + SVG + suppression %"]
+    D --> stage
+    E --> I["Финализация:<br/>прунинг тихих осцилляторов,<br/>scale fitting"]
+    stage --> I
+    I --> J["Output WAV + SVG + suppression %"]
 ```
 
 Один шаг coordinate descent: для каждого включённого осциллятора и каждого из 9 непрерывных параметров пробуются два кандидата $x_i \pm \text{step}$ (для «громкости» — мультипликативно $x_i(1\pm\text{step})$); каждый кандидат = полный ресинтез + вычисление $J$. Итого на итерацию при 30 активных осцилляторах: $30 \times 9 \times 2 = 540$ полных оценок $f$.
@@ -321,6 +324,16 @@ CD-этапом HPO на коротком сигнале подбирает оп
 | Экстраполяция      | После каждой стадии длительности осцилляторов экстраполируются                           |
 | Phase в UI         | `phase: 'hpo'` (красные точки) и `phase: 'cd'` (синяя линия) на графике прогресса        |
 
+**Режимы оптимизации:**
+
+- **Staged** (`staged: true`, по умолчанию) — поэтапная оптимизация: сигнал
+  разбивается на нарастающие стадии (10ms → … → full), HPO на каждой стадии
+  подбирает гиперпараметры перед CD. `stageDurationMultiplier` управляет
+  скоростью роста стадий.
+- **Flat** (`staged: false`) — плоская оптимизация: один проход HPO на полном
+  сигнале, затем один проход CD на полном сигнале. Без стадий, без
+  экстраполяции. `stageDurationMultiplier` игнорируется.
+
 Внутри каждого координатного спуска:
 
 | Особенность            | Описание                                                                                           |
@@ -431,7 +444,7 @@ npm run lint:fix       # ESLint (автофикс)
 | `src/optimizer-worker.ts`           | Реализация worker-потока для оптимизации                                                                                                                                                      |
 | `src/match-preset.ts`               | Пресеты для начальной точки оптимизации                                                                                                                                                       |
 | `src/match-visualize.ts`            | SVG сравнения сигналов + прогресс                                                                                                                                                             |
-| `src/optimize/`                     | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (поэтапная оптимизация с HPO) |
+| `src/optimize/`                       | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (поэтапная или плоская оптимизация с HPO) |
 | `src/optimize/hpo/`                 | Hyperparameter optimization: `run-hpo.ts` (координатор), `study.ts`, `trial.ts`, `sampler.ts`, `sampler-tpe.ts` (TPE), `param-space.ts`                                                       |
 | `src/signal-analysis.ts`            | Анализ сигналов: автокорреляция, amplitude envelope, freqOverTime                                                                                                                             |
 | `src/spectrogram.ts`                | STFT-анализ: Hanning window, FFT, peak detection, кластеризация, fit envelopes                                                                                                                |
@@ -513,6 +526,11 @@ npm run lint:fix       # ESLint (автофикс)
 на нарастающие стадии (10ms → ... → full, множитель ≥2), HPO (2 trials × 7 iter)
 подбирает гиперпараметры перед каждым CD-этапом. После HPO CD запускается
 на пользовательские `maxIterations` (дефолт 100).
+
+Параметр `staged: false` отключает стадии: один проход HPO на полном сигнале,
+затем один проход CD на полном сигнале. Без экстраполяции длительностей,
+без `stageDurationMultiplier`. Полезно для прямых сравнений и тестов
+на полном сигнале без стадийной прогрессии.
 
 Coordinate descent использует мульти-цикловый подход (EXPLORATION → REFINEMENT → PRECISION).
 На каждой итерации последовательно оптимизируется каждая координата активного

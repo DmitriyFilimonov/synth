@@ -83,7 +83,7 @@ Generate → Compare → Save WAV + SVG
 | `src/write-wav.ts`               | Запись `Int16Array` в WAV-файл                                                                                                                                                                                                              |
 | `src/synth-config-to-vector.ts`  | Нормализация конфига → вектор `number[]` `[0, 1]`                                                                                                                                                                                           |
 | `src/vector-to-synth-config.ts`  | Денормализация вектора → конфиг (50 осцилляторов)                                                                                                                                                                                           |
-| `src/optimize/`                  | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка suppression), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (поэтапная оптимизация)                                         |
+| `src/optimize/`                  | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка suppression), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (поэтапная или плоская оптимизация)                                         |
 | `src/optimize/hpo/`              | Hyperparameter optimization (Optuna-style): `run-hpo.ts` (координатор), `study.ts` (Study), `trial.ts` (Trial), `sampler.ts` (Sampler + RandomSampler), `sampler-tpe.ts` (TPE), `param-space.ts` (пространство гиперпараметров), `types.ts` |
 | `src/signal-analysis.ts`         | Анализ сигналов: автокорреляция (фундаментальная частота), amplitude envelope (RMS-окна), freqOverTime (zero-crossing)                                                                                                                      |
 | `src/spectrogram.ts`             | STFT-анализ: Hanning window, FFT, peak detection, кластеризация гармоник в траектории, fit osc envelopes                                                                                                                                    |
@@ -141,9 +141,12 @@ Generate → Compare → Save WAV + SVG
   `optimizer-worker.ts` с отдельным троттлингом: important-сообщения `[...]`
   идут через 5ms, а `Iteration X:` прогресс — через 50ms.
 
-### Поэтапная оптимизация со встроенным HPO (src/optimize/staged.ts)
+### Поэтапная и плоская оптимизация (src/optimize/staged.ts)
 
-**Принцип работы:**
+**Режимы работы:**
+Параметр `staged` (дефолт `true`) управляет режимом оптимизации.
+
+**Staged mode (`staged: true`):**
 Оптимизация идёт по нарастающим стадиям длительности сигнала (от
 вычисленной `computeInitialStageMs(fundamentalHz)` до полного сигнала).
 Перед каждым CD-этапом HPO на коротком сигнале подбирает
@@ -155,6 +158,17 @@ Stage 2 (...): HPO → CD → extrapolate durations
 ...
 Stage N (full): HPO → CD → final vector
 ```
+
+**Flat mode (`staged: false`):**
+Один проход HPO на полном сигнале, затем один проход CD на полном сигнале.
+Без стадий, без экстраполяции длительностей. `stageDurationMultiplier` и
+`initialStageMs` игнорируются.
+
+```
+Full signal: HPO → CD → final vector
+```
+
+**Параметры HPO в стадиях (staged mode):**
 
 Стадии генерируются группами до 3 длительностей (base, base+10ms,
 base+20ms), затем base × `stageDurationMultiplier`. Множитель
@@ -169,15 +183,14 @@ base+20ms), затем base × `stageDurationMultiplier`. Множитель
 и async job). Если `fundamentalHz` не определена или ≤ 0, используется
 дефолт 10 мс.
 
-**Параметры HPO в стадиях:**
-
 - `hpoTrials` — число trials на стадию (дефолт `MATCH_DEFAULT_HPO_TRIALS = 2`;
   standalone-путь в `match.ts` дефолтит 30)
 - Реальное число trials на стадию масштабируется вниз для длинных стадий:
   `computeHpoTrialsForStage` (база 441 сэмпл ≈ 10ms, диапазон 3..25)
 - `cdIterationsPerTrial` — фиксированные CD-итерации внутри HPO trial (дефолт 7)
 - `maxIterations` — CD после HPO, управляется пользователем (дефолт 100)
-- `stageDurationMultiplier` — передаётся извне, НЕ входит в пространство HPO
+- `staged` — режим оптимизации: `true` (по умолчанию) = поэтапный, `false` = один HPO + один CD на полном сигнале без стадий; при `false` `stageDurationMultiplier` и `initialStageMs` игнорируются
+- `stageDurationMultiplier` — передаётся извне, множитель роста длительностей стадий, НЕ входит в пространство HPO; игнорируется при `staged: false`
 - `initialStageMs` — длительность первой стадии (мс), передаётся извне, НЕ входит в HPO; если не задана, вычисляется из `fundamentalHz` через `computeInitialStageMs`; расписание стадий строится один раз до старта и не меняется
 - `fundamentalHz` — фундаментальная частота (Гц), извлекается автокорреляцией (`signal-analysis.ts`); если передана, `initialStageMs` вычисляется автоматически: 4..10 циклов, кламп [10, 100] мс
 - `hasUserOverride` — оба `stepGrowthAdd` И `stepDecayFactor` заданы →
@@ -266,8 +279,9 @@ base+20ms), затем base × `stageDurationMultiplier`. Множитель
 - `phaseStep` — [0.0015, 0.006] — шаг для phase (offset 5), дефолт 0.003125
 
 > `iterations` НЕ является гиперпараметром — пользователь контролирует через
-> `maxIterations`. `stageDurationMultiplier` и `initialStageMs` также исключены из HPO и передаются
-> независимо. Внутри HPO trial CD запускается на `cdIterationsPerTrial` (дефолт 7).
+> `maxIterations`. `stageDurationMultiplier`, `initialStageMs` и `staged` также
+> исключены из HPO и передаются независимо. Внутри HPO trial CD запускается
+> на `cdIterationsPerTrial` (дефолт 7).
 
 #### Известное узкое место
 
