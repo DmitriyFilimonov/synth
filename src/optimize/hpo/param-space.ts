@@ -233,20 +233,6 @@ export const HYPERPARAM_SPACE: HyperparamDef[] = [
     currentValue: 0.8,
   },
 
-  // --- staged.ts ---
-  {
-    name: 'initialStageMs',
-    distribution: {
-      type: 'int',
-      low: 5,
-      high: 100,
-      log: false,
-      step: 5,
-    },
-    description: 'Initial stage duration in ms',
-    currentValue: 10,
-  },
-
   // --- per-parameter step sizes (narrow ranges — deviate → likely wrong) ---
   {
     name: 'frequencyStep',
@@ -310,7 +296,6 @@ export const HYPERPARAM_DEFAULTS: Record<string, number> = {
   earlyExitSuppression: 98,
   maxRestartsBeforeRandomRestart: 5,
   kickFallbackThreshold: 0.8,
-  initialStageMs: 10,
   frequencyStep: 0.0000001,
   frequencyStepCoarse: 0.0001,
   phaseStep: 0.003125,
@@ -339,8 +324,6 @@ export interface ResolvedHyperparams {
   earlyExitSuppression: number;
   maxRestartsBeforeRandomRestart: number;
   kickFallbackThreshold: number;
-  // staged
-  initialStageMs: number;
   // per-parameter step sizes
   frequencyStep: number;
   frequencyStepCoarse: number;
@@ -420,10 +403,6 @@ export function resolveHyperparams(
     kickFallbackThreshold: get(
       'kickFallbackThreshold',
       D.kickFallbackThreshold as number,
-    ),
-    initialStageMs: getInt(
-      'initialStageMs',
-      D.initialStageMs as number,
     ),
     frequencyStep: get('frequencyStep', D.frequencyStep as number),
     frequencyStepCoarse: get(

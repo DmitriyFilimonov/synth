@@ -210,7 +210,6 @@ function suggestTrialParams(
   trial.suggestFloat('earlyExitSuppression', 90, 99.9);
   trial.suggestInt('maxRestartsBeforeRandomRestart', 2, 10);
   trial.suggestFloat('kickFallbackThreshold', 0.5, 0.95);
-  trial.suggestInt('initialStageMs', 5, 100, { step: 5 });
   trial.suggestFloat('frequencyStep', 5e-8, 5e-7, { log: true });
   trial.suggestFloat('frequencyStepCoarse', 1e-5, 5e-4, {
     log: true,

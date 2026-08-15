@@ -288,10 +288,12 @@ const emitProgress = (
   onProgress: ProgressCallback | undefined,
   iteration: number,
   suppressionPercent: number,
+  cycle?: string,
 ): void => {
   const entry: ProgressEntry = {
     iteration,
     suppressionPercent,
+    cycle,
   };
   history.push(entry);
   onProgress?.(entry);
@@ -367,6 +369,7 @@ export const coordinateDescent = (
 
   let iter = 0;
   let cycleIndex = 0;
+  let lastCycleLabel: string | undefined;
   while (cycleIndex < restartSchedule.length) {
     const cycle = restartSchedule[cycleIndex];
     if (!cycle) {
@@ -380,6 +383,7 @@ export const coordinateDescent = (
       ? cfg.frequencyStep
       : cfg.frequencyStepCoarse;
     const phaseStep = cfg.phaseStep;
+    lastCycleLabel = cycle.label;
 
     console.log(
       `[CoordDescent] Cycle: ${cycle.label}, startStep=${cycle.startStep}, minStep=${cycle.minStep}, freqStep=${frequencyStep}, score=${currentBest.toFixed(4)}%`,
@@ -425,7 +429,13 @@ export const coordinateDescent = (
       console.log(
         `Iteration ${iter + 1}: ${currentBest.toFixed(4)}%`,
       );
-      emitProgress(history, onProgress, iter + 1, currentBest);
+      emitProgress(
+        history,
+        onProgress,
+        iter + 1,
+        currentBest,
+        cycle.label,
+      );
 
       iter++;
       if (currentBest >= cfg.earlyExitSuppression) {
@@ -503,7 +513,13 @@ export const coordinateDescent = (
           }
         }
 
-        emitProgress(history, onProgress, iter, currentBest);
+        emitProgress(
+          history,
+          onProgress,
+          iter,
+          currentBest,
+          cycle.label,
+        );
         plateauCount = 0;
         consecutiveSuccesses = 0;
         step *= actualStepDecayFactor;
@@ -599,7 +615,13 @@ export const coordinateDescent = (
   normalizeFlags(genome, numOsc);
   enforceFlagInvariant(genome, numOsc, initOscCount);
 
-  emitProgress(history, onProgress, maxIterations, currentBest);
+  emitProgress(
+    history,
+    onProgress,
+    maxIterations,
+    currentBest,
+    lastCycleLabel,
+  );
 
   return { vector: genome, history };
 };

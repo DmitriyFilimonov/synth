@@ -6,6 +6,7 @@ import {
 } from '../../consts';
 import { matchWithWorker } from '../../match-worker';
 import { simpleInitVector } from '../../simple-init-vector';
+import { estimateFundamentalFreq } from '../../signal-analysis';
 import { readWav } from '../../read-wav';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -110,6 +111,15 @@ export async function matchWav(
       numOscillators,
     );
 
+    const fundamentalHz =
+      estimateFundamentalFreq(targetWavData.samples, SAMPLE_RATE) ??
+      undefined;
+    if (fundamentalHz !== undefined) {
+      console.log(
+        `[Service] Fundamental: ${fundamentalHz.toFixed(1)} Hz`,
+      );
+    }
+
     const hasUserOverride =
       stepGrowthAdd !== undefined && stepDecayFactor !== undefined;
 
@@ -119,6 +129,7 @@ export async function matchWav(
       initialVector,
       sampleRate: 44100,
       maxIterations,
+      fundamentalHz,
       ...(hasUserOverride
         ? { stepGrowthAdd, stepDecayFactor }
         : { hpoTrials }),
@@ -233,6 +244,10 @@ async function runMatchJob(
       numOscillators,
     );
 
+    const fundamentalHz =
+      estimateFundamentalFreq(targetWavData.samples, SAMPLE_RATE) ??
+      undefined;
+
     const hasUserOverride =
       stepGrowthAdd !== undefined && stepDecayFactor !== undefined;
 
@@ -242,6 +257,7 @@ async function runMatchJob(
       initialVector,
       sampleRate: 44100,
       maxIterations,
+      fundamentalHz,
       ...(hasUserOverride
         ? { stepGrowthAdd, stepDecayFactor }
         : { hpoTrials }),

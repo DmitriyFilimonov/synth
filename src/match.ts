@@ -1,7 +1,5 @@
 import { SAMPLE_RATE } from './consts';
-import { mapSynthConfigToVector } from './synth-config-to-vector';
 import { readWav } from './read-wav';
-import { SYNTH_DEFAULT_PRESET } from './match-preset';
 import { MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER } from './match-defaults';
 import {
   optimize,
@@ -17,6 +15,8 @@ import { createSynth, ArgCreateSynth } from './synth';
 import { writeWav } from './write-wav';
 import { MAX_AMPLITUDE_16_BIT_WAV_ENCODED } from './consts';
 import { matchVisualize } from './match-visualize';
+import { fftInitVector } from './fft-init-vector';
+import { estimateFundamentalFreq } from './signal-analysis';
 
 interface ArgMatch {
   targetWavPath: string;
@@ -108,11 +108,24 @@ export const match = (arg: ArgMatch): MatchResult => {
     `Target: ${numSamples} samples, ${targetWav.numChannels}ch, ${targetWav.bitsPerSample}-bit`,
   );
 
-  const initialVector = arg.initialVector
-    ? [...arg.initialVector]
-    : mapSynthConfigToVector(SYNTH_DEFAULT_PRESET);
+  const fundamentalHz =
+    estimateFundamentalFreq(targetWav.samples, SAMPLE_RATE) ??
+    undefined;
+  if (fundamentalHz !== undefined) {
+    console.log(
+      `Fundamental frequency: ${fundamentalHz.toFixed(1)} Hz`,
+    );
+  }
 
-  console.log(`Vector size: ${initialVector.length} parameters`);
+  const defaultVector = arg.initialVector
+    ? [...arg.initialVector]
+    : fftInitVector(targetWav.samples, SAMPLE_RATE);
+
+  if (!arg.initialVector) {
+    console.log(`Initialized via fft-init-vector`);
+  }
+
+  console.log(`Vector size: ${defaultVector.length} parameters`);
   console.log(`Starting optimization...`);
 
   const maxIterations = arg.maxIterations ?? 100;
@@ -126,7 +139,7 @@ export const match = (arg: ArgMatch): MatchResult => {
 
   if (hasUserOverride) {
     const result = stagedOptimize({
-      initialVector,
+      initialVector: defaultVector,
       targetSignal,
       sampleRate: SAMPLE_RATE,
       maxIterations,
@@ -134,12 +147,13 @@ export const match = (arg: ArgMatch): MatchResult => {
       stepGrowthAdd: arg.stepGrowthAdd,
       stepDecayFactor: arg.stepDecayFactor,
       stageDurationMultiplier: arg.stageDurationMultiplier,
+      fundamentalHz,
     });
     vector = result.vector;
     history = result.history;
   } else {
     const nTrials = arg.hpoTrials ?? 30;
-    const numOscillators = initialVector.length / 10;
+    const numOscillators = defaultVector.length / 10;
 
     console.log(
       `Starting HPO: ${nTrials} trials, ${numOscillators} oscillators`,
@@ -148,7 +162,7 @@ export const match = (arg: ArgMatch): MatchResult => {
     const hpoResult = runHPO({
       targetSignal,
       sampleRate: SAMPLE_RATE,
-      initialVector,
+      initialVector: defaultVector,
       numOscillators,
       nTrials,
       onProgress: undefined,
@@ -167,7 +181,7 @@ export const match = (arg: ArgMatch): MatchResult => {
       stageDurationMultiplier:
         arg.stageDurationMultiplier ??
         MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER,
-      initialStageMs: 10,
+      fundamentalHz,
       config,
       onProgress: arg.onProgress,
     });

@@ -5,6 +5,8 @@ export interface ProgressEntry {
   stageIndex?: number;
   totalStages?: number;
   stageDurationMs?: number;
+  /** CD cycle label (EXPLORATION / REFINEMENT / PRECISION). */
+  cycle?: string;
 }
 
 export type ProgressCallback = (entry: ProgressEntry) => void;

@@ -40,6 +40,7 @@ interface MatchWorkerArgs {
   onProgress?: (entry: MatchWorkerProgress) => void;
   hpoTrials?: number;
   hpoTpeConfig?: Partial<TPEConfig>;
+  fundamentalHz?: number;
 }
 
 function resolveWorkerPath(): {
@@ -95,6 +96,7 @@ export function matchWithWorker(
       initialVector: arg.initialVector,
       sampleRate: arg.sampleRate,
       maxIterations: arg.maxIterations,
+      fundamentalHz: arg.fundamentalHz,
       stepGrowthAdd: arg.stepGrowthAdd,
       stepDecayFactor: arg.stepDecayFactor,
       stageDurationMultiplier: arg.stageDurationMultiplier,

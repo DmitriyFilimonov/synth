@@ -63,6 +63,7 @@ interface WorkerMessage {
   stageDurationMultiplier?: number;
   hpoTrials?: number;
   hpoTpeConfig?: Partial<TPEConfig>;
+  fundamentalHz?: number;
 }
 
 parentPort.on('message', (msg: WorkerMessage) => {
@@ -103,6 +104,7 @@ parentPort.on('message', (msg: WorkerMessage) => {
         hpoTrials: nTrials,
         tpeConfig: msg.hpoTpeConfig,
         stageDurationMultiplier: msg.stageDurationMultiplier,
+        fundamentalHz: msg.fundamentalHz,
         onProgress: (entry) => {
           const now = Date.now();
           if (now - lastProgressMs >= PROGRESS_THROTTLE_MS) {
@@ -128,6 +130,7 @@ parentPort.on('message', (msg: WorkerMessage) => {
         stepGrowthAdd: msg.stepGrowthAdd,
         stepDecayFactor: msg.stepDecayFactor,
         stageDurationMultiplier: msg.stageDurationMultiplier,
+        fundamentalHz: msg.fundamentalHz,
         onProgress: (entry) => {
           parentPort?.postMessage({ type: 'progress', data: entry });
         },

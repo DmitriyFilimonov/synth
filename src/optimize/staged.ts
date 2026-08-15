@@ -24,6 +24,8 @@ export interface ArgStagedOptimize extends Omit<
   maxStageMs?: number;
   hpoTrials?: number;
   tpeConfig?: Partial<TPEConfig>;
+  /** Фундаментальная частота (Гц). Если передана, initialStageMs вычисляется автоматически. */
+  fundamentalHz?: number;
 }
 
 export interface StageResult {
@@ -43,6 +45,26 @@ export interface StagedOptimizeResult {
 // Нормализация osc.duration: min=0, max=5
 const OSC_DURATION_MIN = 0;
 const OSC_DURATION_MAX = 5;
+
+/**
+ * Вычисляет начальную длительность стадии на основе фундаментальной частоты.
+ * Цель — 4..10 полных периодов, результат клампится к [10, 100] мс.
+ */
+export const computeInitialStageMs = (
+  fundamentalHz: number,
+): number => {
+  if (fundamentalHz <= 0) {
+    return 10;
+  }
+  const periodMs = 1000 / fundamentalHz;
+  const minCycles = 4;
+  const maxCycles = 10;
+  const targetMs = Math.max(
+    periodMs * minCycles,
+    Math.min(periodMs * maxCycles, periodMs * 7),
+  );
+  return Math.max(10, Math.min(100, targetMs));
+};
 
 // Нормализация ampEnv.duration: min=0.5, max=5
 const AMP_ENV_DURATION_MIN = 0.5;
@@ -215,7 +237,7 @@ export const stagedOptimize = (
     initialVector,
     maxIterations,
     onProgress,
-    initialStageMs = 10,
+    initialStageMs: explicitInitialStageMs,
     stageDurationMultiplier = 1,
     maxStageMs = 500,
     stepGrowthAdd,
@@ -223,7 +245,14 @@ export const stagedOptimize = (
     config,
     hpoTrials,
     tpeConfig,
+    fundamentalHz,
   } = arg;
+
+  const initialStageMs =
+    explicitInitialStageMs ??
+    (fundamentalHz !== undefined
+      ? computeInitialStageMs(fundamentalHz)
+      : 10);
 
   const totalSamples = targetSignal.length;
   const stageDurationsMs = generateStageDurations(
@@ -237,8 +266,12 @@ export const stagedOptimize = (
   const numOscillators = initialVector.length / OSC_PARAMS;
   const totalStages = stageDurationsMs.length;
 
+  const firstStageMs = stageDurationsMs[0] ?? initialStageMs;
+  const lastStageMs =
+    stageDurationsMs[stageDurationsMs.length - 1] ?? maxStageMs;
+
   console.log(
-    `[Opt] Starting ${totalStages} stages: 10ms→${maxStageMs}ms, CD=${maxIterations} iter/stage, Osc=${numOscillators}`,
+    `[Opt] Starting ${totalStages} stages: ${firstStageMs}ms→${lastStageMs}ms, CD=${maxIterations} iter/stage, Osc=${numOscillators}`,
   );
 
   let currentVector = [...initialVector];
@@ -279,6 +312,7 @@ export const stagedOptimize = (
         stageIndex: stageIdx,
         totalStages,
         stageDurationMs: durationMs,
+        cycle: entry.cycle,
       };
       allHistory.push(wrappedEntry);
       onProgress?.(wrappedEntry);
@@ -321,6 +355,7 @@ export const stagedOptimize = (
             totalStages,
             stageDurationMs: durationMs,
           };
+          allHistory.push(wrappedEntry);
           onProgress?.(wrappedEntry);
         },
       });
@@ -369,6 +404,15 @@ export const stagedOptimize = (
         frequencyStepCoarse: bestHyper.frequencyStepCoarse,
         phaseStep: bestHyper.phaseStep,
       };
+      if (config?.frequencyStep !== undefined) {
+        usedConfig.frequencyStep = config.frequencyStep;
+      }
+      if (config?.frequencyStepCoarse !== undefined) {
+        usedConfig.frequencyStepCoarse = config.frequencyStepCoarse;
+      }
+      if (config?.phaseStep !== undefined) {
+        usedConfig.phaseStep = config.phaseStep;
+      }
 
       const hpoSuppression = hpoResult.bestValue;
       console.log(

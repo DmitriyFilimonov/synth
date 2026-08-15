@@ -144,13 +144,14 @@ Generate → Compare → Save WAV + SVG
 ### Поэтапная оптимизация со встроенным HPO (src/optimize/staged.ts)
 
 **Принцип работы:**
-Оптимизация идёт по нарастающим стадиям длительности сигнала (от 10ms до
-полного сигнала). Перед каждым CD-этапом HPO на коротком сигнале подбирает
+Оптимизация идёт по нарастающим стадиям длительности сигнала (от
+вычисленной `computeInitialStageMs(fundamentalHz)` до полного сигнала).
+Перед каждым CD-этапом HPO на коротком сигнале подбирает
 hyperparameters (шаги, пороги, decay).
 
 ```
-Stage 1 (10ms): HPO → CD → extrapolate durations
-Stage 2 (30ms): HPO → CD → extrapolate durations
+Stage 1 (computeInitialStageMs): HPO → CD → extrapolate durations
+Stage 2 (...): HPO → CD → extrapolate durations
 ...
 Stage N (full): HPO → CD → final vector
 ```
@@ -159,6 +160,14 @@ Stage N (full): HPO → CD → final vector
 base+20ms), затем base × `stageDurationMultiplier`. Множитель
 клампится снизу к 2.0 (иначе экспоненциальная proliferation стадий);
 дефолт из `match-defaults.ts` — 2.
+
+`computeInitialStageMs` вычисляет первую стадию из периода фундаментальной
+частоты: 4..10 полных циклов, кламп [10, 100] мс. Вызывается в `match.ts`
+через `estimateFundamentalFreq()` из `signal-analysis.ts` (автокорреляция).
+Результат прокидывается через `stagedOptimize.fundamentalHz` →
+`optimizer-worker.ts` (worker thread) → `synth-service.ts` (HTTP API, sync
+и async job). Если `fundamentalHz` не определена или ≤ 0, используется
+дефолт 10 мс.
 
 **Параметры HPO в стадиях:**
 
@@ -169,6 +178,8 @@ base+20ms), затем base × `stageDurationMultiplier`. Множитель
 - `cdIterationsPerTrial` — фиксированные CD-итерации внутри HPO trial (дефолт 7)
 - `maxIterations` — CD после HPO, управляется пользователем (дефолт 100)
 - `stageDurationMultiplier` — передаётся извне, НЕ входит в пространство HPO
+- `initialStageMs` — длительность первой стадии (мс), передаётся извне, НЕ входит в HPO; если не задана, вычисляется из `fundamentalHz` через `computeInitialStageMs`; расписание стадий строится один раз до старта и не меняется
+- `fundamentalHz` — фундаментальная частота (Гц), извлекается автокорреляцией (`signal-analysis.ts`); если передана, `initialStageMs` вычисляется автоматически: 4..10 циклов, кламп [10, 100] мс
 - `hasUserOverride` — оба `stepGrowthAdd` И `stepDecayFactor` заданы →
   HPO полностью отключается, идёт чистый staged CD
 - Наблюдения (params → value) кумулятивно передаются между стадиями через
@@ -244,13 +255,12 @@ base+20ms), затем base × `stageDurationMultiplier`. Множитель
 - `earlyExitSuppression` — [90, 99.9]
 - `maxRestartsBeforeRandomRestart` — 2..10
 - `kickFallbackThreshold` — [0.5, 0.95]
-- `initialStageMs` — 5..100
 - `frequencyStep` — [5e-8, 5e-7] (log) — мелкий шаг freqBase/freqStart в PRECISION, дефолт 0.0000001
 - `frequencyStepCoarse` — [1e-5, 5e-4] (log) — грубый шаг freqBase/freqStart в EXPLORATION/REFINEMENT, дефолт 0.0001
 - `phaseStep` — [0.0015, 0.006] — шаг для phase (offset 5), дефолт 0.003125
 
 > `iterations` НЕ является гиперпараметром — пользователь контролирует через
-> `maxIterations`. `stageDurationMultiplier` также исключён из HPO и передаётся
+> `maxIterations`. `stageDurationMultiplier` и `initialStageMs` также исключены из HPO и передаются
 > независимо. Внутри HPO trial CD запускается на `cdIterationsPerTrial` (дефолт 7).
 
 #### Известное узкое место
