@@ -21,6 +21,7 @@ export interface MatchConfig {
   numOscillators?: number;
   maxIterations?: number;
   stageDurationMultiplier?: number;
+  staged?: boolean;
 }
 
 export interface SynthOscConfig {

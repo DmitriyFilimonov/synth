@@ -31,6 +31,11 @@ export interface ArgStagedOptimize extends Omit<
   tpeConfig?: Partial<TPEConfig>;
   /** Фундаментальная частота (Гц). Если передана, initialStageMs вычисляется автоматически. */
   fundamentalHz?: number;
+  /**
+   * Многоэтапный режим (по умолчанию true).
+   * При false: HPO один раз на полном сигнале, затем один CD без стадий.
+   */
+  staged?: boolean;
 }
 
 export interface StageResult {
@@ -241,6 +246,225 @@ export const extrapolateVectorBetweenStages = (
 };
 
 /**
+ * Выполняет плоскую оптимизацию без стадий: один HPO на полном
+ * сигнале, затем один CD на полном сигнале.
+ */
+const runFlatOptimization = (arg: {
+  targetSignal: readonly number[];
+  sampleRate: number;
+  initialVector: readonly number[];
+  maxIterations: number;
+  onProgress?: ProgressCallback;
+  hpoTrials?: number;
+  tpeConfig?: Partial<TPEConfig>;
+  stepGrowthAdd?: number;
+  stepDecayFactor?: number;
+  config?: Partial<CoordinateDescentConfig>;
+}): StagedOptimizeResult => {
+  const {
+    targetSignal,
+    sampleRate,
+    initialVector,
+    maxIterations,
+    onProgress,
+    hpoTrials,
+    tpeConfig,
+    stepGrowthAdd,
+    stepDecayFactor,
+    config,
+  } = arg;
+
+  const numOscillators = initialVector.length / OSC_PARAMS;
+  const totalSamples = targetSignal.length;
+  const allHistory: ProgressEntry[] = [];
+
+  let currentVector = [...initialVector];
+
+  // Optional HPO on full signal
+  if (hpoTrials && hpoTrials > 0) {
+    console.log(
+      `[HPO] Flat mode: ${hpoTrials} trials × 7 iter, signal=${((totalSamples / sampleRate) * 1000).toFixed(0)}ms`,
+    );
+
+    const hpoResult = runHPO({
+      targetSignal,
+      sampleRate,
+      initialVector: currentVector,
+      numOscillators,
+      nTrials: hpoTrials,
+      tpeConfig,
+      onProgress: (hpoEntry) => {
+        const wrappedEntry: ProgressEntry = {
+          iteration: 0,
+          suppressionPercent: hpoEntry.suppressionPercent,
+          phase: 'hpo',
+          stageIndex: 0,
+          totalStages: 1,
+          stageDurationMs: (totalSamples / sampleRate) * 1000,
+        };
+        allHistory.push(wrappedEntry);
+        onProgress?.(wrappedEntry);
+      },
+    });
+
+    currentVector = hpoResult.bestVector;
+
+    const bestHyper = hpoResult.bestHyperparams;
+    const usedConfig: Partial<CoordinateDescentConfig> = {
+      ...config,
+      stagnationExitThreshold: bestHyper.stagnationExitThreshold,
+      plateauRestartThreshold: bestHyper.plateauRestartThreshold,
+      stepGrowthThreshold: bestHyper.stepGrowthThreshold,
+      stagnationStepDecayFactor: bestHyper.stagnationDecayFactor,
+      significantImprovementThreshold:
+        bestHyper.significantImprovementThreshold,
+      earlyExitSuppression: bestHyper.earlyExitSuppression,
+      maxRestartsBeforeRandomRestart:
+        bestHyper.maxRestartsBeforeRandomRestart,
+      kickFallbackThreshold: bestHyper.kickFallbackThreshold,
+      restartSchedule: [
+        {
+          startStep: bestHyper.explorationStartStep,
+          minStep: bestHyper.explorationMinStep,
+          label: 'EXPLORATION',
+        },
+        {
+          startStep: bestHyper.refinementStartStep,
+          minStep: bestHyper.refinementMinStep,
+          label: 'REFINEMENT',
+        },
+        {
+          startStep: bestHyper.precisionStartStep,
+          minStep: bestHyper.precisionMinStep,
+          label: 'PRECISION',
+        },
+      ],
+      frequencyStep: bestHyper.frequencyStep,
+      frequencyStepCoarse: bestHyper.frequencyStepCoarse,
+      phaseStep: bestHyper.phaseStep,
+    };
+    if (config?.frequencyStep !== undefined) {
+      usedConfig.frequencyStep = config.frequencyStep;
+    }
+    if (config?.frequencyStepCoarse !== undefined) {
+      usedConfig.frequencyStepCoarse = config.frequencyStepCoarse;
+    }
+    if (config?.phaseStep !== undefined) {
+      usedConfig.phaseStep = config.phaseStep;
+    }
+
+    const hpoSuppression = hpoResult.bestValue;
+    console.log(
+      `[HPO] Flat mode done: ${hpoSuppression.toFixed(2)}%. Starting CD (${maxIterations} iter)...`,
+    );
+
+    // CD on full signal with HPO-tuned hyperparams
+    const { vector, history } = coordinateDescent(
+      currentVector,
+      targetSignal,
+      sampleRate,
+      maxIterations,
+      onProgress
+        ? (entry) => {
+            const wrappedEntry: ProgressEntry = {
+              iteration: entry.iteration,
+              suppressionPercent: entry.suppressionPercent,
+              phase: 'cd',
+              stageIndex: 0,
+              totalStages: 1,
+              stageDurationMs: (totalSamples / sampleRate) * 1000,
+              cycle: entry.cycle,
+            };
+            allHistory.push(wrappedEntry);
+            onProgress(wrappedEntry);
+          }
+        : undefined,
+      bestHyper.stepGrowthAdd,
+      bestHyper.stepDecayFactor,
+      usedConfig,
+    );
+
+    currentVector = vector;
+
+    const stageResult: StageResult = {
+      stageIndex: 0,
+      stageDurationMs: (totalSamples / sampleRate) * 1000,
+      stageSamples: totalSamples,
+      suppressionPercent:
+        history.length > 0
+          ? (history[history.length - 1]?.suppressionPercent ?? 0)
+          : 0,
+      iterations: history.length,
+    };
+
+    console.log(
+      `[CD] Flat mode done: ${stageResult.suppressionPercent.toFixed(2)}% in ${history.length} iter`,
+    );
+
+    return {
+      vector: currentVector,
+      history: allHistory,
+      stageResults: [stageResult],
+    };
+  }
+
+  // No HPO: just CD on full signal
+  console.log(
+    `[CD] Flat mode: ${maxIterations} iter, ${((totalSamples / sampleRate) * 1000).toFixed(0)}ms`,
+  );
+
+  const { vector, history } = coordinateDescent(
+    currentVector,
+    targetSignal,
+    sampleRate,
+    maxIterations,
+    onProgress
+      ? (entry) => {
+          const wrappedEntry: ProgressEntry = {
+            iteration: entry.iteration,
+            suppressionPercent: entry.suppressionPercent,
+            phase: 'cd',
+            stageIndex: 0,
+            totalStages: 1,
+            stageDurationMs: (totalSamples / sampleRate) * 1000,
+            cycle: entry.cycle,
+          };
+          allHistory.push(wrappedEntry);
+          onProgress(wrappedEntry);
+        }
+      : undefined,
+    stepGrowthAdd,
+    stepDecayFactor,
+    config,
+  );
+
+  currentVector = vector;
+
+  const lastSuppression =
+    history.length > 0
+      ? (history[history.length - 1]?.suppressionPercent ?? 0)
+      : 0;
+
+  const stageResult: StageResult = {
+    stageIndex: 0,
+    stageDurationMs: (totalSamples / sampleRate) * 1000,
+    stageSamples: totalSamples,
+    suppressionPercent: lastSuppression,
+    iterations: history.length,
+  };
+
+  console.log(
+    `[CD] Flat mode done: ${lastSuppression.toFixed(2)}% in ${history.length} iter`,
+  );
+
+  return {
+    vector: currentVector,
+    history: allHistory,
+    stageResults: [stageResult],
+  };
+};
+
+/**
  * Выполняет поэтапную оптимизацию по нарастающим длительностям
  * сигнала: на каждой стадии HPO (опционально) подбирает
  * гиперпараметры, затем coordinate descent уточняет вектор,
@@ -282,7 +506,24 @@ export const stagedOptimize = (
     hpoTrials,
     tpeConfig,
     fundamentalHz,
+    staged = true,
   } = arg;
+
+  // Flat mode: single HPO + single CD on full signal (no staging)
+  if (!staged) {
+    return runFlatOptimization({
+      targetSignal,
+      sampleRate,
+      initialVector,
+      maxIterations,
+      onProgress,
+      hpoTrials,
+      tpeConfig,
+      stepGrowthAdd,
+      stepDecayFactor,
+      config,
+    });
+  }
 
   const initialStageMs =
     explicitInitialStageMs ??

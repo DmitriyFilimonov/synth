@@ -30,6 +30,7 @@ export interface MatchRequestBody {
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
   stageDurationMultiplier?: number;
+  staged?: boolean;
   wavBase64?: string;
 }
 
@@ -60,6 +61,7 @@ export interface CreateMatchJobRequest {
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
   stageDurationMultiplier?: number;
+  staged?: boolean;
   wavBase64?: string;
 }
 
@@ -70,6 +72,7 @@ export interface MatchParams {
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
   stageDurationMultiplier?: number;
+  staged?: boolean;
 }
 
 export interface JobStatusResponse {

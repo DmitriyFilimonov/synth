@@ -88,6 +88,7 @@ export async function matchWav(
   stepDecayFactor?: number,
   stageDurationMultiplier?: number,
   hpoTrials?: number,
+  staged?: boolean,
 ): Promise<MatchedFile> {
   const tempInput = join(tmpdir(), `${randomUUID()}_input.wav`);
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
@@ -136,6 +137,7 @@ export async function matchWav(
       ...(stageDurationMultiplier !== undefined
         ? { stageDurationMultiplier }
         : {}),
+      staged,
       onProgress: (entry) => {
         history.push(entry);
       },
@@ -170,6 +172,7 @@ export async function matchWavWithJob(
   stepDecayFactor?: number,
   stageDurationMultiplier?: number,
   hpoTrials?: number,
+  staged?: boolean,
 ): Promise<string> {
   const jobId = randomUUID();
   const inputFileName = `${jobId}_input.wav`;
@@ -183,6 +186,7 @@ export async function matchWavWithJob(
       stepDecayFactor,
       stageDurationMultiplier,
       hpoTrials,
+      staged,
     },
     inputFileName,
   );
@@ -200,6 +204,7 @@ export async function matchWavWithJob(
       stepDecayFactor,
       stageDurationMultiplier,
       hpoTrials,
+      staged,
     ).catch((err) => {
       const message =
         err instanceof Error ? err.message : 'Unknown error';
@@ -221,6 +226,7 @@ async function runMatchJob(
   stepDecayFactor?: number,
   stageDurationMultiplier?: number,
   hpoTrials?: number,
+  staged?: boolean,
 ): Promise<void> {
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
   const history: {
@@ -264,6 +270,7 @@ async function runMatchJob(
       ...(stageDurationMultiplier !== undefined
         ? { stageDurationMultiplier }
         : {}),
+      staged,
       onProgress: (entry) => {
         history.push(entry);
         const now = Date.now();

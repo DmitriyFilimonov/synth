@@ -439,6 +439,7 @@ export function MatcherForm() {
   const [file, setFile] = useState<File | null>(null);
   const [numOscillators, setNumOscillators] = useState('5');
   const [maxIterations, setMaxIterations] = useState('20');
+  const [staged, setStaged] = useState(true);
   const [stageDurationMultiplier, setStageDurationMultiplier] =
     useState('1');
   const [loading, setLoading] = useState(false);
@@ -545,7 +546,10 @@ export function MatcherForm() {
       await createMatchJob(file, {
         numOscillators: Number(numOscillators),
         maxIterations: Number(maxIterations),
-        stageDurationMultiplier: Number(stageDurationMultiplier),
+        stageDurationMultiplier: staged
+          ? Number(stageDurationMultiplier)
+          : undefined,
+        staged,
       });
 
       await listJobs().then(setJobList);
@@ -664,17 +668,32 @@ export function MatcherForm() {
               value={maxIterations}
               onChange={(e) => setMaxIterations(e.target.value)}
             />
-            <Input
-              label="Stage multiplier"
-              type="number"
-              min="1"
-              step="0.5"
-              value={stageDurationMultiplier}
-              onChange={(e) =>
-                setStageDurationMultiplier(e.target.value)
-              }
-            />
           </div>
+          <div className={styles.row}>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={staged}
+                onChange={(e) => setStaged(e.target.checked)}
+                className={styles.checkbox}
+              />
+              Staged optimization
+            </label>
+          </div>
+          {staged && (
+            <div className={styles.row}>
+              <Input
+                label="Stage multiplier"
+                type="number"
+                min="1"
+                step="0.5"
+                value={stageDurationMultiplier}
+                onChange={(e) =>
+                  setStageDurationMultiplier(e.target.value)
+                }
+              />
+            </div>
+          )}
 
           {error && <div className={styles.error}>{error}</div>}
 

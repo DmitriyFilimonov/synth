@@ -23,6 +23,8 @@ export async function createMatchJob(
       'stageDurationMultiplier',
       String(config.stageDurationMultiplier),
     );
+  if (config.staged !== undefined)
+    params.set('staged', String(config.staged));
 
   const response = await fetch(
     `/api/match/job?${params.toString()}`,
@@ -109,6 +111,7 @@ export async function matchWav(
       numOscillators: config.numOscillators,
       maxIterations: config.maxIterations,
       stageDurationMultiplier: config.stageDurationMultiplier,
+      staged: config.staged,
     }),
   });
 

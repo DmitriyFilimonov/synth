@@ -41,6 +41,7 @@ interface MatchWorkerArgs {
   hpoTrials?: number;
   hpoTpeConfig?: Partial<TPEConfig>;
   fundamentalHz?: number;
+  staged?: boolean;
 }
 
 function resolveWorkerPath(): {
@@ -102,6 +103,7 @@ export function matchWithWorker(
       stageDurationMultiplier: arg.stageDurationMultiplier,
       hpoTrials: arg.hpoTrials,
       hpoTpeConfig: arg.hpoTpeConfig,
+      staged: arg.staged,
     });
   });
 }
