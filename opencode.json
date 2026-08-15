@@ -5,6 +5,9 @@
       "models": {
         "dashscope/qwen3.6-plus": {
           "name:": "dashscope/qwen3.6-plus"
+        },
+        "anthropic/claude-fable-5": {
+          "name": "anthropic/claude-fable-5"
         }
       },
       "options": {
