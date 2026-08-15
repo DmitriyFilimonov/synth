@@ -212,6 +212,9 @@ function suggestTrialParams(
   trial.suggestFloat('kickFallbackThreshold', 0.5, 0.95);
   trial.suggestInt('initialStageMs', 5, 100, { step: 5 });
   trial.suggestFloat('frequencyStep', 5e-8, 5e-7, { log: true });
+  trial.suggestFloat('frequencyStepCoarse', 1e-5, 5e-4, {
+    log: true,
+  });
   trial.suggestFloat('phaseStep', 0.0015, 0.006);
 
   return trial.getParams();
@@ -250,6 +253,7 @@ function buildCoordDescentConfig(
       },
     ],
     frequencyStep: hyperparams.frequencyStep,
+    frequencyStepCoarse: hyperparams.frequencyStepCoarse,
     phaseStep: hyperparams.phaseStep,
   };
 }

@@ -249,6 +249,7 @@ function buildCoordDescentConfig(
       },
     ],
     frequencyStep: hyperparams.frequencyStep ?? 0.0000001,
+    frequencyStepCoarse: hyperparams.frequencyStepCoarse ?? 0.0001,
     phaseStep: hyperparams.phaseStep ?? 0.003125,
   };
 }

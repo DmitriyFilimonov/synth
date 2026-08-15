@@ -48,9 +48,20 @@ export interface CoordinateDescentConfig {
     minStep: number;
     label: string;
   }>;
-  /** Frequency step scale (offsets 1, 2). Multiplier applied to base schedule step. */
+  /**
+   * Fine frequency step (offsets 1, 2), used in the last cycle.
+   * Absolute vector step, not a multiplier. Default 1e-7 ≈ 0.002 Hz.
+   */
   frequencyStep: number;
-  /** Phase step scale (offset 5). Multiplier applied to base schedule step. */
+  /**
+   * Coarse frequency step (offsets 1, 2), used before the last cycle.
+   * Absolute vector step. Default 1e-4 ≈ 2 Hz.
+   */
+  frequencyStepCoarse: number;
+  /**
+   * Phase step (offset 5). Absolute vector step, independent of cycle.
+   * Default 0.003125 ≈ 1.1°.
+   */
   phaseStep: number;
 }
 
@@ -70,11 +81,17 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
     { startStep: 0.0025, minStep: 0.0001, label: 'PRECISION' },
   ],
   frequencyStep: 0.0000001,
+  frequencyStepCoarse: 0.0001,
   phaseStep: 0.003125,
 };
 
 const PERTURBATION = 0.05;
 
+/**
+ * Per-parameter step. Frequency uses the caller-selected
+ * coarse or fine step; phase is fixed; other params follow
+ * the cycle schedule floored at minStep.
+ */
 const getParamStep = (
   paramIndex: number,
   baseStep: number,
@@ -358,15 +375,18 @@ export const coordinateDescent = (
     let step = cycle.startStep;
     stagnation = 0;
 
+    const isLastCycle = cycleIndex === restartSchedule.length - 1;
+    const frequencyStep = isLastCycle
+      ? cfg.frequencyStep
+      : cfg.frequencyStepCoarse;
+    const phaseStep = cfg.phaseStep;
+
     console.log(
-      `[CoordDescent] Cycle: ${cycle.label}, startStep=${cycle.startStep}, minStep=${cycle.minStep}, score=${currentBest.toFixed(4)}%`,
+      `[CoordDescent] Cycle: ${cycle.label}, startStep=${cycle.startStep}, minStep=${cycle.minStep}, freqStep=${frequencyStep}, score=${currentBest.toFixed(4)}%`,
     );
 
     const cycleIterStart = iter;
     let genomeChanged = false;
-
-    const frequencyStep = cfg.frequencyStep;
-    const phaseStep = cfg.phaseStep;
 
     while (iter < maxIterations) {
       const prevGenome = genome.slice();
@@ -499,6 +519,13 @@ export const coordinateDescent = (
         );
         stagnation = 0;
       }
+
+      if (step < cycle.minStep) {
+        console.log(
+          `[CoordDescent] Step ${step.toFixed(8)} < minStep ${cycle.minStep}, leaving ${cycle.label}`,
+        );
+        break;
+      }
     }
 
     if (currentBest >= cfg.earlyExitSuppression) {
@@ -539,7 +566,9 @@ export const coordinateDescent = (
     targetSignal,
   );
 
-  console.log(`[CoordDescent] Optimal scale: ${scale.toFixed(4)}`);
+  console.log(
+    `[CoordDescent] Optimal scale: ${scale.toFixed(4)} (waveform probe ${scaleScore.toFixed(4)}%)`,
+  );
 
   if (scale !== 1) {
     for (let osc = 0; osc < numOsc; osc++) {
@@ -550,7 +579,10 @@ export const coordinateDescent = (
     }
   }
 
-  currentBest = scaleScore;
+  currentBest = evaluateSuppressionWindowed(
+    createWaveForm(genome, sampleRate, targetSignal.length),
+    targetSignal,
+  );
 
   console.log(
     `[CoordDescent] After scale fitting: ${currentBest.toFixed(4)}%`,

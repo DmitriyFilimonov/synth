@@ -366,6 +366,7 @@ export const stagedOptimize = (
           },
         ],
         frequencyStep: bestHyper.frequencyStep,
+        frequencyStepCoarse: bestHyper.frequencyStepCoarse,
         phaseStep: bestHyper.phaseStep,
       };
 

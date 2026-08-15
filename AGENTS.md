@@ -76,7 +76,7 @@ Generate → Compare → Save WAV + SVG
 | `src/index.ts`                   | Точка входа, генерация WAV из пресета                                                                                                                                                                                                       |
 | `src/consts.ts`                  | Константы: `SAMPLE_RATE`, `SAMPLE_LENGTH_IN_SECONDS`, `MAX_AMPLITUDE_16_BIT_WAV_ENCODED`, `VOLUME_MIN`, `VOLUME_PRUNE_THRESHOLD`                                                                                                            |
 | `src/synth.ts`                   | Создание синтезатора из конфигурации осцилляторов                                                                                                                                                                                           |
-| `src/envelope.ts`                | Экспоненциальная функция огибающей: `max * (e ^ (ln(min) * (x/duration)^slope))`. Параметр `max` задаёт начальный уровень (при x=0), `min` — конечный (при x=duration). При `x > duration` значение clamp'ится к `duration` (огибающая остаётся на последнем вычисленном уровне). |
+| `src/envelope.ts`                | Экспоненциальная функция огибающей: `max * (e ^ (ln(min) * (x/duration)^slope))`. `max` — начальный уровень при x=0; `min` — относительный множитель, конечный уровень при x=duration равен `max * min`. При `x > duration` время clamp'ится к `duration` (огибающая остаётся на последнем уровне). |
 | `src/oscillator.ts`              | Расчёт сигнала осциллятора                                                                                                                                                                                                                  |
 | `src/presets.ts`                 | Пресеты конфигураций осцилляторов                                                                                                                                                                                                           |
 | `src/read-wav.ts`                | Чтение 16-битного WAV → `Int16Array` + метаданные (строго моно/16-бит/PCM)                                                                                                                                                                  |
@@ -128,13 +128,13 @@ Generate → Compare → Save WAV + SVG
 #### Текущее поведение (изменяемое, НЕ инвариант)
 
 - Мульти-цикловый подход (дефолты `DEFAULT_COORD_DESCENT_CONFIG`): `EXPLORATION` (0.025→0.01) → `REFINEMENT` (0.01→0.003) → `PRECISION` (0.0025→0.0001) — применяется к non-freq/phase параметрам
-- Пошаговые размеры по типам параметров: `frequencyStep` (0.0000001, offsets 1-2) и `phaseStep` (0.003125, offset 5) — фиксированные, НЕ зависят от цикла; остальные параметры используют шаг из текущего цикла (EXPLORATION/REFINEMENT/PRECISION)
+- Пошаговые размеры по типам параметров: частота — двухскоростной шаг, `frequencyStepCoarse` (0.0001 ≈ 2 Гц) в EXPLORATION/REFINEMENT и `frequencyStep` (0.0000001 ≈ 0.002 Гц) в PRECISION (offsets 1-2); `phaseStep` (0.003125, offset 5) — фиксированный, НЕ зависит от цикла; остальные параметры используют шаг из текущего цикла
 - Плато-пинки: при `3` итерациях без улучшения — случайный пинк одного параметра; после `5` пинков — полный рандомный рестарт
-- Затухание шага: при `4` итерациях без улучшения шаг × `0.9` (`stagnationStepDecayFactor`); выход из цикла, если шаг < minStep (только для non-freq/phase)
+- Затухание шага: при `4` итерациях без улучшения шаг × `0.9` (`stagnationStepDecayFactor`); выход из цикла, если шаг < minStep (только для non-freq/phase; частота/фаза на minStep цикла не завязаны)
 - Ранний выход при достижении `98%` suppression
 - Флаг `on` всегда `1` в процессе оптимизации; `enforceFlagInvariant` включает осцилляторы с `volume > VOLUME_MIN` и все до rightmostEnabled
 - После completion — финальный прунинг: осцилляторы с `startLevel < VOLUME_PRUNE_THRESHOLD` (≈ 0.02) отключаются; откат если score падает > 0.05 п.п.
-- Scale fitting: подбор оптимального масштаба громкости (`findOptimalScale`) после оптимизации
+- Scale fitting: подбор оптимального масштаба громкости (`findOptimalScale`) после оптимизации; множитель пишется в `startLevel`, затем геном **пересинтезируется и переоценивается** (score с отмасштабированного waveform не переиспользуется)
 - Volume (offset 9): мультипликативный шаг (`center * (1 ± step)`), ограничен `clampVolume` → `[VOLUME_MIN, 1]`
 - Все константы алгоритма вынесены в `CoordinateDescentConfig` и могут быть переопределены через HPO. Значения по умолчанию — `DEFAULT_COORD_DESCENT_CONFIG`.
 - Логи `[CoordDescent]` (Plateau kick, Step grown/decayed) выводятся через
@@ -245,7 +245,8 @@ base+20ms), затем base × `stageDurationMultiplier`. Множитель
 - `maxRestartsBeforeRandomRestart` — 2..10
 - `kickFallbackThreshold` — [0.5, 0.95]
 - `initialStageMs` — 5..100
-- `frequencyStep` — [5e-8, 5e-7] (log) — шаг для freqBase/freqStart (offsets 1, 2), дефолт 0.0000001
+- `frequencyStep` — [5e-8, 5e-7] (log) — мелкий шаг freqBase/freqStart в PRECISION, дефолт 0.0000001
+- `frequencyStepCoarse` — [1e-5, 5e-4] (log) — грубый шаг freqBase/freqStart в EXPLORATION/REFINEMENT, дефолт 0.0001
 - `phaseStep` — [0.0015, 0.006] — шаг для phase (offset 5), дефолт 0.003125
 
 > `iterations` НЕ является гиперпараметром — пользователь контролирует через

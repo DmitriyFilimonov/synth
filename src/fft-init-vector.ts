@@ -118,9 +118,13 @@ export const fftInitVector = (
       ampEnvConfigNormales.slope.max,
     );
 
-    // End level = start level for flat amplitude envelope (no decay)
-    // This keeps the oscillator at full amplitude throughout the signal
-    const endLevelNorm = startLevelNorm;
+    // endLevel is a relative decay ratio (final = startLevel * endLevel).
+    // 1.0 keeps amplitude constant for the whole signal.
+    const endLevelNorm = normalize(
+      ampEnvConfigNormales.endLevel.max,
+      ampEnvConfigNormales.endLevel.min,
+      ampEnvConfigNormales.endLevel.max,
+    );
 
     vector[offset] = 1;
     vector[offset + 1] = freqBaseNorm;

@@ -258,8 +258,21 @@ export const HYPERPARAM_SPACE: HyperparamDef[] = [
       step: null,
     },
     description:
-      'Step for freqBase/freqStart (offset 1,2). ~0.002 Hz in physical space',
+      'Fine step for freqBase/freqStart (offset 1,2) in PRECISION. ~0.002 Hz',
     currentValue: 0.0000001,
+  },
+  {
+    name: 'frequencyStepCoarse',
+    distribution: {
+      type: 'float',
+      low: 1e-5,
+      high: 5e-4,
+      log: true,
+      step: null,
+    },
+    description:
+      'Coarse step for freqBase/freqStart in EXPLORATION/REFINEMENT. ~2 Hz',
+    currentValue: 0.0001,
   },
   {
     name: 'phaseStep',
@@ -299,6 +312,7 @@ export const HYPERPARAM_DEFAULTS: Record<string, number> = {
   kickFallbackThreshold: 0.8,
   initialStageMs: 10,
   frequencyStep: 0.0000001,
+  frequencyStepCoarse: 0.0001,
   phaseStep: 0.003125,
 };
 
@@ -329,6 +343,7 @@ export interface ResolvedHyperparams {
   initialStageMs: number;
   // per-parameter step sizes
   frequencyStep: number;
+  frequencyStepCoarse: number;
   phaseStep: number;
 }
 
@@ -411,6 +426,10 @@ export function resolveHyperparams(
       D.initialStageMs as number,
     ),
     frequencyStep: get('frequencyStep', D.frequencyStep as number),
+    frequencyStepCoarse: get(
+      'frequencyStepCoarse',
+      D.frequencyStepCoarse as number,
+    ),
     phaseStep: get('phaseStep', D.phaseStep as number),
   };
 }

@@ -29,6 +29,7 @@ export interface CoordinateDescentConfig {
     label: string;
   }>;
   frequencyStep: number;
+  frequencyStepCoarse: number;
   phaseStep: number;
 }
 
