@@ -326,9 +326,7 @@ function JobDetail({
                     ? '#991b1b55'
                     : '#1e3a5f55',
                 color:
-                  stageInfo.phase === 'hpo'
-                    ? '#ef4444'
-                    : '#3b82f6',
+                  stageInfo.phase === 'hpo' ? '#ef4444' : '#3b82f6',
               }}
             >
               {stageInfo.phase === 'hpo'
@@ -439,6 +437,7 @@ export function MatcherForm() {
   const [file, setFile] = useState<File | null>(null);
   const [numOscillators, setNumOscillators] = useState('5');
   const [maxIterations, setMaxIterations] = useState('20');
+  const [hpo, setHpo] = useState(true);
   const [staged, setStaged] = useState(true);
   const [stageDurationMultiplier, setStageDurationMultiplier] =
     useState('1');
@@ -546,6 +545,7 @@ export function MatcherForm() {
       await createMatchJob(file, {
         numOscillators: Number(numOscillators),
         maxIterations: Number(maxIterations),
+        hpo,
         stageDurationMultiplier: staged
           ? Number(stageDurationMultiplier)
           : undefined,
@@ -678,6 +678,17 @@ export function MatcherForm() {
                 className={styles.checkbox}
               />
               Staged optimization
+            </label>
+          </div>
+          <div className={styles.row}>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={hpo}
+                onChange={(e) => setHpo(e.target.checked)}
+                className={styles.checkbox}
+              />
+              Hyperparameter optimization (HPO)
             </label>
           </div>
           {staged && (

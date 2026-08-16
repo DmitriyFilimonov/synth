@@ -20,6 +20,7 @@ export interface MatchHistoryEntry {
 export interface MatchConfig {
   numOscillators?: number;
   maxIterations?: number;
+  hpo?: boolean;
   stageDurationMultiplier?: number;
   staged?: boolean;
 }
@@ -54,6 +55,7 @@ export interface JobEntry {
   params: {
     numOscillators: number;
     maxIterations: number;
+    hpo?: boolean;
     stageDurationMultiplier?: number;
   };
   suppressionPercent: number;
@@ -71,6 +73,7 @@ export interface JobListEntry {
   params: {
     numOscillators: number;
     maxIterations: number;
+    hpo?: boolean;
     stageDurationMultiplier?: number;
   };
   createdAt: string;

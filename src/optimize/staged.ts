@@ -36,6 +36,12 @@ export interface ArgStagedOptimize extends Omit<
    * При false: HPO один раз на полном сигнале, затем один CD без стадий.
    */
   staged?: boolean;
+  /**
+   * Включить HPO (по умолчанию true).
+   * При false: HPO пропускается в обоих режимах (staged и flat),
+   * идёт только coordinate descent с дефолтными гиперпараметрами.
+   */
+  hpo?: boolean;
 }
 
 export interface StageResult {
@@ -256,6 +262,7 @@ const runFlatOptimization = (arg: {
   maxIterations: number;
   onProgress?: ProgressCallback;
   hpoTrials?: number;
+  hpo?: boolean;
   tpeConfig?: Partial<TPEConfig>;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
@@ -268,6 +275,7 @@ const runFlatOptimization = (arg: {
     maxIterations,
     onProgress,
     hpoTrials,
+    hpo,
     tpeConfig,
     stepGrowthAdd,
     stepDecayFactor,
@@ -280,8 +288,8 @@ const runFlatOptimization = (arg: {
 
   let currentVector = [...initialVector];
 
-  // Optional HPO on full signal
-  if (hpoTrials && hpoTrials > 0) {
+  // Optional HPO on full signal (skipped when hpo=false)
+  if (hpo !== false && hpoTrials && hpoTrials > 0) {
     console.log(
       `[HPO] Flat mode: ${hpoTrials} trials × 7 iter, signal=${((totalSamples / sampleRate) * 1000).toFixed(0)}ms`,
     );
@@ -507,6 +515,7 @@ export const stagedOptimize = (
     tpeConfig,
     fundamentalHz,
     staged = true,
+    hpo,
   } = arg;
 
   // Flat mode: single HPO + single CD on full signal (no staging)
@@ -518,6 +527,7 @@ export const stagedOptimize = (
       maxIterations,
       onProgress,
       hpoTrials,
+      hpo,
       tpeConfig,
       stepGrowthAdd,
       stepDecayFactor,
@@ -600,7 +610,7 @@ export const stagedOptimize = (
     let cdStepDecayFactor: number | undefined;
     let usedConfig: Partial<CoordinateDescentConfig> = { ...config };
 
-    if (hpoTrials && hpoTrials > 0) {
+    if (hpo !== false && hpoTrials && hpoTrials > 0) {
       const effectiveHpoTrials = computeHpoTrialsForStage(
         stageSamples,
         hpoTrials,

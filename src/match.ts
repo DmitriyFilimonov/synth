@@ -29,6 +29,7 @@ interface ArgMatch {
   stageDurationMultiplier?: number;
   hpoTrials?: number;
   hpoConfig?: Partial<ArgHPO['tpeConfig']>;
+  hpo?: boolean;
 }
 
 interface MatchResult {
@@ -137,7 +138,8 @@ export const match = (arg: ArgMatch): MatchResult => {
     arg.stepGrowthAdd !== undefined &&
     arg.stepDecayFactor !== undefined;
 
-  if (hasUserOverride) {
+  if (hasUserOverride || arg.hpo === false) {
+    // No HPO: pure CD with user-specified steps or HPO disabled
     const result = stagedOptimize({
       initialVector: defaultVector,
       targetSignal,
@@ -148,6 +150,7 @@ export const match = (arg: ArgMatch): MatchResult => {
       stepDecayFactor: arg.stepDecayFactor,
       stageDurationMultiplier: arg.stageDurationMultiplier,
       fundamentalHz,
+      hpo: arg.hpo,
     });
     vector = result.vector;
     history = result.history;

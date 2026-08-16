@@ -48,18 +48,18 @@ $$
 
 Вектор оптимизации $x \in [0,1]^{500}$: 50 осцилляторов × 10 параметров. Денормализация — линейная (`src/vector-to-synth-config.ts`, единственный источник истины):
 
-| Offset | Параметр           | Диапазон      | Примечание                                                           |
-| ------ | ------------------ | ------------- | -------------------------------------------------------------------- |
-| 0      | `on`               | {0, 1}        | Бинарный флаг (порог 0.5)                                            |
-| 1      | `freqBase`         | 20–20 000 Гц  | Линейная шкала: 1 ед. вектора = 19 980 Гц                            |
-| 2      | `freqStart`        | 20–20 000 Гц  | То же                                                                |
-| 3      | `slope` (freq env) | 0.2–2         | Кривизна огибающей частоты                                           |
-| 4      | `duration` (freq)  | 1/44100–0.5 с |                                                                      |
-| 5      | `phase`            | 0–2π          | Без wrap-around: шаги клампятся на границах 0 и 1                    |
-| 6      | `duration` (amp)   | 1/44100–0.5 с |                                                                      |
-| 7      | `endLevel`         | 0.001–1       |                                                                      |
-| 8      | `slope` (amp env)  | 0.2–2         |                                                                      |
-| 9      | `startLevel`       | 0.001–1       | Масштаб огибающей амплитуды при $t=0$                       |
+| Offset | Параметр           | Диапазон      | Примечание                                        |
+| ------ | ------------------ | ------------- | ------------------------------------------------- |
+| 0      | `on`               | {0, 1}        | Бинарный флаг (порог 0.5)                         |
+| 1      | `freqBase`         | 20–20 000 Гц  | Линейная шкала: 1 ед. вектора = 19 980 Гц         |
+| 2      | `freqStart`        | 20–20 000 Гц  | То же                                             |
+| 3      | `slope` (freq env) | 0.2–2         | Кривизна огибающей частоты                        |
+| 4      | `duration` (freq)  | 1/44100–0.5 с |                                                   |
+| 5      | `phase`            | 0–2π          | Без wrap-around: шаги клампятся на границах 0 и 1 |
+| 6      | `duration` (amp)   | 1/44100–0.5 с |                                                   |
+| 7      | `endLevel`         | 0.001–1       |                                                   |
+| 8      | `slope` (amp env)  | 0.2–2         |                                                   |
+| 9      | `startLevel`       | 0.001–1       | Масштаб огибающей амплитуды при $t=0$             |
 
 ### Целевая метрика и surrogate-объектив
 
@@ -92,13 +92,18 @@ flowchart TD
     C -->|true (по умолч.)| D["Staged optimization<br/>стадии: 10, 20, 30, 60, 70, 80,<br/>160 ... ms → полный сигнал"]
     C -->|false| E["Flat optimization<br/>HPO + CD на полном сигнале<br/>(без стадий)"]
     subgraph stage ["Каждая стадия (сигнал усечён до N мс)"]
-        F["HPO (TPE, Optuna-style)<br/>подбор гиперпараметров CD:<br/>шаги, decay, пороги плато"] --> G["Coordinate descent<br/>maxIterations итераций<br/>+ плато-кики + random restarts"]
-        G --> H["Экстраполяция длительностей<br/>огибающих на следующую стадию"]
+        F{"HPO включён?"} -->|да| G["HPO (TPE, Optuna-style)<br/>подбор гиперпараметров CD:<br/>шаги, decay, пороги плато"]
+        F -->|нет| H["Coordinate descent<br/>с дефолтными гиперпараметрами"]
+        G --> H
+        H --> I["Экстраполяция длительностей<br/>огибающих на следующую стадию"]
     end
+    E --> J{"HPO включён?"}
+    J -->|да| K["HPO на полном сигнале"] --> L["Coordinate descent<br/>с подобранными гиперпараметрами"]
+    J -->|нет| L
+    L --> I2["Финализация:<br/>прунинг тихих осцилляторов,<br/>scale fitting"]
     D --> stage
-    E --> I["Финализация:<br/>прунинг тихих осцилляторов,<br/>scale fitting"]
-    stage --> I
-    I --> J["Output WAV + SVG + suppression %"]
+    stage --> I2
+    I2 --> M["Output WAV + SVG + suppression %"]
 ```
 
 Один шаг coordinate descent: для каждого включённого осциллятора и каждого из 9 непрерывных параметров пробуются два кандидата $x_i \pm \text{step}$ (для «громкости» — мультипликативно $x_i(1\pm\text{step})$); каждый кандидат = полный ресинтез + вычисление $J$. Итого на итерацию при 30 активных осцилляторах: $30 \times 9 \times 2 = 540$ полных оценок $f$.
@@ -139,10 +144,10 @@ $$
 
 Шаг по частоте **больше не общий** с остальными параметрами. Coordinate descent использует двухскоростной абсолютный шаг (offsets 1–2):
 
-| Цикл | Параметр | Шаг в векторе | ≈ Гц |
-| ---- | -------- | ------------- | ---- |
-| EXPLORATION / REFINEMENT | `frequencyStepCoarse` | $10^{-4}$ | **2 Гц** |
-| PRECISION | `frequencyStep` | $10^{-7}$ | **0.002 Гц** |
+| Цикл                     | Параметр              | Шаг в векторе | ≈ Гц         |
+| ------------------------ | --------------------- | ------------- | ------------ |
+| EXPLORATION / REFINEMENT | `frequencyStepCoarse` | $10^{-4}$     | **2 Гц**     |
+| PRECISION                | `frequencyStep`       | $10^{-7}$     | **0.002 Гц** |
 
 Мелкий шаг достаточен, чтобы в изоляции дожать частоту до уровня 98% из таблицы выше (~0.01 Гц). Грубый шаг нужен, чтобы вообще дойти до главного лепестка: раньше единый `minStep` цикла ($10^{-2}\ldots10^{-4}$) либо перекрывал мелкий шаг (~200…2 Гц), либо — после отвязки — оставлял только микрошаг, которым нельзя пройти даже 1 Гц.
 
@@ -161,6 +166,7 @@ $$
 `envelopeCreator` (`src/envelope.ts`) **игнорировал** поле `max`, в которое синтезатор передаёт `ampEnv.startLevel`. Это было исправлено: формула теперь `max * (e ^ (ln(min) * (x/duration)^slope))`.
 
 **До исправления:**
+
 - у модели **не было индивидуальной громкости осциллятора** — каждый активный партиал стартовал с амплитуды 1.0;
 - оптимизатор тратил ходы на offset 9 (2 полных ресинтеза на осциллятор за итерацию) — бесполезно;
 - **финальный scale fitting — no-op**: `findOptimalScale` записывал score, но умножал мёртвый параметр;
@@ -315,6 +321,8 @@ match({
 По умолчанию используется **поэтапная оптимизация со встроенным HPO**: сигнал
 разбивается на нарастающие стадии (от 10ms до полной длины), перед каждым
 CD-этапом HPO на коротком сигнале подбирает оптимальные гиперпараметры.
+HPO можно отключить в UI чекбоксом — тогда оптимизация пойдёт сразу
+с дефолтными гиперпараметрами, без TPE-подбора.
 
 | Особенность        | Описание                                                                                 |
 | ------------------ | ---------------------------------------------------------------------------------------- |
@@ -333,6 +341,13 @@ CD-этапом HPO на коротком сигнале подбирает оп
 - **Flat** (`staged: false`) — плоская оптимизация: один проход HPO на полном
   сигнале, затем один проход CD на полном сигнале. Без стадий, без
   экстраполяции. `stageDurationMultiplier` игнорируется.
+
+**Опциональность HPO:**
+Параметр `hpo: true/false` (по умолчанию `true`) управляет запуском HPO-подбора
+гиперпараметров. При `hpo: false` HPO полностью пропускается в обоих режимах
+(staged и flat) — coordinate descent запускается сразу с дефолтными
+гиперпараметрами из `DEFAULT_COORD_DESCENT_CONFIG`. HPO можно включить/выключить
+чекбоксом в UI.
 
 Внутри каждого координатного спуска:
 
@@ -432,46 +447,46 @@ npm run lint:fix       # ESLint (автофикс)
 
 ## Структура проекта
 
-| Файл / Папка                        | Назначение                                                                                                                                                                                    |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/index.ts`                      | Генерация WAV из `presets.ts`                                                                                                                                                                 |
-| `src/server.ts`                     | Точка входа HTTP-сервера                                                                                                                                                                      |
-| `src/api/`                          | Express API (контроллеры, роуты, сервисы)                                                                                                                                                     |
-| `src/presets.ts`                    | Пресеты для генерации                                                                                                                                                                         |
-| `src/match-entry.ts`                | Точка входа подбора параметров                                                                                                                                                                |
-| `src/match.ts`                      | Оркестратор: read → optimize → generate → visualize                                                                                                                                           |
-| `src/match-worker.ts`               | Обёртка для запуска оптимизации в worker-потоке                                                                                                                                               |
-| `src/optimizer-worker.ts`           | Реализация worker-потока для оптимизации                                                                                                                                                      |
-| `src/match-preset.ts`               | Пресеты для начальной точки оптимизации                                                                                                                                                       |
-| `src/match-visualize.ts`            | SVG сравнения сигналов + прогресс                                                                                                                                                             |
-| `src/optimize/`                       | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (поэтапная или плоская оптимизация с HPO) |
-| `src/optimize/hpo/`                 | Hyperparameter optimization: `run-hpo.ts` (координатор), `study.ts`, `trial.ts`, `sampler.ts`, `sampler-tpe.ts` (TPE), `param-space.ts`                                                       |
-| `src/signal-analysis.ts`            | Анализ сигналов: автокорреляция, amplitude envelope, freqOverTime                                                                                                                             |
-| `src/spectrogram.ts`                | STFT-анализ: Hanning window, FFT, peak detection, кластеризация, fit envelopes                                                                                                                |
-| `src/fft.ts`                        | Cooley-Tukey radix-2 FFT, extraction доминантных гармоник                                                                                                                                     |
-| `src/simple-init-vector.ts`         | Инициализация: Goertzel + STFT-гармоники                                                                                                                                                      |
-| `src/fft-init-vector.ts`            | FFT-инициализация на коротком окне (~23ms)                                                                                                                                                    |
-| `src/stft-init-vector.ts`           | STFT-инициализация с траекториями                                                                                                                                                             |
-| `src/adaptive-init-vector.ts`       | Адаптивная инициализация: детекция биений через amplitude modulation                                                                                                                          |
-| `src/visualize-envelopes.ts`        | Генерация SVG огибающих                                                                                                                                                                       |
-| `src/visualize.ts`                  | Утилита для построения SVG-графиков                                                                                                                                                           |
-| `src/synth.ts`                      | Создатель синтезатора                                                                                                                                                                         |
-| `src/oscillator.ts`                 | Расчёт сигнала осциллятора                                                                                                                                                                    |
-| `src/envelope.ts`                   | Экспоненциальная функция огибающей                                                                                                                                                            |
-| `src/read-wav.ts`                   | Парсинг 16-бит WAV                                                                                                                                                                            |
-| `src/write-wav.ts`                  | Запись WAV                                                                                                                                                                                    |
-| `src/cancellation-assessment.ts`    | Оценка качества подавления (RMS)                                                                                                                                                              |
-| `src/rms.ts`                        | Расчёт RMS энергии                                                                                                                                                                            |
-| `src/synth-config-to-vector.ts`     | Нормализация конфига → `[0,1]`                                                                                                                                                                |
-| `src/vector-to-synth-config.ts`     | Денормализация вектора → конфиг (50 осцилляторов)                                                                                                                                             |
-| `src/consts.ts`                     | Константы: `SAMPLE_RATE`, `VOLUME_MIN`, `VOLUME_PRUNE_THRESHOLD`                                                                                                                              |
-| `web/`                              | Веб-интерфейс (React + Vite, FSD)                                                                                                                                                             |
-| `web/src/global.css`                | Дизайн-система: токены, тёмная тема, шрифты (CSS custom properties)                                                                                                                           |
-| `web/src/app/`                      | Инициализация приложения, корневой лейаут                                                                                                                                                     |
-| `web/src/features/synth-generator/` | Фича генерации WAV                                                                                                                                                                            |
-| `web/src/features/wav-matcher/`     | Фича подбора параметров к WAV                                                                                                                                                                 |
-| `web/src/shared/ui/`                | Переиспользуемые UI-компоненты: `Button`, `Input`, `Select`, `AudioPlayer`                                                                                                                    |
-| `web/src/shared/api/`               | Базовый HTTP-клиент (`fetchApi`, `fetchBlob`)                                                                                                                                                 |
+| Файл / Папка                        | Назначение                                                                                                                                                                                                |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`                      | Генерация WAV из `presets.ts`                                                                                                                                                                             |
+| `src/server.ts`                     | Точка входа HTTP-сервера                                                                                                                                                                                  |
+| `src/api/`                          | Express API (контроллеры, роуты, сервисы)                                                                                                                                                                 |
+| `src/presets.ts`                    | Пресеты для генерации                                                                                                                                                                                     |
+| `src/match-entry.ts`                | Точка входа подбора параметров                                                                                                                                                                            |
+| `src/match.ts`                      | Оркестратор: read → optimize → generate → visualize                                                                                                                                                       |
+| `src/match-worker.ts`               | Обёртка для запуска оптимизации в worker-потоке                                                                                                                                                           |
+| `src/optimizer-worker.ts`           | Реализация worker-потока для оптимизации                                                                                                                                                                  |
+| `src/match-preset.ts`               | Пресеты для начальной точки оптимизации                                                                                                                                                                   |
+| `src/match-visualize.ts`            | SVG сравнения сигналов + прогресс                                                                                                                                                                         |
+| `src/optimize/`                     | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (поэтапная или плоская оптимизация с HPO) |
+| `src/optimize/hpo/`                 | Hyperparameter optimization: `run-hpo.ts` (координатор), `study.ts`, `trial.ts`, `sampler.ts`, `sampler-tpe.ts` (TPE), `param-space.ts`                                                                   |
+| `src/signal-analysis.ts`            | Анализ сигналов: автокорреляция, amplitude envelope, freqOverTime                                                                                                                                         |
+| `src/spectrogram.ts`                | STFT-анализ: Hanning window, FFT, peak detection, кластеризация, fit envelopes                                                                                                                            |
+| `src/fft.ts`                        | Cooley-Tukey radix-2 FFT, extraction доминантных гармоник                                                                                                                                                 |
+| `src/simple-init-vector.ts`         | Инициализация: Goertzel + STFT-гармоники                                                                                                                                                                  |
+| `src/fft-init-vector.ts`            | FFT-инициализация на коротком окне (~23ms)                                                                                                                                                                |
+| `src/stft-init-vector.ts`           | STFT-инициализация с траекториями                                                                                                                                                                         |
+| `src/adaptive-init-vector.ts`       | Адаптивная инициализация: детекция биений через amplitude modulation                                                                                                                                      |
+| `src/visualize-envelopes.ts`        | Генерация SVG огибающих                                                                                                                                                                                   |
+| `src/visualize.ts`                  | Утилита для построения SVG-графиков                                                                                                                                                                       |
+| `src/synth.ts`                      | Создатель синтезатора                                                                                                                                                                                     |
+| `src/oscillator.ts`                 | Расчёт сигнала осциллятора                                                                                                                                                                                |
+| `src/envelope.ts`                   | Экспоненциальная функция огибающей                                                                                                                                                                        |
+| `src/read-wav.ts`                   | Парсинг 16-бит WAV                                                                                                                                                                                        |
+| `src/write-wav.ts`                  | Запись WAV                                                                                                                                                                                                |
+| `src/cancellation-assessment.ts`    | Оценка качества подавления (RMS)                                                                                                                                                                          |
+| `src/rms.ts`                        | Расчёт RMS энергии                                                                                                                                                                                        |
+| `src/synth-config-to-vector.ts`     | Нормализация конфига → `[0,1]`                                                                                                                                                                            |
+| `src/vector-to-synth-config.ts`     | Денормализация вектора → конфиг (50 осцилляторов)                                                                                                                                                         |
+| `src/consts.ts`                     | Константы: `SAMPLE_RATE`, `VOLUME_MIN`, `VOLUME_PRUNE_THRESHOLD`                                                                                                                                          |
+| `web/`                              | Веб-интерфейс (React + Vite, FSD)                                                                                                                                                                         |
+| `web/src/global.css`                | Дизайн-система: токены, тёмная тема, шрифты (CSS custom properties)                                                                                                                                       |
+| `web/src/app/`                      | Инициализация приложения, корневой лейаут                                                                                                                                                                 |
+| `web/src/features/synth-generator/` | Фича генерации WAV                                                                                                                                                                                        |
+| `web/src/features/wav-matcher/`     | Фича подбора параметров к WAV                                                                                                                                                                             |
+| `web/src/shared/ui/`                | Переиспользуемые UI-компоненты: `Button`, `Input`, `Select`, `AudioPlayer`                                                                                                                                |
+| `web/src/shared/api/`               | Базовый HTTP-клиент (`fetchApi`, `fetchBlob`)                                                                                                                                                             |
 
 **Соглашения**
 
@@ -531,6 +546,12 @@ npm run lint:fix       # ESLint (автофикс)
 затем один проход CD на полном сигнале. Без экстраполяции длительностей,
 без `stageDurationMultiplier`. Полезно для прямых сравнений и тестов
 на полном сигнале без стадийной прогрессии.
+
+Параметр `hpo: false` отключает HPO в обоих режимах (staged и flat):
+coordinate descent запускается сразу с дефолтными гиперпараметрами.
+В UI HPO контролируется чекбоксом «Hyperparameter optimization (HPO)».
+Отключение HPO ускоряет оптимизацию за счёт отсутствия TPE-подбора
+гиперпараметров, но может дать менее точный результат.
 
 Coordinate descent использует мульти-цикловый подход (EXPLORATION → REFINEMENT → PRECISION).
 На каждой итерации последовательно оптимизируется каждая координата активного

@@ -65,6 +65,7 @@ interface WorkerMessage {
   hpoTpeConfig?: Partial<TPEConfig>;
   fundamentalHz?: number;
   staged?: boolean;
+  hpo?: boolean;
 }
 
 parentPort.on('message', (msg: WorkerMessage) => {
@@ -103,6 +104,7 @@ parentPort.on('message', (msg: WorkerMessage) => {
         sampleRate: msg.sampleRate,
         maxIterations: msg.maxIterations,
         hpoTrials: nTrials,
+        hpo: msg.hpo,
         tpeConfig: msg.hpoTpeConfig,
         stageDurationMultiplier: msg.stageDurationMultiplier,
         fundamentalHz: msg.fundamentalHz,

@@ -18,6 +18,7 @@ export async function createMatchJob(
     params.set('numOscillators', String(config.numOscillators));
   if (config.maxIterations)
     params.set('maxIterations', String(config.maxIterations));
+  if (config.hpo !== undefined) params.set('hpo', String(config.hpo));
   if (config.stageDurationMultiplier !== undefined)
     params.set(
       'stageDurationMultiplier',
@@ -110,6 +111,7 @@ export async function matchWav(
       wavBase64: base64,
       numOscillators: config.numOscillators,
       maxIterations: config.maxIterations,
+      hpo: config.hpo,
       stageDurationMultiplier: config.stageDurationMultiplier,
       staged: config.staged,
     }),

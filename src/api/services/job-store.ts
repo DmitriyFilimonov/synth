@@ -31,6 +31,7 @@ export interface JobRecord {
     stepDecayFactor?: number;
     stageDurationMultiplier?: number;
     hpoTrials?: number;
+    hpo?: boolean;
     staged?: boolean;
   };
   inputFileName: string;
@@ -118,6 +119,7 @@ export async function createJob(
     stepDecayFactor?: number;
     stageDurationMultiplier?: number;
     hpoTrials?: number;
+    hpo?: boolean;
     staged?: boolean;
   },
   inputFileName: string,
