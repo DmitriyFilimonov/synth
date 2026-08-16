@@ -373,6 +373,17 @@ export const coordinateDescent = (
 
   const restartSchedule = cfg.restartSchedule;
 
+  // Бюджет итераций на цикл: каждый цикл ограничен долей maxIterations,
+  // финальный цикл (PRECISION) гарантированно получает резерв (30%).
+  // Цикл, завершившийся по minStep раньше своей доли, освобождает
+  // оставшиеся итерации следующим циклам.
+  const cycleShares = restartSchedule.map((_, i) =>
+    i === restartSchedule.length - 1
+      ? 0.3
+      : 0.7 / Math.max(1, restartSchedule.length - 1),
+  );
+  let cycleStartIter = 0;
+
   let iter = 0;
   let cycleIndex = 0;
   let lastCycleLabel: string | undefined;
@@ -401,7 +412,13 @@ export const coordinateDescent = (
     const cycleIterStart = iter;
     let genomeChanged = false;
 
-    while (iter < maxIterations) {
+    const cycleIterCap = Math.min(
+      maxIterations,
+      cycleStartIter +
+        Math.floor(maxIterations * (cycleShares[cycleIndex] ?? 0.3)),
+    );
+
+    while (iter < cycleIterCap) {
       const prevGenome = genome.slice();
       const result = optimizeIteration(
         genome,
@@ -563,6 +580,13 @@ export const coordinateDescent = (
       );
     }
 
+    if (iter >= cycleIterCap && iter < maxIterations) {
+      console.log(
+        `[CoordDescent] Cycle ${cycle.label} hit share cap at iter ${iter}, advancing`,
+      );
+    }
+
+    cycleStartIter = iter;
     cycleIndex++;
   }
 
