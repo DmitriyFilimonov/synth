@@ -349,6 +349,7 @@ const runFlatOptimization = (arg: {
       ],
       frequencyStep: bestHyper.frequencyStep,
       frequencyStepCoarse: bestHyper.frequencyStepCoarse,
+      frequencyStepRefine: bestHyper.frequencyStepRefine,
       phaseStep: bestHyper.phaseStep,
     };
     if (config?.frequencyStep !== undefined) {
@@ -356,6 +357,9 @@ const runFlatOptimization = (arg: {
     }
     if (config?.frequencyStepCoarse !== undefined) {
       usedConfig.frequencyStepCoarse = config.frequencyStepCoarse;
+    }
+    if (config?.frequencyStepRefine !== undefined) {
+      usedConfig.frequencyStepRefine = config.frequencyStepRefine;
     }
     if (config?.phaseStep !== undefined) {
       usedConfig.phaseStep = config.phaseStep;
@@ -709,6 +713,7 @@ export const stagedOptimize = (
         ],
         frequencyStep: bestHyper.frequencyStep,
         frequencyStepCoarse: bestHyper.frequencyStepCoarse,
+        frequencyStepRefine: bestHyper.frequencyStepRefine,
         phaseStep: bestHyper.phaseStep,
       };
       if (config?.frequencyStep !== undefined) {
@@ -716,6 +721,9 @@ export const stagedOptimize = (
       }
       if (config?.frequencyStepCoarse !== undefined) {
         usedConfig.frequencyStepCoarse = config.frequencyStepCoarse;
+      }
+      if (config?.frequencyStepRefine !== undefined) {
+        usedConfig.frequencyStepRefine = config.frequencyStepRefine;
       }
       if (config?.phaseStep !== undefined) {
         usedConfig.phaseStep = config.phaseStep;

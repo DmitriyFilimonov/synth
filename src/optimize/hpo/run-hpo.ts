@@ -214,6 +214,9 @@ function suggestTrialParams(
   trial.suggestFloat('frequencyStepCoarse', 1e-5, 5e-4, {
     log: true,
   });
+  trial.suggestFloat('frequencyStepRefine', 1e-6, 1e-5, {
+    log: true,
+  });
   trial.suggestFloat('phaseStep', 0.0015, 0.006);
 
   return trial.getParams();
@@ -253,6 +256,7 @@ function buildCoordDescentConfig(
     ],
     frequencyStep: hyperparams.frequencyStep,
     frequencyStepCoarse: hyperparams.frequencyStepCoarse,
+    frequencyStepRefine: hyperparams.frequencyStepRefine,
     phaseStep: hyperparams.phaseStep,
   };
 }

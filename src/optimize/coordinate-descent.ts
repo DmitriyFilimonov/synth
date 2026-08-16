@@ -54,10 +54,15 @@ export interface CoordinateDescentConfig {
    */
   frequencyStep: number;
   /**
-   * Coarse frequency step (offsets 1, 2), used before the last cycle.
+   * Coarse frequency step (offsets 1, 2), used in EXPLORATION.
    * Absolute vector step. Default 1e-4 ≈ 2 Hz.
    */
   frequencyStepCoarse: number;
+  /**
+   * Refinement frequency step (offsets 1, 2), used in REFINEMENT.
+   * Absolute vector step. Default 5e-6 ≈ 0.1 Hz.
+   */
+  frequencyStepRefine: number;
   /**
    * Phase step (offset 5). Absolute vector step, independent of cycle.
    * Default 0.003125 ≈ 1.1°.
@@ -82,6 +87,7 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
   ],
   frequencyStep: 0.0000001,
   frequencyStepCoarse: 0.0001,
+  frequencyStepRefine: 0.000005,
   phaseStep: 0.003125,
 };
 
@@ -379,9 +385,12 @@ export const coordinateDescent = (
     stagnation = 0;
 
     const isLastCycle = cycleIndex === restartSchedule.length - 1;
-    const frequencyStep = isLastCycle
-      ? cfg.frequencyStep
-      : cfg.frequencyStepCoarse;
+    const frequencyStep =
+      cycleIndex === 0
+        ? cfg.frequencyStepCoarse
+        : isLastCycle
+          ? cfg.frequencyStep
+          : cfg.frequencyStepRefine;
     const phaseStep = cfg.phaseStep;
     lastCycleLabel = cycle.label;
 

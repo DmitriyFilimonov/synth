@@ -32,6 +32,7 @@ export interface CoordinateDescentConfig {
   }>;
   frequencyStep: number;
   frequencyStepCoarse: number;
+  frequencyStepRefine: number;
   phaseStep: number;
 }
 

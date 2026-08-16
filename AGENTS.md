@@ -128,7 +128,7 @@ Generate → Compare → Save WAV + SVG
 #### Текущее поведение (изменяемое, НЕ инвариант)
 
 - Мульти-цикловый подход (дефолты `DEFAULT_COORD_DESCENT_CONFIG`): `EXPLORATION` (0.025→0.01) → `REFINEMENT` (0.01→0.003) → `PRECISION` (0.0025→0.0001) — применяется к non-freq/phase параметрам
-- Пошаговые размеры по типам параметров: частота — двухскоростной шаг, `frequencyStepCoarse` (0.0001 ≈ 2 Гц) в EXPLORATION/REFINEMENT и `frequencyStep` (0.0000001 ≈ 0.002 Гц) в PRECISION (offsets 1-2); `phaseStep` (0.003125, offset 5) — фиксированный, НЕ зависит от цикла; остальные параметры используют шаг из текущего цикла
+- Пошаговые размеры по типам параметров: частота — трёхскоростной шаг: `frequencyStepCoarse` (0.0001 ≈ 2 Гц) в EXPLORATION, `frequencyStepRefine` (0.000005 ≈ 0.1 Гц) в REFINEMENT и `frequencyStep` (0.0000001 ≈ 0.002 Гц) в PRECISION (offsets 1-2); `phaseStep` (0.003125, offset 5) — фиксированный, НЕ зависит от цикла; остальные параметры используют шаг из текущего цикла
 - Плато-пинки: при `3` итерациях без улучшения — случайный пинк одного параметра; после `5` пинков — полный рандомный рестарт
 - Затухание шага: при `4` итерациях без улучшения шаг × `0.9` (`stagnationStepDecayFactor`); выход из цикла, если шаг < minStep (только для non-freq/phase; частота/фаза на minStep цикла не завязаны)
 - Ранний выход при достижении `98%` suppression
@@ -280,7 +280,8 @@ base+20ms), затем base × `stageDurationMultiplier`. Множитель
 - `maxRestartsBeforeRandomRestart` — 2..10
 - `kickFallbackThreshold` — [0.5, 0.95]
 - `frequencyStep` — [5e-8, 5e-7] (log) — мелкий шаг freqBase/freqStart в PRECISION, дефолт 0.0000001
-- `frequencyStepCoarse` — [1e-5, 5e-4] (log) — грубый шаг freqBase/freqStart в EXPLORATION/REFINEMENT, дефолт 0.0001
+- `frequencyStepCoarse` — [1e-5, 5e-4] (log) — грубый шаг freqBase/freqStart в EXPLORATION, дефолт 0.0001
+- `frequencyStepRefine` — [1e-6, 1e-5] (log) — средний шаг freqBase/freqStart в REFINEMENT, дефолт 0.000005
 - `phaseStep` — [0.0015, 0.006] — шаг для phase (offset 5), дефолт 0.003125
 
 > `iterations` НЕ является гиперпараметром — пользователь контролирует через
