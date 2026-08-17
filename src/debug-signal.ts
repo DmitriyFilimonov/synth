@@ -1,14 +1,6 @@
+/* eslint-disable no-console */
 import { readWav } from './read-wav';
-import {
-  createSynth,
-  MAX_OSCILLATORS,
-  OSC_PARAMS_PER_OSCILLATOR,
-} from './synth';
-import { mapVectorToSynthConfig } from './vector-to-synth-config';
-import {
-  SAMPLE_RATE,
-  MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
-} from './consts';
+import { SAMPLE_RATE } from './consts';
 
 const wav = readWav('./output14.wav');
 const samples = wav.samples;

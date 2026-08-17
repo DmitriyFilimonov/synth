@@ -1,4 +1,4 @@
-import type { ProgressCallback, ProgressEntry } from '../types';
+import type { ProgressEntry } from '../types';
 import {
   coordinateDescent,
   DEFAULT_COORD_DESCENT_CONFIG,

@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { plotToSvg } from './visualize';
 
 interface ArgMatchVisualize {
@@ -38,18 +39,11 @@ export const matchVisualize = (arg: ArgMatchVisualize): void => {
   );
 
   const maxTime = arg.targetSignal.length / arg.sampleRate;
-  const maxValue = Math.abs(
-    Math.max(
-      ...targetDecimated,
-      ...synthDecimated,
-      ...residualDecimated,
-    ),
-  );
 
   plotToSvg({
     lines: [
       {
-        fn: (x: number) => {
+        fn: (x: number): number => {
           const idx = Math.round(
             (x / maxTime) * (targetDecimated.length - 1),
           );
@@ -59,7 +53,7 @@ export const matchVisualize = (arg: ArgMatchVisualize): void => {
         color: '#4f46e5',
       },
       {
-        fn: (x: number) => {
+        fn: (x: number): number => {
           const idx = Math.round(
             (x / maxTime) * (synthDecimated.length - 1),
           );
@@ -69,7 +63,7 @@ export const matchVisualize = (arg: ArgMatchVisualize): void => {
         color: '#dc2626',
       },
       {
-        fn: (x: number) => {
+        fn: (x: number): number => {
           const idx = Math.round(
             (x / maxTime) * (residualDecimated.length - 1),
           );
@@ -97,7 +91,7 @@ export const matchVisualize = (arg: ArgMatchVisualize): void => {
     plotToSvg({
       lines: [
         {
-          fn: (x: number) => {
+          fn: (x: number): number => {
             const idx = Math.round(
               (x / maxIteration) * (arg.history.length - 1),
             );

@@ -7,6 +7,13 @@ mode: subagent
 tools:
   write: false
   edit: false
+permission:
+  external_directory:
+    "/tmp/**": allow
+    "/etc/**": allow
+    "/proc/**": allow
+    "*": deny
+  question: deny
 ---
 
 Ты — ревьюер ответственности функций в проекте synth.

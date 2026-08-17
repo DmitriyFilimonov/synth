@@ -10,7 +10,7 @@ export const writeWav = ({
   samples,
   sampleRate,
   filePath,
-}: ArgWriteWav) => {
+}: ArgWriteWav): void => {
   const numSamples = samples.length;
   const dataSize = numSamples * 2;
   const bufferSize = 44 + dataSize;

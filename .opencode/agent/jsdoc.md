@@ -6,6 +6,13 @@ mode: subagent
 tools:
   write: true
   edit: true
+permission:
+  external_directory:
+    "/tmp/**": allow
+    "/etc/**": allow
+    "/proc/**": allow
+    "*": deny
+  question: deny
 ---
 
 Ты — агент документирования JSDoc. Твоя задача — добавлять

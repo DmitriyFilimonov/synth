@@ -115,6 +115,7 @@ export const matchHandler = async (
       targetInfo: result.targetInfo,
       suppressionPercent: result.suppressionPercent,
       wavBase64: result.buffer.toString('base64'),
+      synthConfig: result.synthConfig,
     });
   } catch (error) {
     const message =

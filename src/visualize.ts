@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { writeFileSync } from 'node:fs';
 
 interface LineDef {
@@ -39,7 +40,7 @@ export const plotToSvg = ({
   width = 800,
   height = 400,
   points = 500,
-}: ArgPlotSvg) => {
+}: ArgPlotSvg): void => {
   const pad = { top: 40, right: 120, bottom: 50, left: 60 };
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
@@ -60,9 +61,9 @@ export const plotToSvg = ({
   yMin -= yPad;
   yMax += yPad;
 
-  const toSvgX = (x: number) =>
+  const toSvgX = (x: number): number =>
     pad.left + ((x - xMin) / (xMax - xMin)) * plotW;
-  const toSvgY = (y: number) =>
+  const toSvgY = (y: number): number =>
     pad.top + plotH - ((y - yMin) / (yMax - yMin)) * plotH;
 
   const paths = allSamples.map((samples, li) => {

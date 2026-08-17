@@ -1,12 +1,11 @@
+/* eslint-disable no-console */
 import {
-  MAX_OSCILLATORS,
   OSC_PARAMS_PER_OSCILLATOR,
   oscConfigNormales,
   ampEnvConfigNormales,
 } from './synth';
-import { SAMPLE_LENGTH_IN_SECONDS, SAMPLE_RATE } from './consts';
+import { SAMPLE_LENGTH_IN_SECONDS } from './consts';
 import {
-  estimateFundamentalFreq,
   computeAmplitudeEnvelope,
   estimateFreqOverTime,
 } from './signal-analysis';
@@ -113,8 +112,9 @@ export const adaptiveInitVector = (
 
   if (freqOverTime.length === 0 || ampEnv.length === 0) {
     console.log('Signal analysis: no data, returning zero vector');
-    return new Array(maxOscillators * OSC_PARAMS_PER_OSCILLATOR).fill(
-      0,
+    return Array.from(
+      { length: maxOscillators * OSC_PARAMS_PER_OSCILLATOR },
+      () => 0,
     );
   }
 
@@ -249,7 +249,7 @@ export const adaptiveInitVector = (
     ampEnvConfigNormales.endLevel.min,
   );
 
-  const vector = new Array(
+  const vector = new Array<number>(
     maxOscillators * OSC_PARAMS_PER_OSCILLATOR,
   ).fill(0);
   const sampleLength = SAMPLE_LENGTH_IN_SECONDS;

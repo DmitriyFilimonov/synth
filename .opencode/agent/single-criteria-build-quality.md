@@ -8,6 +8,12 @@ permission:
   edit:
     ".opencode/criteria/reports/**": allow
     "*": deny
+  external_directory:
+    "/tmp/**": allow
+    "/etc/**": allow
+    "/proc/**": allow
+    "*": deny
+  question: deny
 ---
 
 Ты — Single criteria субагент. Ты проверяешь **РОВНО ОДИН критерий** и

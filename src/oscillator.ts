@@ -4,7 +4,7 @@ interface OscillatorParams {
   on: boolean;
 }
 
-interface ArgOscillatorCreator extends OscillatorParams {}
+type ArgOscillatorCreator = OscillatorParams;
 interface ArgOscillator {
   /** Текущая позиция по времени (с) */
   x: number;
@@ -16,8 +16,8 @@ interface ArgOscillator {
 
 export const oscillatorCreator = (
   argOscillatorCreator: ArgOscillatorCreator,
-) => {
-  return (argOscillator: ArgOscillator) => {
+): ((argOscillator: ArgOscillator) => number) => {
+  return (argOscillator: ArgOscillator): number => {
     if (argOscillatorCreator.on) {
       return (
         Math.sin(

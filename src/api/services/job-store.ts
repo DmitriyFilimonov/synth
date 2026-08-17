@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { join } from 'node:path';
 import {
   readFile,

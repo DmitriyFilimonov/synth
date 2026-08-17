@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { readWav } from './read-wav';
 import { stftAnalyze } from './spectrogram';
 

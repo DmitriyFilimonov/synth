@@ -83,7 +83,7 @@ export function matchWithWorker(
     });
 
     worker.on('error', (err) => {
-      rejectFn(err);
+      rejectFn(err instanceof Error ? err : new Error(String(err)));
     });
 
     worker.on('exit', (code) => {

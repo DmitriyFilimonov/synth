@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /**
  * Short-Time Fourier Transform (STFT) for full-signal analysis.
  * Splits signal into overlapping windows, extracts frequency/amplitude trajectories.
@@ -268,9 +269,9 @@ export const clusterHarmonics = (
         bestCluster.activeFrames.push(frameIdx);
         matchedPeaks++;
       } else {
-        const freqs = new Array(frames.length).fill(0);
-        const mags = new Array(frames.length).fill(0);
-        const phs = new Array(frames.length).fill(0);
+        const freqs = new Array<number>(frames.length).fill(0);
+        const mags = new Array<number>(frames.length).fill(0);
+        const phs = new Array<number>(frames.length).fill(0);
         freqs[frameIdx] = peak.frequency;
         mags[frameIdx] = peak.magnitude;
         phs[frameIdx] = peak.phase;
@@ -361,7 +362,7 @@ export const fitOscEnvelopes = (
     return null;
   }
 
-  const clampFreq = (f: number) =>
+  const clampFreq = (f: number): number =>
     Math.max(minFreq, Math.min(maxFreq, f));
 
   const avgMag =

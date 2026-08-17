@@ -50,7 +50,8 @@ export interface ArgEnvelope {
 }
 
 export const envelopeCreator =
-  (argEnvelopCreator: ArgEvelopCreator) => (arg: ArgEnvelope) => {
+  (argEnvelopCreator: ArgEvelopCreator) =>
+  (arg: ArgEnvelope): number => {
     if (
       argEnvelopCreator.min !== undefined &&
       typeof argEnvelopCreator.min === 'number' &&

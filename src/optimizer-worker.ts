@@ -1,4 +1,5 @@
-import { parentPort, workerData } from 'worker_threads';
+/* eslint-disable no-console */
+import { parentPort } from 'worker_threads';
 import { stagedOptimize } from './optimize';
 import { generateOutput } from './match';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
@@ -23,31 +24,38 @@ const sendLog = (message: string): void => {
   }
 };
 
-console.log = (...args: unknown[]) => {
+console.log = (...args: unknown[]): void => {
   const msg = args.map((a) => String(a)).join(' ');
   const isImportant = /^\[/.test(msg);
   const now = Date.now();
 
   if (isImportant) {
-    if (now - lastImportantLogTime < IMPORTANT_LOG_THROTTLE_MS)
+    if (now - lastImportantLogTime < IMPORTANT_LOG_THROTTLE_MS) {
       return;
+    }
     lastImportantLogTime = now;
   } else {
-    if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS) return;
+    if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS) {
+      return;
+    }
     lastLogTime = now;
   }
 
   sendLog(msg);
 };
-console.error = (...args: unknown[]) => {
+console.error = (...args: unknown[]): void => {
   const now = Date.now();
-  if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS / 2) return;
+  if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS / 2) {
+    return;
+  }
   lastLogTime = now;
   sendLog('[ERR] ' + args.map((a) => String(a)).join(' '));
 };
-console.warn = (...args: unknown[]) => {
+console.warn = (...args: unknown[]): void => {
   const now = Date.now();
-  if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS / 2) return;
+  if (now - lastLogTime < CONSOLE_LOG_THROTTLE_MS / 2) {
+    return;
+  }
   lastLogTime = now;
   sendLog('[WARN] ' + args.map((a) => String(a)).join(' '));
 };

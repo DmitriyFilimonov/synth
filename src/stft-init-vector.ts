@@ -1,16 +1,16 @@
+/* eslint-disable no-console */
 import {
   MAX_OSCILLATORS,
   OSC_PARAMS_PER_OSCILLATOR,
   oscConfigNormales,
   ampEnvConfigNormales,
 } from './synth';
-import { SAMPLE_LENGTH_IN_SECONDS, SAMPLE_RATE } from './consts';
+import { SAMPLE_LENGTH_IN_SECONDS } from './consts';
 import {
   stftAnalyze,
   clusterHarmonics,
   fitOscEnvelopes,
   type HarmonicOscParams,
-  type HarmonicTrajectory,
 } from './spectrogram';
 import {
   estimateFundamentalFreq,
@@ -73,9 +73,9 @@ export const stftInitVector = (
     console.log(
       'Signal analysis: no amplitude envelope, returning zero vector',
     );
-    return new Array(maxOscillators * OSC_PARAMS_PER_OSCILLATOR).fill(
-      0,
-    );
+    return new Array<number>(
+      maxOscillators * OSC_PARAMS_PER_OSCILLATOR,
+    ).fill(0);
   }
 
   console.log(
@@ -210,12 +210,12 @@ export const stftInitVector = (
   const mainOsc = oscillators[0];
   if (!mainOsc) {
     console.log('No oscillators detected, returning zero vector');
-    return new Array(maxOscillators * OSC_PARAMS_PER_OSCILLATOR).fill(
-      0,
-    );
+    return new Array<number>(
+      maxOscillators * OSC_PARAMS_PER_OSCILLATOR,
+    ).fill(0);
   }
 
-  const vector = new Array(
+  const vector = new Array<number>(
     maxOscillators * OSC_PARAMS_PER_OSCILLATOR,
   ).fill(0);
 

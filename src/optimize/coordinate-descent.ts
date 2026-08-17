@@ -1,15 +1,13 @@
-import {
-  OSC_PARAMS,
-  clamp01,
-  clampVolume,
-  initGenome,
-} from './consts';
+/* eslint-disable no-console */
+import { OSC_PARAMS, clampVolume, initGenome } from './consts';
 import { VOLUME_MIN, VOLUME_PRUNE_THRESHOLD } from '../consts';
 import {
-  evaluateSuppression,
+  evaluateSuppressionFromWaveform,
   evaluateSuppressionWindowed,
   findOptimalScale,
-  createWaveForm,
+  computeSpectralProfile,
+  WaveformCache,
+  SpectralProfile,
 } from './evaluate';
 import type {
   ProgressEntry,
@@ -91,8 +89,6 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
   phaseStep: 0.003125,
 };
 
-const PERTURBATION = 0.05;
-
 /**
  * Per-parameter step. Frequency uses the caller-selected
  * coarse or fine step; phase is fixed; other params follow
@@ -116,12 +112,14 @@ const getParamStep = (
 };
 
 const optimizeSingleParameter = (
-  genome: readonly number[],
+  genome: number[],
+  waveformCache: WaveformCache,
   paramIndex: number,
   step: number,
   targetSignal: readonly number[],
   sampleRate: number,
   currentBest: number,
+  spectralProfile: SpectralProfile,
 ): {
   genome: number[];
   score: number;
@@ -137,29 +135,49 @@ const optimizeSingleParameter = (
     : [Math.max(0, center - step), Math.min(1, center + step)];
 
   let bestScore = currentBest;
-  let bestCandidate: number[] | null = null;
+  let bestValue = center;
 
   for (const candVal of candidates) {
-    const candGenome = [...genome] as number[];
-    candGenome[paramIndex] = candVal;
+    waveformCache.setParam(paramIndex, candVal);
     const score = evaluateSuppressionWindowed(
-      createWaveForm(candGenome, sampleRate, targetSignal.length),
+      waveformCache.getWaveform(),
       targetSignal,
+      0.5,
+      0.3,
+      sampleRate,
+      spectralProfile,
     );
     if (score > bestScore) {
       bestScore = score;
-      bestCandidate = candGenome;
+      bestValue = candVal;
     }
   }
 
+  waveformCache.setParam(paramIndex, bestValue);
+  genome[paramIndex] = bestValue;
+
   return {
-    genome: bestCandidate ?? ([...genome] as number[]),
+    genome,
     score: bestScore,
   };
 };
 
+const syncFlagsToCache = (
+  genome: readonly number[],
+  waveformCache: WaveformCache,
+  numOsc: number,
+): void => {
+  for (let osc = 0; osc < numOsc; osc++) {
+    waveformCache.setParam(
+      osc * OSC_PARAMS,
+      genome[osc * OSC_PARAMS] ?? 0,
+    );
+  }
+};
+
 const optimizeIteration = (
   genome: number[],
+  waveformCache: WaveformCache,
   numOsc: number,
   initOscCount: number,
   targetSignal: readonly number[],
@@ -170,10 +188,14 @@ const optimizeIteration = (
   frequencyStep: number,
   phaseStep: number,
   minStep: number,
+  spectralProfile: SpectralProfile,
 ): { genome: number[]; score: number } => {
   let score = currentBest;
 
-  genome[0] = 1;
+  if ((genome[0] ?? 0) !== 1) {
+    waveformCache.setParam(0, 1);
+    genome[0] = 1;
+  }
 
   for (let osc = 0; osc < numOsc; osc++) {
     const base = osc * OSC_PARAMS;
@@ -191,22 +213,26 @@ const optimizeIteration = (
       );
       const result = optimizeSingleParameter(
         genome,
+        waveformCache,
         i,
         effectiveStep,
         targetSignal,
         sampleRate,
         score,
+        spectralProfile,
       );
-      genome.length = 0;
-      genome.push(...result.genome);
+      genome = result.genome;
       score = result.score;
 
       if (osc === 0 && p === 9) {
-        genome[9] = Math.max(firstOscMinVol, genome[9] ?? 0);
+        const minVol = Math.max(firstOscMinVol, genome[9] ?? 0);
+        waveformCache.setParam(9, minVol);
+        genome[9] = minVol;
       }
     }
 
     enforceFlagInvariant(genome, numOsc, initOscCount);
+    syncFlagsToCache(genome, waveformCache, numOsc);
   }
 
   return { genome, score };
@@ -214,8 +240,8 @@ const optimizeIteration = (
 
 const finalPruneOscillators = (
   genome: number[],
+  waveformCache: WaveformCache,
   targetSignal: readonly number[],
-  sampleRate: number,
   currentBest: number,
   numOsc: number,
 ): number => {
@@ -233,13 +259,14 @@ const finalPruneOscillators = (
   for (const { base } of pruneCandidates) {
     const savedFlag = genome[base] ?? 0;
     genome[base] = 0;
-    const scoreAfter = evaluateSuppression(
-      genome,
+    waveformCache.setParam(base, 0);
+    const scoreAfter = evaluateSuppressionFromWaveform(
+      waveformCache.getWaveform(),
       targetSignal,
-      sampleRate,
     );
     if (score - scoreAfter > 0.05) {
       genome[base] = savedFlag;
+      waveformCache.setParam(base, savedFlag);
     } else {
       score = scoreAfter;
     }
@@ -340,14 +367,22 @@ export const coordinateDescent = (
   const actualStepDecayFactor =
     stepDecayFactor ?? cfg.stagnationStepDecayFactor;
 
-  const initialGenerated = createWaveForm(
+  const spectralProfile = computeSpectralProfile(
+    targetSignal,
+    sampleRate,
+  );
+  const waveformCache = new WaveformCache(
     genome,
     sampleRate,
     targetSignal.length,
   );
   let currentBest = evaluateSuppressionWindowed(
-    initialGenerated,
+    waveformCache.getWaveform(),
     targetSignal,
+    0.5,
+    0.3,
+    sampleRate,
+    spectralProfile,
   );
   const history: ProgressEntry[] = [];
   let stagnation = 0;
@@ -422,6 +457,7 @@ export const coordinateDescent = (
       const prevGenome = genome.slice();
       const result = optimizeIteration(
         genome,
+        waveformCache,
         numOsc,
         initOscCount,
         targetSignal,
@@ -432,6 +468,7 @@ export const coordinateDescent = (
         frequencyStep,
         phaseStep,
         cycle.minStep,
+        spectralProfile,
       );
       genome = result.genome;
       const scoreImproved =
@@ -498,6 +535,8 @@ export const coordinateDescent = (
             return Math.random();
           });
           enforceFlagInvariant(genome, numOsc, initOscCount);
+          waveformCache.rebuild(genome);
+          syncFlagsToCache(genome, waveformCache, numOsc);
           restartCount = 0;
         } else {
           const enabledOscs: number[] = [];
@@ -522,12 +561,18 @@ export const coordinateDescent = (
           );
 
           genome[kickIdx] = Math.random();
+          waveformCache.setParam(kickIdx, genome[kickIdx] ?? 0);
 
           enforceFlagInvariant(genome, numOsc, initOscCount);
+          syncFlagsToCache(genome, waveformCache, numOsc);
 
           currentBest = evaluateSuppressionWindowed(
-            createWaveForm(genome, sampleRate, targetSignal.length),
+            waveformCache.getWaveform(),
             targetSignal,
+            0.5,
+            0.3,
+            sampleRate,
+            spectralProfile,
           );
 
           if (currentBest < bestScore * cfg.kickFallbackThreshold) {
@@ -535,6 +580,8 @@ export const coordinateDescent = (
               `[CoordDescent] Kick failed, restarting from best`,
             );
             genome = bestGenome.slice();
+            waveformCache.rebuild(genome);
+            syncFlagsToCache(genome, waveformCache, numOsc);
             currentBest = bestScore;
           }
         }
@@ -592,27 +639,40 @@ export const coordinateDescent = (
 
   const finalPruningScore = finalPruneOscillators(
     genome,
+    waveformCache,
     targetSignal,
-    sampleRate,
     currentBest,
     numOsc,
   );
 
   enforceFlagInvariant(genome, numOsc, initOscCount);
+  syncFlagsToCache(genome, waveformCache, numOsc);
 
   console.log(
     `[CoordDescent] Post-pruning score: ${finalPruningScore.toFixed(4)}%`,
   );
 
+  if (finalPruningScore > bestScore) {
+    bestScore = finalPruningScore;
+    bestGenome = genome.slice();
+  }
+  currentBest = Math.max(currentBest, finalPruningScore);
+
   console.log(`[CoordDescent] Phase 2: Scale fitting...`);
-  const generated = createWaveForm(
-    genome,
+  const generated = waveformCache.getWaveform();
+  const preScaleScore = evaluateSuppressionWindowed(
+    generated,
+    targetSignal,
+    0.5,
+    0.3,
     sampleRate,
-    targetSignal.length,
+    spectralProfile,
   );
   const { scale, suppressionPercent: scaleScore } = findOptimalScale(
     generated,
     targetSignal,
+    sampleRate,
+    spectralProfile,
   );
 
   console.log(
@@ -620,18 +680,45 @@ export const coordinateDescent = (
   );
 
   if (scale !== 1) {
+    const scaledGenome = genome.slice();
     for (let osc = 0; osc < numOsc; osc++) {
       const base = osc * OSC_PARAMS;
       const volIdx = base + 9;
-      const currentVol = genome[volIdx] ?? 0;
-      genome[volIdx] = clampVolume(currentVol * scale);
+      const currentVol = scaledGenome[volIdx] ?? 0;
+      scaledGenome[volIdx] = clampVolume(currentVol * scale);
     }
-  }
 
-  currentBest = evaluateSuppressionWindowed(
-    createWaveForm(genome, sampleRate, targetSignal.length),
-    targetSignal,
-  );
+    const scaledCache = new WaveformCache(
+      scaledGenome,
+      sampleRate,
+      targetSignal.length,
+    );
+    const scaledScore = evaluateSuppressionWindowed(
+      scaledCache.getWaveform(),
+      targetSignal,
+      0.5,
+      0.3,
+      sampleRate,
+      spectralProfile,
+    );
+
+    if (scaledScore > preScaleScore) {
+      genome = scaledGenome;
+      waveformCache.rebuild(genome);
+      syncFlagsToCache(genome, waveformCache, numOsc);
+      currentBest = scaledScore;
+      console.log(
+        `[CoordDescent] Scale fitting applied: ${preScaleScore.toFixed(4)}% -> ${scaledScore.toFixed(4)}%`,
+      );
+    } else {
+      console.log(
+        `[CoordDescent] Scale fitting skipped (no improvement: ${scaledScore.toFixed(4)}% <= ${preScaleScore.toFixed(4)}%)`,
+      );
+      currentBest = preScaleScore;
+    }
+  } else {
+    currentBest = preScaleScore;
+  }
 
   console.log(
     `[CoordDescent] After scale fitting: ${currentBest.toFixed(4)}%`,
@@ -639,6 +726,8 @@ export const coordinateDescent = (
 
   if (bestScore > currentBest) {
     genome = bestGenome.slice();
+    waveformCache.rebuild(genome);
+    syncFlagsToCache(genome, waveformCache, numOsc);
     currentBest = bestScore;
     console.log(
       `[CoordDescent] Restored best genome: ${currentBest.toFixed(4)}%`,
@@ -646,7 +735,9 @@ export const coordinateDescent = (
   }
 
   normalizeFlags(genome, numOsc);
+  syncFlagsToCache(genome, waveformCache, numOsc);
   enforceFlagInvariant(genome, numOsc, initOscCount);
+  syncFlagsToCache(genome, waveformCache, numOsc);
 
   emitProgress(
     history,

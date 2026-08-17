@@ -53,6 +53,7 @@ export interface MatchResult {
   };
   suppressionPercent: number;
   wavBase64: string;
+  synthConfig: ArgCreateSynth;
 }
 
 export interface CreateMatchJobRequest {

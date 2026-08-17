@@ -15,7 +15,9 @@ const frequencyEnvelopeCreator = ({
   base,
   duration,
   slope,
-}: ArgFrequncyEnvelopeCreator) => {
+}: ArgFrequncyEnvelopeCreator): {
+  frequencyEnvelop: (arg: { x: number }) => number;
+} => {
   const frequencyEnvelopeNormalized = envelopeCreator({
     duration,
     max: 1,
@@ -28,7 +30,7 @@ const frequencyEnvelopeCreator = ({
   }: {
     /**время (в секундах) */
     x: number;
-  }) => {
+  }): number => {
     const normalizedFrequencyModulation = frequencyEnvelopeNormalized(
       { x },
     );
@@ -130,7 +132,7 @@ export interface ArgCreateSynth {
 export const MAX_OSCILLATORS = 50;
 export const OSC_PARAMS_PER_OSCILLATOR = 10;
 
-const createOscillatorGroup = (config: OscillatorGroup) => {
+export const createOscillatorGroup = (config: OscillatorGroup) => {
   const osc = oscillatorCreator({
     on: config.osc.on,
     initialPhase: config.osc.phase,
@@ -150,7 +152,7 @@ const createOscillatorGroup = (config: OscillatorGroup) => {
     slope: config.ampEnv.slope,
   });
 
-  return ({ x }: { x: number }) => {
+  return ({ x }: { x: number }): number => {
     return osc({
       amplitude: amplitudeEnvelope({ x }),
       frequency: frequencyEnvelop({ x }),
@@ -159,7 +161,9 @@ const createOscillatorGroup = (config: OscillatorGroup) => {
   };
 };
 
-export const createSynth = (synthConfig: ArgCreateSynth) => {
+export const createSynth = (
+  synthConfig: ArgCreateSynth,
+): ((arg: { x: number }) => number) => {
   if (synthConfig.oscillators.length > MAX_OSCILLATORS) {
     throw new Error(
       `Maximum ${MAX_OSCILLATORS} oscillators allowed, got ${synthConfig.oscillators.length}`,
@@ -170,7 +174,7 @@ export const createSynth = (synthConfig: ArgCreateSynth) => {
     .filter((config) => config.osc.on)
     .map((config) => createOscillatorGroup(config));
 
-  return ({ x }: { x: number }) => {
+  return ({ x }: { x: number }): number => {
     let sum = 0;
     for (const oscGroup of oscillatorGroups) {
       sum += oscGroup({ x });

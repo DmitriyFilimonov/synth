@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import {
   MAX_OSCILLATORS,
   OSC_PARAMS_PER_OSCILLATOR,
@@ -38,7 +39,7 @@ export const fftInitVector = (
     maxOscillators,
   );
 
-  const vector = new Array(
+  const vector = new Array<number>(
     maxOscillators * OSC_PARAMS_PER_OSCILLATOR,
   ).fill(0);
 

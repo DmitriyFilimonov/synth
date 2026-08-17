@@ -1,8 +1,8 @@
+/* eslint-disable no-console */
 import { SAMPLE_RATE } from './consts';
 import { readWav } from './read-wav';
 import { MATCH_DEFAULT_STAGE_DURATION_MULTIPLIER } from './match-defaults';
 import {
-  optimize,
   ProgressCallback,
   stagedOptimize,
   runHPO,

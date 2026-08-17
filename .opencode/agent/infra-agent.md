@@ -5,6 +5,13 @@ description: Инфраструктурный субагент. Выполняе
   поддержку собственных LLM-инструментов в .opencode/tools/infra/.
   Вызывается пользователем или другими агентами для задач окружения.
 mode: subagent
+permission:
+  external_directory:
+    "/tmp/**": allow
+    "/etc/**": allow
+    "/proc/**": allow
+    "*": deny
+  question: deny
 ---
 
 Ты — инфраструктурный субагент проекта synth. Ты НЕ разрабатываешь

@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { SAMPLE_RATE } from './consts';
 import { readWav } from './read-wav';
 import { match } from './match';
@@ -6,6 +7,7 @@ import {
   MATCH_DEFAULT_OSCILLATORS,
   MATCH_DEFAULT_HPO_TRIALS,
 } from './match-defaults';
+import { writeFileSync, renameSync } from 'node:fs';
 
 const targetWavPath = './fixtures/output15.wav';
 const outputWavPath =
@@ -21,10 +23,19 @@ const initialVector = simpleInitVector(
 
 console.log('Initialization complete');
 
-match({
+const result = match({
   targetWavPath,
   outputWavPath,
   initialVector,
   onProgress: () => {},
   hpoTrials: MATCH_DEFAULT_HPO_TRIALS,
 });
+
+const paramsPath = `${outputWavPath}.params.json`;
+const tmpParamsPath = `${paramsPath}.tmp`;
+writeFileSync(
+  tmpParamsPath,
+  JSON.stringify(result.optimizedConfig, null, 2),
+);
+renameSync(tmpParamsPath, paramsPath);
+console.log(`Parameters: ${paramsPath}`);

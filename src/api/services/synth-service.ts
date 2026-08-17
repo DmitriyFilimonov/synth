@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { createSynth, ArgCreateSynth } from '../../synth';
 import { writeWav } from '../../write-wav';
 import {
@@ -48,6 +49,7 @@ interface MatchedFile {
     numChannels: number;
   };
   suppressionPercent: number;
+  synthConfig: ArgCreateSynth;
 }
 
 export async function generateWav(
@@ -159,6 +161,7 @@ export async function matchWav(
         history.length > 0
           ? (history[history.length - 1]?.suppressionPercent ?? 0)
           : 0,
+      synthConfig: result.synthConfig,
     };
   } finally {
     await unlink(tempInput).catch(() => {});

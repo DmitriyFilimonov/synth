@@ -1,7 +1,8 @@
+/* eslint-disable no-console */
 import { coordinateDescent } from './coordinate-descent';
 import { runHPO } from './hpo';
 import type { TPEConfig } from './hpo/sampler-tpe';
-import type { ResolvedHyperparams, TrialObservation } from './hpo';
+import type { TrialObservation } from './hpo';
 import type {
   ProgressEntry,
   ProgressCallback,
@@ -377,7 +378,7 @@ const runFlatOptimization = (arg: {
       sampleRate,
       maxIterations,
       onProgress
-        ? (entry) => {
+        ? (entry): void => {
             const wrappedEntry: ProgressEntry = {
               iteration: entry.iteration,
               suppressionPercent: entry.suppressionPercent,
@@ -431,7 +432,7 @@ const runFlatOptimization = (arg: {
     sampleRate,
     maxIterations,
     onProgress
-      ? (entry) => {
+      ? (entry): void => {
           const wrappedEntry: ProgressEntry = {
             iteration: entry.iteration,
             suppressionPercent: entry.suppressionPercent,

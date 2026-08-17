@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { createSynth } from './synth';
 import { synthPreset1 } from './presets';
 import { writeWav } from './write-wav';

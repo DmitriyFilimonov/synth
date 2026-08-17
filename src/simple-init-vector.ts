@@ -1,5 +1,5 @@
+/* eslint-disable no-console */
 import {
-  MAX_OSCILLATORS,
   OSC_PARAMS_PER_OSCILLATOR,
   oscConfigNormales,
   ampEnvConfigNormales,
@@ -82,41 +82,6 @@ const goertzelSpectrum = (
   return candidates;
 };
 
-const findDominantFrequencies = (
-  samples: number[],
-  sampleRate: number,
-  centerEstimate: number,
-  count: number,
-  searchRange: number = 50,
-  resolution: number = 1,
-): Array<{ frequency: number; amplitude: number; phase: number }> => {
-  const spectrum = goertzelSpectrum(
-    samples,
-    sampleRate,
-    centerEstimate,
-    searchRange,
-    resolution,
-  );
-  spectrum.sort((a, b) => b.amplitude - a.amplitude);
-
-  const result: typeof spectrum = [];
-  const minSeparation = 5;
-
-  for (const peak of spectrum) {
-    if (result.length >= count) {
-      break;
-    }
-    const tooClose = result.some(
-      (r) => Math.abs(r.frequency - peak.frequency) < minSeparation,
-    );
-    if (!tooClose && peak.amplitude > 1) {
-      result.push(peak);
-    }
-  }
-
-  return result.sort((a, b) => a.frequency - b.frequency);
-};
-
 const findDominantFrequenciesWide = (
   samples: number[],
   sampleRate: number,
@@ -193,9 +158,9 @@ export const simpleInitVector = (
   );
 
   if (freqOverTime.length === 0 || ampEnv.length === 0) {
-    return new Array(maxOscillators * OSC_PARAMS_PER_OSCILLATOR).fill(
-      0,
-    );
+    return new Array<number>(
+      maxOscillators * OSC_PARAMS_PER_OSCILLATOR,
+    ).fill(0);
   }
 
   const estimatedFreq =
@@ -203,16 +168,11 @@ export const simpleInitVector = (
     freqOverTime.length;
 
   const rmsValues = ampEnv.map((e) => e.rms);
-  const avgRms =
-    rmsValues.reduce((a, b) => a + b, 0) / rmsValues.length;
   const maxRms = Math.max(...rmsValues);
   const minRms = Math.min(...rmsValues);
   const modulationRatio = maxRms / Math.max(minRms, 1);
 
   const sampleArray = Array.from(samples);
-  const halfLen = Math.floor(samples.length / 2);
-  const firstHalf = sampleArray.slice(0, halfLen);
-  const secondHalf = sampleArray.slice(halfLen);
 
   let initList: OscInit[] = [];
 
@@ -360,7 +320,7 @@ export const simpleInitVector = (
 
   const rmsReduction = 0.284;
 
-  const vector = new Array(
+  const vector = new Array<number>(
     maxOscillators * OSC_PARAMS_PER_OSCILLATOR,
   ).fill(0);
   const sampleLength = SAMPLE_LENGTH_IN_SECONDS;

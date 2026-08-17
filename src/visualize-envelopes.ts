@@ -11,16 +11,18 @@ if (!firstOsc) {
 
 const kValues = [1];
 
-const ampLines = kValues.map((k) => ({
-  fn: (x: number) =>
-    envelopeCreator({
-      duration: firstOsc.ampEnv.duration,
-      max: firstOsc.ampEnv.startLevel,
-      min: firstOsc.ampEnv.endLevel,
-      slope: k,
-    })({ x }),
-  label: `k = ${k}`,
-}));
+const ampLines = kValues.map(
+  (k): { fn: (x: number) => number; label: string } => ({
+    fn: (x: number): number =>
+      envelopeCreator({
+        duration: firstOsc.ampEnv.duration,
+        max: firstOsc.ampEnv.startLevel,
+        min: firstOsc.ampEnv.endLevel,
+        slope: k,
+      })({ x }),
+    label: `k = ${k}`,
+  }),
+);
 
 plotToSvg({
   lines: ampLines,
@@ -32,19 +34,22 @@ plotToSvg({
   filePath: 'envelope-amplitude.svg',
 });
 
-const freqLines = kValues.map((k) => {
-  const mod = firstOsc.osc.freqStart - firstOsc.osc.freqBase;
-  const fnNorm = envelopeCreator({
-    duration: firstOsc.osc.duration,
-    max: 1,
-    min: MIN,
-    slope: k,
-  });
-  return {
-    fn: (x: number) => firstOsc.osc.freqBase + mod * fnNorm({ x }),
-    label: `k = ${k}`,
-  };
-});
+const freqLines = kValues.map(
+  (k): { fn: (x: number) => number; label: string } => {
+    const mod = firstOsc.osc.freqStart - firstOsc.osc.freqBase;
+    const fnNorm = envelopeCreator({
+      duration: firstOsc.osc.duration,
+      max: 1,
+      min: MIN,
+      slope: k,
+    });
+    return {
+      fn: (x: number): number =>
+        firstOsc.osc.freqBase + mod * fnNorm({ x }),
+      label: `k = ${k}`,
+    };
+  },
+);
 
 plotToSvg({
   lines: freqLines,
