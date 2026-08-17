@@ -15,8 +15,13 @@ permission:
 
 ## Краткое содержание изменений итерации
 
-1. **Баг репоринга итераций**: последний `emitProgress` в `coordinateDescent` писал `maxIterations` (прошено 3000) вместо фактического `iter` (~270) — UI показывал 3000 хотя выполнилось ~270. Исправлено: `emitProgress(history, onProgress, iter, currentBest, lastCycleLabel)`.
-2. **Добавлен итоговый лог**: `console.log` после всех циклов показывает фактическое число итераций и количество завершённых циклов.
+Реализован **Simulated Annealing (SA)** в coordinate descent: изменены
+`src/optimize/coordinate-descent.ts`, `src/optimize/hpo/param-space.ts`,
+`src/optimize/hpo/run-hpo.ts`, `AGENTS.md`.
+
+Родительский агент сообщает, что `npm run prettier`, `npm run build`,
+`npm run lint` (0 warnings) и `cd web && npm run build` прошли.
+Проверь это независимо, запустив команды сам.
 
 ## Критерий (CRIT-5)
 Сборка и качество: prettier:check, build, lint (и web build) проходят без ошибок

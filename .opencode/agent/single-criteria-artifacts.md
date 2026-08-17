@@ -15,8 +15,16 @@ permission:
 
 ## Краткое содержание изменений итерации
 
-1. **Баг репоринга итераций**: последний `emitProgress` в `coordinateDescent` писал `maxIterations` (прошено 3000) вместо фактического `iter` (~270) — UI показывал 3000 хотя выполнилось ~270. Исправлено: `emitProgress(history, onProgress, iter, currentBest, lastCycleLabel)`.
-2. **Добавлен итоговый лог**: `console.log` после всех циклов показывает фактическое число итераций и количество завершённых циклов.
+Реализован **Simulated Annealing (SA)** в coordinate descent.
+
+1. `src/optimize/coordinate-descent.ts`: два новых поля в `CoordinateDescentConfig` — `saInitialTemp` (дефолт 3), `saCoolingRate` (дефолт 0.99). В `optimizeSingleParameter`/`optimizeIteration` добавлен опциональный параметр `temperature = 0`; ухудшающий кандидат принимается с вероятностью `exp(-Δ/T)`. Температура живёт через все циклы, в финальном (PRECISION) `T = 0` + откат генома к best-ever.
+2. `src/optimize/hpo/param-space.ts`, `run-hpo.ts`: `saInitialTemp` [0.5, 8], `saCoolingRate` [0.95, 0.999] добавлены в `HYPERPARAM_SPACE`, `HYPERPARAM_DEFAULTS`, `ResolvedHyperparams`, `resolveHyperparams` и в trial-сэмплинг.
+3. `AGENTS.md`: описаны SA-механика и новые гиперпараметры.
+
+**Для твоего критерия важно**: изменения затрагивают только внутренности
+оптимизатора (выбор кандидатов внутри CD). Публичные контракты, состав и
+формат возвращаемых артефактов не менялись — проверь это независимо, не
+полагаясь на утверждение.
 
 ## Критерий (CRIT-1)
 Каждый запуск реверс-синтеза возвращает 3 артефакта: JSON параметров в формате ArgCreateSynth (пригодный для повторного синтеза), синтезированный WAV, метаданные (suppressionPercent, history, targetInfo)

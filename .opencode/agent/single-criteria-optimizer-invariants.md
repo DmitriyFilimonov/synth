@@ -15,8 +15,44 @@ permission:
 
 ## Краткое содержание изменений итерации
 
-1. **Баг репоринга итераций**: последний `emitProgress` в `coordinateDescent` писал `maxIterations` (прошено 3000) вместо фактического `iter` (~270) — UI показывал 3000 хотя выполнилось ~270. Исправлено: `emitProgress(history, onProgress, iter, currentBest, lastCycleLabel)`.
-2. **Добавлен итоговый лог**: `console.log` после всех циклов показывает фактическое число итераций и количество завершённых циклов.
+Реализован **Simulated Annealing (SA)** в coordinate descent — это
+изменение с наибольшим риском для ТВОЕГО критерия, проверяй тщательно.
+
+1. `src/optimize/coordinate-descent.ts`:
+   - `CoordinateDescentConfig` + `DEFAULT_COORD_DESCENT_CONFIG`:
+     `saInitialTemp: 3`, `saCoolingRate: 0.99`.
+   - `optimizeSingleParameter(..., temperature = 0)`: если greedy-улучшения
+     нет, лучший ухудшающий кандидат принимается с вероятностью
+     `exp(-Δ/T)`.
+   - `optimizeIteration(..., temperature = 0)`: прокидывает температуру.
+   - `let temperature = cfg.saInitialTemp` объявлена ДО главного
+     while-цикла, `temperature *= cfg.saCoolingRate` раз в итерацию.
+   - В финальном цикле `temperature = 0`; перед PRECISION геном
+     откатывается к `bestGenome` через `waveformCache.rebuild` +
+     `syncFlagsToCache`.
+2. `src/optimize/hpo/param-space.ts`, `run-hpo.ts`: новые гиперпараметры.
+
+### Риски, которые нужно проверить особенно внимательно
+
+1. **Значения вектора в [0, 1]**: SA принимает НЕ-улучшающих кандидатов.
+   Убедись, что SA-путь не обходит клампы — кандидаты формируются через
+   `Math.max(0, center - step)` / `Math.min(1, center + step)` и
+   `clampVolume` для volume (offset 9), а SA лишь выбирает из уже
+   склампленных кандидатов. Проверь это по коду.
+2. **Флаг [0] строго 0/1**: SA работает по `p = 1..9`, флаги не
+   трогает; в конце вызывается `normalizeFlags`. Проверь.
+3. **Сигнатуры `ArgOptimize`/`ProgressCallback` и возврат
+   `{ vector, history }`**: `temperature` — внутренний параметр
+   приватных функций с дефолтом; публичный контракт меняться не должен.
+4. **`onProgress` каждую итерацию**: SA-ветка не должна создавать
+   путей, пропускающих `emitProgress`. Проверь, что откат генома перед
+   PRECISION не сбивает нумерацию итераций.
+5. **Синхронность и отсутствие внешних зависимостей**: SA использует
+   `Math.random()` / `Math.exp` — встроенные, но подтверди, что новых
+   импортов не появилось.
+6. **Возврат лучшего результата**: SA может закончить в худшей точке.
+   Проверь, что возвращается best-ever геном (логика `bestScore` /
+   `bestGenome` / «Restored best genome»), а не последний.
 
 ## Критерий (CRIT-4)
 Инварианты оптимизатора: сигнатуры ArgOptimize/ProgressCallback и возврат { vector, history }; значения вектора в [0,1]; флаг [0] строго 0/1; onProgress каждую итерацию; синхронный код без внешних зависимостей
