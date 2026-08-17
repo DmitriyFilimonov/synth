@@ -625,6 +625,10 @@ export const coordinateDescent = (
     cycleIndex++;
   }
 
+  console.log(
+    `[CoordDescent] Finished after ${iter} iterations (${lastCycleLabel} cycle, ${cycleIndex - 1} cycles completed)`,
+  );
+
   const finalPruningScore = finalPruneOscillators(
     genome,
     waveformCache,
@@ -727,7 +731,7 @@ export const coordinateDescent = (
   emitProgress(
     history,
     onProgress,
-    maxIterations,
+    iter,
     currentBest,
     lastCycleLabel,
   );
