@@ -310,6 +310,34 @@ export const HYPERPARAM_SPACE: HyperparamDef[] = [
     description: 'Phase step in PRECISION cycle. ~0.01 degrees.',
     currentValue: 0.00019531,
   },
+  {
+    name: 'saInitialTemp',
+    distribution: {
+      type: 'float',
+      low: 0.5,
+      high: 8,
+      log: false,
+      step: null,
+    },
+    description:
+      'Simulated annealing initial temperature (score p.p.). ' +
+      'Worse candidate accepted with probability exp(-delta / T). ' +
+      '0 disables SA (pure greedy CD).',
+    currentValue: 3,
+  },
+  {
+    name: 'saCoolingRate',
+    distribution: {
+      type: 'float',
+      low: 0.95,
+      high: 0.999,
+      log: false,
+      step: null,
+    },
+    description:
+      'Geometric cooling factor applied to SA temperature per iteration.',
+    currentValue: 0.99,
+  },
 ];
 
 /**
@@ -339,6 +367,8 @@ export const HYPERPARAM_DEFAULTS: Record<string, number> = {
   phaseStep: 0.003125,
   phaseStepRefine: 0.00078125,
   phaseStepPrecision: 0.00019531,
+  saInitialTemp: 3,
+  saCoolingRate: 0.99,
 };
 
 /**
@@ -371,6 +401,9 @@ export interface ResolvedHyperparams {
   phaseStep: number;
   phaseStepRefine: number;
   phaseStepPrecision: number;
+  // simulated annealing
+  saInitialTemp: number;
+  saCoolingRate: number;
 }
 
 export function resolveHyperparams(
@@ -465,5 +498,7 @@ export function resolveHyperparams(
       'phaseStepPrecision',
       D.phaseStepPrecision as number,
     ),
+    saInitialTemp: get('saInitialTemp', D.saInitialTemp as number),
+    saCoolingRate: get('saCoolingRate', D.saCoolingRate as number),
   };
 }

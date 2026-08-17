@@ -220,6 +220,8 @@ function suggestTrialParams(
   trial.suggestFloat('phaseStep', 0.0015, 0.006);
   trial.suggestFloat('phaseStepRefine', 0.0003, 0.002);
   trial.suggestFloat('phaseStepPrecision', 0.00005, 0.0005);
+  trial.suggestFloat('saInitialTemp', 0.5, 8);
+  trial.suggestFloat('saCoolingRate', 0.95, 0.999);
 
   return trial.getParams();
 }
@@ -262,6 +264,8 @@ function buildCoordDescentConfig(
     phaseStep: hyperparams.phaseStep,
     phaseStepRefine: hyperparams.phaseStepRefine,
     phaseStepPrecision: hyperparams.phaseStepPrecision,
+    saInitialTemp: hyperparams.saInitialTemp,
+    saCoolingRate: hyperparams.saCoolingRate,
   };
 }
 

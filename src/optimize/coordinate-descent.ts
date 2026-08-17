@@ -70,6 +70,14 @@ export interface CoordinateDescentConfig {
   phaseStepRefine: number;
   /** Phase step in PRECISION cycle. Default phaseStep / 16 ≈ 0.07°. */
   phaseStepPrecision: number;
+  /**
+   * Simulated annealing: initial temperature in score units (p.p.).
+   * A candidate worse by Δ p.p. is accepted with probability
+   * exp(-Δ / T). 0 disables SA (pure greedy CD).
+   */
+  saInitialTemp: number;
+  /** Geometric cooling factor applied per iteration. */
+  saCoolingRate: number;
 }
 
 /** Default config values (previous hardcoded constants). */
@@ -93,6 +101,8 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
   phaseStep: 0.003125,
   phaseStepRefine: 0.00078125,
   phaseStepPrecision: 0.00019531,
+  saInitialTemp: 3,
+  saCoolingRate: 0.99,
 };
 
 /**
@@ -126,6 +136,7 @@ const optimizeSingleParameter = (
   sampleRate: number,
   currentBest: number,
   spectralProfile: SpectralProfile,
+  temperature = 0,
 ): {
   genome: number[];
   score: number;
@@ -142,6 +153,10 @@ const optimizeSingleParameter = (
 
   let bestScore = currentBest;
   let bestValue = center;
+  // Кандидаты, ухудшающие score, — материал для SA-accept: лучший
+  // из ухудшающих рассматривается, если greedy-улучшения не нашлось.
+  let bestWorseScore = -Infinity;
+  let bestWorseValue = center;
 
   for (const candVal of candidates) {
     waveformCache.setParam(paramIndex, candVal);
@@ -156,6 +171,24 @@ const optimizeSingleParameter = (
     if (score > bestScore) {
       bestScore = score;
       bestValue = candVal;
+    } else if (score > bestWorseScore) {
+      bestWorseScore = score;
+      bestWorseValue = candVal;
+    }
+  }
+
+  // Simulated annealing: если greedy-улучшения нет, принимаем
+  // ухудшение с вероятностью exp(-Δ / T). Это позволяет выйти
+  // из локального минимума, в котором greedy CD застревает.
+  if (
+    temperature > 0 &&
+    bestValue === center &&
+    bestWorseScore > -Infinity
+  ) {
+    const delta = currentBest - bestWorseScore;
+    if (delta > 0 && Math.random() < Math.exp(-delta / temperature)) {
+      bestScore = bestWorseScore;
+      bestValue = bestWorseValue;
     }
   }
 
@@ -194,6 +227,7 @@ const optimizeIteration = (
   phaseStep: number,
   minStep: number,
   spectralProfile: SpectralProfile,
+  temperature = 0,
 ): { genome: number[]; score: number } => {
   let score = currentBest;
 
@@ -225,6 +259,7 @@ const optimizeIteration = (
         sampleRate,
         score,
         spectralProfile,
+        temperature,
       );
       genome = result.genome;
       score = result.score;
@@ -408,6 +443,9 @@ export const coordinateDescent = (
   let iter = 0;
   let cycleIndex = 0;
   let lastCycleLabel: string | undefined;
+  // Температура SA живёт через все циклы: охлаждается непрерывно,
+  // а не сбрасывается на каждом цикле (иначе SA перегревается).
+  let temperature = cfg.saInitialTemp;
   while (cycleIndex < restartSchedule.length) {
     const cycle = restartSchedule[cycleIndex];
     if (!cycle) {
@@ -431,8 +469,26 @@ export const coordinateDescent = (
           : cfg.phaseStepRefine;
     lastCycleLabel = cycle.label;
 
+    // Simulated annealing: температура охлаждается непрерывно через
+    // все исследовательские циклы (не сбрасывается на каждом), и
+    // выключается в финальном (PRECISION) — там нужен чистый greedy.
+    // Перед PRECISION откатываемся к best-ever геному: SA мог уйти
+    // в худшую точку, а финальная полировка должна идти от лучшей.
+    if (isLastCycle) {
+      temperature = 0;
+    }
+    if (isLastCycle && bestScore > currentBest) {
+      console.log(
+        `[CoordDescent] SA: restoring best-ever ${bestScore.toFixed(4)}% (was ${currentBest.toFixed(4)}%) before ${cycle.label}`,
+      );
+      genome = bestGenome.slice();
+      waveformCache.rebuild(genome);
+      syncFlagsToCache(genome, waveformCache, numOsc);
+      currentBest = bestScore;
+    }
+
     console.log(
-      `[CoordDescent] Cycle: ${cycle.label}, startStep=${cycle.startStep}, minStep=${cycle.minStep}, freqStep=${frequencyStep}, phaseStep=${phaseStep}, score=${currentBest.toFixed(4)}%`,
+      `[CoordDescent] Cycle: ${cycle.label}, startStep=${cycle.startStep}, minStep=${cycle.minStep}, freqStep=${frequencyStep}, phaseStep=${phaseStep}, T=${temperature.toFixed(4)}, score=${currentBest.toFixed(4)}%`,
     );
 
     const cycleIterStart = iter;
@@ -459,6 +515,7 @@ export const coordinateDescent = (
         phaseStep,
         cycle.minStep,
         spectralProfile,
+        temperature,
       );
       genome = result.genome;
       const scoreImproved =
@@ -491,6 +548,7 @@ export const coordinateDescent = (
       );
 
       iter++;
+      temperature *= cfg.saCoolingRate;
       if (currentBest >= cfg.earlyExitSuppression) {
         break;
       }
