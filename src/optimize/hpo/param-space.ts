@@ -283,8 +283,32 @@ export const HYPERPARAM_SPACE: HyperparamDef[] = [
       step: null,
     },
     description:
-      'Step for phase (offset 5). ~0.02 rad / 1.1 deg in physical space',
+      'Step for phase (offset 5) in EXPLORATION. ~0.02 rad / 1.1 deg',
     currentValue: 0.003125,
+  },
+  {
+    name: 'phaseStepRefine',
+    distribution: {
+      type: 'float',
+      low: 0.0003,
+      high: 0.002,
+      log: false,
+      step: null,
+    },
+    description: 'Phase step in REFINEMENT cycle. ~0.18 degrees.',
+    currentValue: 0.00078125,
+  },
+  {
+    name: 'phaseStepPrecision',
+    distribution: {
+      type: 'float',
+      low: 0.00005,
+      high: 0.0005,
+      log: false,
+      step: null,
+    },
+    description: 'Phase step in PRECISION cycle. ~0.01 degrees.',
+    currentValue: 0.00019531,
   },
 ];
 
@@ -313,6 +337,8 @@ export const HYPERPARAM_DEFAULTS: Record<string, number> = {
   frequencyStepCoarse: 0.0001,
   frequencyStepRefine: 0.000005,
   phaseStep: 0.003125,
+  phaseStepRefine: 0.00078125,
+  phaseStepPrecision: 0.00019531,
 };
 
 /**
@@ -343,6 +369,8 @@ export interface ResolvedHyperparams {
   frequencyStepCoarse: number;
   frequencyStepRefine: number;
   phaseStep: number;
+  phaseStepRefine: number;
+  phaseStepPrecision: number;
 }
 
 export function resolveHyperparams(
@@ -429,5 +457,13 @@ export function resolveHyperparams(
       D.frequencyStepRefine as number,
     ),
     phaseStep: get('phaseStep', D.phaseStep as number),
+    phaseStepRefine: get(
+      'phaseStepRefine',
+      D.phaseStepRefine as number,
+    ),
+    phaseStepPrecision: get(
+      'phaseStepPrecision',
+      D.phaseStepPrecision as number,
+    ),
   };
 }

@@ -1,6 +1,6 @@
 /* eslint-disable no-console */
 import { OSC_PARAMS, clampVolume, initGenome } from './consts';
-import { VOLUME_MIN, VOLUME_PRUNE_THRESHOLD } from '../consts';
+import { VOLUME_PRUNE_THRESHOLD } from '../consts';
 import {
   evaluateSuppressionFromWaveform,
   evaluateSuppressionWindowed,
@@ -62,10 +62,14 @@ export interface CoordinateDescentConfig {
    */
   frequencyStepRefine: number;
   /**
-   * Phase step (offset 5). Absolute vector step, independent of cycle.
+   * Phase step in EXPLORATION cycle. Absolute vector step.
    * Default 0.003125 ≈ 1.1°.
    */
   phaseStep: number;
+  /** Phase step in REFINEMENT cycle. Default phaseStep / 4 ≈ 0.29°. */
+  phaseStepRefine: number;
+  /** Phase step in PRECISION cycle. Default phaseStep / 16 ≈ 0.07°. */
+  phaseStepPrecision: number;
 }
 
 /** Default config values (previous hardcoded constants). */
@@ -87,6 +91,8 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
   frequencyStepCoarse: 0.0001,
   frequencyStepRefine: 0.000005,
   phaseStep: 0.003125,
+  phaseStepRefine: 0.00078125,
+  phaseStepPrecision: 0.00019531,
 };
 
 /**
@@ -179,7 +185,6 @@ const optimizeIteration = (
   genome: number[],
   waveformCache: WaveformCache,
   numOsc: number,
-  initOscCount: number,
   targetSignal: readonly number[],
   sampleRate: number,
   currentBest: number,
@@ -231,8 +236,27 @@ const optimizeIteration = (
       }
     }
 
-    enforceFlagInvariant(genome, numOsc, initOscCount);
-    syncFlagsToCache(genome, waveformCache, numOsc);
+    const volume = genome[base + 9] ?? 0;
+    if (
+      (genome[base] ?? 0) >= 0.5 &&
+      volume <= VOLUME_PRUNE_THRESHOLD
+    ) {
+      waveformCache.setParam(base, 0);
+      const scoreOff = evaluateSuppressionWindowed(
+        waveformCache.getWaveform(),
+        targetSignal,
+        0.5,
+        0.3,
+        sampleRate,
+        spectralProfile,
+      );
+      if (scoreOff > score) {
+        genome[base] = 0;
+        score = scoreOff;
+      } else {
+        waveformCache.setParam(base, 1);
+      }
+    }
   }
 
   return { genome, score };
@@ -282,40 +306,6 @@ const normalizeFlags = (genome: number[], numOsc: number): void => {
   }
 };
 
-const enforceFlagInvariant = (
-  genome: number[],
-  numOsc: number,
-  initOscCount: number,
-): void => {
-  let rightmostEnabled = -1;
-  for (let osc = numOsc - 1; osc >= 0; osc--) {
-    if ((genome[osc * OSC_PARAMS] ?? 0) >= 0.5) {
-      rightmostEnabled = osc;
-      break;
-    }
-  }
-
-  for (let osc = 0; osc < numOsc; osc++) {
-    if (osc < initOscCount) {
-      genome[osc * OSC_PARAMS] = 1;
-      continue;
-    }
-
-    const vol = genome[osc * OSC_PARAMS + 9] ?? 0;
-
-    if (osc < rightmostEnabled) {
-      genome[osc * OSC_PARAMS] = 1;
-      continue;
-    }
-
-    if (vol < VOLUME_MIN) {
-      genome[osc * OSC_PARAMS] = 0;
-    } else {
-      genome[osc * OSC_PARAMS] = 1;
-    }
-  }
-};
-
 const emitProgress = (
   history: ProgressEntry[],
   onProgress: ProgressCallback | undefined,
@@ -358,10 +348,6 @@ export const coordinateDescent = (
   let genome = initGenome(initialVector);
 
   const firstOscInitVolume = genome[9] ?? 0;
-
-  const initOscCount = initialVector.filter(
-    (v, i) => i % OSC_PARAMS === 0 && v >= 0.5,
-  ).length;
 
   const actualStepGrowthAdd = stepGrowthAdd ?? 0.01;
   const actualStepDecayFactor =
@@ -437,11 +423,16 @@ export const coordinateDescent = (
         : isLastCycle
           ? cfg.frequencyStep
           : cfg.frequencyStepRefine;
-    const phaseStep = cfg.phaseStep;
+    const phaseStep =
+      cycleIndex === 0
+        ? cfg.phaseStep
+        : isLastCycle
+          ? cfg.phaseStepPrecision
+          : cfg.phaseStepRefine;
     lastCycleLabel = cycle.label;
 
     console.log(
-      `[CoordDescent] Cycle: ${cycle.label}, startStep=${cycle.startStep}, minStep=${cycle.minStep}, freqStep=${frequencyStep}, score=${currentBest.toFixed(4)}%`,
+      `[CoordDescent] Cycle: ${cycle.label}, startStep=${cycle.startStep}, minStep=${cycle.minStep}, freqStep=${frequencyStep}, phaseStep=${phaseStep}, score=${currentBest.toFixed(4)}%`,
     );
 
     const cycleIterStart = iter;
@@ -459,7 +450,6 @@ export const coordinateDescent = (
         genome,
         waveformCache,
         numOsc,
-        initOscCount,
         targetSignal,
         sampleRate,
         currentBest,
@@ -534,7 +524,6 @@ export const coordinateDescent = (
             }
             return Math.random();
           });
-          enforceFlagInvariant(genome, numOsc, initOscCount);
           waveformCache.rebuild(genome);
           syncFlagsToCache(genome, waveformCache, numOsc);
           restartCount = 0;
@@ -563,7 +552,6 @@ export const coordinateDescent = (
           genome[kickIdx] = Math.random();
           waveformCache.setParam(kickIdx, genome[kickIdx] ?? 0);
 
-          enforceFlagInvariant(genome, numOsc, initOscCount);
           syncFlagsToCache(genome, waveformCache, numOsc);
 
           currentBest = evaluateSuppressionWindowed(
@@ -645,7 +633,6 @@ export const coordinateDescent = (
     numOsc,
   );
 
-  enforceFlagInvariant(genome, numOsc, initOscCount);
   syncFlagsToCache(genome, waveformCache, numOsc);
 
   console.log(
@@ -735,8 +722,6 @@ export const coordinateDescent = (
   }
 
   normalizeFlags(genome, numOsc);
-  syncFlagsToCache(genome, waveformCache, numOsc);
-  enforceFlagInvariant(genome, numOsc, initOscCount);
   syncFlagsToCache(genome, waveformCache, numOsc);
 
   emitProgress(

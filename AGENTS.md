@@ -197,11 +197,11 @@ Generate → Compare → Save WAV + SVG
 
 - Мульти-цикловый подход (дефолты `DEFAULT_COORD_DESCENT_CONFIG`): `EXPLORATION` (0.025→0.01) → `REFINEMENT` (0.01→0.003) → `PRECISION` (0.0025→0.0001) — применяется к non-freq/phase параметрам
 - Бюджет итераций распределяется по циклам долями от `maxIterations`: не-последние циклы получают 0.7/(n-1) бюджета каждый, финальный (PRECISION) — резерв 0.3; цикл, завершившийся по `minStep` раньше своей доли, освобождает итерации следующим циклам
-- Пошаговые размеры по типам параметров: частота — трёхскоростной шаг: `frequencyStepCoarse` (0.0001 ≈ 2 Гц) в EXPLORATION, `frequencyStepRefine` (0.000005 ≈ 0.1 Гц) в REFINEMENT и `frequencyStep` (0.0000001 ≈ 0.002 Гц) в PRECISION (offsets 1-2); `phaseStep` (0.003125, offset 5) — фиксированный, НЕ зависит от цикла; остальные параметры используют шаг из текущего цикла
+- Пошаговые размеры по типам параметров: частота — трёхскоростной шаг: `frequencyStepCoarse` (0.0001 ≈ 2 Гц) в EXPLORATION, `frequencyStepRefine` (0.000005 ≈ 0.1 Гц) в REFINEMENT и `frequencyStep` (0.0000001 ≈ 0.002 Гц) в PRECISION (offsets 1-2); фаза — трёхскоростной шаг: `phaseStep` (0.003125 ≈ 1.1°) в EXPLORATION, `phaseStepRefine` (0.00078 ≈ 0.3°) в REFINEMENT, `phaseStepPrecision` (0.0002 ≈ 0.07°) в PRECISION; остальные параметры используют шаг из текущего цикла
 - Плато-пинки: при `3` итерациях без улучшения — случайный пинк одного параметра; после `5` пинков — полный рандомный рестарт
 - Затухание шага: при `4` итерациях без улучшения шаг × `0.9` (`stagnationStepDecayFactor`); выход из цикла, если шаг < minStep (только для non-freq/phase; частота/фаза на minStep цикла не завязаны)
 - Ранний выход при достижении `98%` suppression
-- Флаг `on` всегда `1` в процессе оптимизации; `enforceFlagInvariant` включает осцилляторы с `volume > VOLUME_MIN` и все до rightmostEnabled
+- Флаг-оптимизация: после каждого осциллятора в CD проверяется кандидат `flag=0`, если `volume ≤ VOLUME_PRUNE_THRESHOLD` и score улучшается — осциллятор отключается. Первый осциллятор (osc[0]) всегда остаётся включённым. `enforceFlagInvariant` удалён — состояния флагов полностью управляются CD.
 - После completion — финальный прунинг: осцилляторы с `startLevel < VOLUME_PRUNE_THRESHOLD` (≈ 0.02) отключаются; откат если score падает > 0.05 п.п.
 - Scale fitting: подбор оптимального масштаба громкости (`findOptimalScale`) после оптимизации; множитель пишется в `startLevel`, затем геном **пересинтезируется и переоценивается** (score с отмасштабированного waveform не переиспользуется)
 - Volume (offset 9): мультипликативный шаг (`center * (1 ± step)`), ограничен `clampVolume` → `[VOLUME_MIN, 1]`
@@ -351,7 +351,9 @@ base+20ms), затем base × `stageDurationMultiplier`. Множитель
 - `frequencyStep` — [5e-8, 5e-7] (log) — мелкий шаг freqBase/freqStart в PRECISION, дефолт 0.0000001
 - `frequencyStepCoarse` — [1e-5, 5e-4] (log) — грубый шаг freqBase/freqStart в EXPLORATION, дефолт 0.0001
 - `frequencyStepRefine` — [1e-6, 1e-5] (log) — средний шаг freqBase/freqStart в REFINEMENT, дефолт 0.000005
-- `phaseStep` — [0.0015, 0.006] — шаг для phase (offset 5), дефолт 0.003125
+- `phaseStep` — [0.0015, 0.006] — шаг для phase (offset 5) в EXPLORATION, дефолт 0.003125 ≈ 1.1°
+- `phaseStepRefine` — [0.0003, 0.002] — шаг для phase в REFINEMENT, дефолт 0.00078 ≈ 0.3°
+- `phaseStepPrecision` — [0.00005, 0.0005] — шаг для phase в PRECISION, дефолт 0.0002 ≈ 0.07°
 
 > `iterations` НЕ является гиперпараметром — пользователь контролирует через
 > `maxIterations`. `stageDurationMultiplier`, `initialStageMs` и `staged` также
