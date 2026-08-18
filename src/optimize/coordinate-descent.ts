@@ -2,13 +2,13 @@
 import { OSC_PARAMS, clampVolume, initGenome } from './consts';
 import { VOLUME_PRUNE_THRESHOLD } from '../consts';
 import {
-  evaluateSuppressionFromWaveform,
   evaluateSuppressionWindowed,
   findOptimalScale,
   computeSpectralProfile,
   WaveformCache,
   SpectralProfile,
 } from './evaluate';
+import { tryRelocateOscillator } from './residual-relocation';
 import type {
   ProgressEntry,
   ProgressCallback,
@@ -78,6 +78,19 @@ export interface CoordinateDescentConfig {
   saInitialTemp: number;
   /** Geometric cooling factor applied per iteration. */
   saCoolingRate: number;
+  /**
+   * Max residual-relocation attempts per oscillator per run.
+   * Prevents relocate→mute→relocate cycles on ghost peaks
+   * (e.g. targets genuinely consisting of few oscillators).
+   * 0 disables relocation entirely.
+   */
+  maxRelocationAttemptsPerOsc: number;
+  /**
+   * Min windowed-score improvement (p.p.) for a relocation
+   * to be accepted — filters ghost-peak relocations with
+   * negligible gain.
+   */
+  relocationMinImprovement: number;
 }
 
 /** Default config values (previous hardcoded constants). */
@@ -103,6 +116,8 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
   phaseStepPrecision: 0.00019531,
   saInitialTemp: 3,
   saCoolingRate: 0.99,
+  maxRelocationAttemptsPerOsc: 3,
+  relocationMinImprovement: 0.001,
 };
 
 /**
@@ -214,6 +229,38 @@ const syncFlagsToCache = (
   }
 };
 
+/**
+ * Одна итерация coordinate descent: greedy-проход по всем
+ * параметрам включённых осцилляторов.
+ *
+ * @param genome - Геном (мутируется: лучшие значения фиксируются)
+ * @param waveformCache - Кэш waveform, синхронизирован с геномом
+ * @param numOsc - Число осцилляторов в геноме
+ * @param targetSignal - Эталонный сигнал
+ * @param sampleRate - Частота дискретизации, Гц
+ * @param currentBest - Текущий лучший windowed-score
+ * @param step - Базовый шаг цикла (non-freq/phase параметры)
+ * @param firstOscMinVol - Нижняя граница volume первого осциллятора
+ * @param frequencyStep - Шаг частоты для текущего цикла
+ * @param phaseStep - Шаг фазы для текущего цикла
+ * @param minStep - Минимальный шаг non-freq/phase параметров
+ * @param spectralProfile - Спектральный профиль таргета
+ * @param temperature - Температура simulated annealing (0 — чистый
+ *   greedy)
+ * @param relocationAttempts - Счётчик relocation-попыток на
+ *   осциллятор (мутируется); без него relocation не учитывается
+ * @param maxRelocationAttemptsPerOsc - Лимит relocation-попыток на
+ *   осциллятор за прогон (0 полностью отключает relocation)
+ * @param relocationMinImprovement - Минимальное улучшение score
+ *   (п.п.) для принятия relocation
+ * @returns Обновлённые геном и windowed-score
+ * @remarks Осциллятор с volume ≤ VOLUME_PRUNE_THRESHOLD сначала
+ *   пробует relocation на доминантный пик остатка (дальний
+ *   частотный прыжок, недоступный локальному спуску с шагом
+ *   ~2 Гц), и лишь при отказе — обычный prune-путь: выключение
+ *   принимается, если score улучшается. Первый осциллятор (osc[0])
+ *   всегда остаётся включённым.
+ */
 const optimizeIteration = (
   genome: number[],
   waveformCache: WaveformCache,
@@ -228,6 +275,9 @@ const optimizeIteration = (
   minStep: number,
   spectralProfile: SpectralProfile,
   temperature = 0,
+  relocationAttempts?: number[],
+  maxRelocationAttemptsPerOsc = 0,
+  relocationMinImprovement = 0,
 ): { genome: number[]; score: number } => {
   let score = currentBest;
 
@@ -276,20 +326,50 @@ const optimizeIteration = (
       (genome[base] ?? 0) >= 0.5 &&
       volume <= VOLUME_PRUNE_THRESHOLD
     ) {
-      waveformCache.setParam(base, 0);
-      const scoreOff = evaluateSuppressionWindowed(
-        waveformCache.getWaveform(),
-        targetSignal,
-        0.5,
-        0.3,
-        sampleRate,
-        spectralProfile,
-      );
-      if (scoreOff > score) {
-        genome[base] = 0;
-        score = scoreOff;
+      // Прежде чем выключать слабый осциллятор, пробуем
+      // relocation: переставить его на доминантную частоту
+      // остатка (target − synth). Локальный спуск не может
+      // совершить такой частотный прыжок сам (~2 Гц шаг),
+      // а выключение оставляет энергию остатка непокрытой.
+      // Попытки лимитированы: иначе relocate→mute→relocate
+      // цикл на призрачных пиках сжигает бюджет.
+      const attemptsUsed = relocationAttempts?.[osc] ?? 0;
+      const relocationAllowed =
+        maxRelocationAttemptsPerOsc > 0 &&
+        attemptsUsed < maxRelocationAttemptsPerOsc;
+      const relocation = relocationAllowed
+        ? tryRelocateOscillator({
+            genome,
+            waveformCache,
+            oscIndex: osc,
+            targetSignal,
+            sampleRate,
+            currentScore: score,
+            spectralProfile,
+            minImprovement: relocationMinImprovement,
+          })
+        : { relocated: false, score };
+      if (relocationAttempts && relocationAllowed) {
+        relocationAttempts[osc] = attemptsUsed + 1;
+      }
+      if (relocation.relocated) {
+        score = relocation.score;
       } else {
-        waveformCache.setParam(base, 1);
+        waveformCache.setParam(base, 0);
+        const scoreOff = evaluateSuppressionWindowed(
+          waveformCache.getWaveform(),
+          targetSignal,
+          0.5,
+          0.3,
+          sampleRate,
+          spectralProfile,
+        );
+        if (scoreOff > score) {
+          genome[base] = 0;
+          score = scoreOff;
+        } else {
+          waveformCache.setParam(base, 1);
+        }
       }
     }
   }
@@ -297,12 +377,32 @@ const optimizeIteration = (
   return { genome, score };
 };
 
+/**
+ * Финальный прунинг: отключает осцилляторы со startLevel ниже
+ * prune-порога, если это не роняет score.
+ *
+ * @param genome - Геном (мутируется: флаги отключаемых osc → 0)
+ * @param waveformCache - Кэш waveform, синхронизирован с геномом
+ * @param targetSignal - Эталонный сигнал
+ * @param currentBest - Текущий лучший windowed-score
+ * @param numOsc - Число осцилляторов в геноме
+ * @param sampleRate - Частота дискретизации, Гц
+ * @param spectralProfile - Спектральный профиль таргета
+ * @returns Windowed-score после прунинга
+ * @remarks Кандидаты (volume < VOLUME_PRUNE_THRESHOLD) отключаются
+ *   в порядке возрастания volume; отключение откатывается, если
+ *   score падает больше чем на 0.05 п.п. Метрика — та же windowed,
+ *   что и в основном цикле CD: prune-решения и bestScore-сравнение
+ *   идут по одной шкале.
+ */
 const finalPruneOscillators = (
   genome: number[],
   waveformCache: WaveformCache,
   targetSignal: readonly number[],
   currentBest: number,
   numOsc: number,
+  sampleRate: number,
+  spectralProfile: SpectralProfile,
 ): number => {
   const pruneCandidates: { base: number; volume: number }[] = [];
   for (let osc = 0; osc < numOsc; osc++) {
@@ -319,9 +419,15 @@ const finalPruneOscillators = (
     const savedFlag = genome[base] ?? 0;
     genome[base] = 0;
     waveformCache.setParam(base, 0);
-    const scoreAfter = evaluateSuppressionFromWaveform(
+    // Windowed-метрика, консистентная с основным циклом CD:
+    // prune-решения и bestScore-сравнение по одной шкале.
+    const scoreAfter = evaluateSuppressionWindowed(
       waveformCache.getWaveform(),
       targetSignal,
+      0.5,
+      0.3,
+      sampleRate,
+      spectralProfile,
     );
     if (score - scoreAfter > 0.05) {
       genome[base] = savedFlag;
@@ -357,11 +463,36 @@ const emitProgress = (
   onProgress?.(entry);
 };
 
+/** Результат оптимизации: финальный вектор и история прогресса. */
 interface OptimizeResult {
   vector: number[];
   history: ProgressEntry[];
 }
 
+/**
+ * Coordinate descent по вектору параметров осцилляторов,
+ * максимизирующий windowed suppressionPercent против таргета.
+ *
+ * @param initialVector - Стартовый вектор (N осцилляторов ×
+ *   OSC_PARAMS значений в [0, 1])
+ * @param targetSignal - Эталонный сигнал
+ * @param sampleRate - Частота дискретизации, Гц
+ * @param maxIterations - Бюджет итераций (распределяется по циклам)
+ * @param onProgress - Колбэк прогресса (вызывается каждую итерацию)
+ * @param stepGrowthAdd - Приращение шага при серии успехов
+ * @param stepDecayFactor - Множитель затухания шага на плато
+ * @param config - Переопределения CoordinateDescentConfig (HPO)
+ * @returns Оптимизированный вектор и история прогресса
+ * @remarks Мульти-цикловый график шагов (EXPLORATION → REFINEMENT →
+ *   PRECISION), плато-пинки и рандомные рестарты, simulated
+ *   annealing с непрерывным охлаждением через все циклы (T=0
+ *   в PRECISION), ранний выход при earlyExitSuppression. Слабые
+ *   осцилляторы перед выключением проходят residual-guided
+ *   relocation (лимит maxRelocationAttemptsPerOsc). После циклов —
+ *   финальный прунинг и scale fitting с переоценкой. Флаги
+ *   возвращаемого вектора приведены к строго 0/1; osc[0] всегда
+ *   включён.
+ */
 export const coordinateDescent = (
   initialVector: readonly number[],
   targetSignal: readonly number[],
@@ -381,6 +512,10 @@ export const coordinateDescent = (
   const numOsc = genomeLength / OSC_PARAMS;
 
   let genome = initGenome(initialVector);
+
+  // Счётчик relocation-попыток на осциллятор (anti-cycle:
+  // relocate→mute→relocate на призрачных пиках).
+  const relocationAttempts = new Array<number>(numOsc).fill(0);
 
   const firstOscInitVolume = genome[9] ?? 0;
 
@@ -516,6 +651,9 @@ export const coordinateDescent = (
         cycle.minStep,
         spectralProfile,
         temperature,
+        relocationAttempts,
+        cfg.maxRelocationAttemptsPerOsc,
+        cfg.relocationMinImprovement,
       );
       genome = result.genome;
       const scoreImproved =
@@ -693,6 +831,8 @@ export const coordinateDescent = (
     targetSignal,
     currentBest,
     numOsc,
+    sampleRate,
+    spectralProfile,
   );
 
   syncFlagsToCache(genome, waveformCache, numOsc);
@@ -797,6 +937,15 @@ export const coordinateDescent = (
   return { vector: genome, history };
 };
 
+/**
+ * Точка входа оптимизации: обёртка над coordinateDescent
+ * с объектом аргументов ArgOptimize (публичный контракт,
+ * используется worker-потоком и staged-оптимизацией).
+ *
+ * @param arg - Параметры оптимизации (вектор, таргет, бюджет
+ *   итераций, HPO-конфиг)
+ * @returns Оптимизированный вектор и история прогресса
+ */
 export const optimize = (
   arg: ArgOptimize,
 ): {
