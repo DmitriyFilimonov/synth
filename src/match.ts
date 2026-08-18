@@ -6,6 +6,7 @@ import {
   ProgressCallback,
   stagedOptimize,
   runHPO,
+  evaluateSuppressionFromWaveform,
   type ArgHPO,
   type CoordinateDescentConfig,
   type ResolvedHyperparams,
@@ -209,7 +210,7 @@ export const match = (arg: ArgMatch): MatchResult => {
     `Optimization complete. Suppression: ${bestSuppression.toFixed(2)}%`,
   );
 
-  generateOutput({
+  const { samples } = generateOutput({
     vector,
     targetSignal,
     numSamples,
@@ -219,6 +220,20 @@ export const match = (arg: ArgMatch): MatchResult => {
   });
 
   console.log(`Generated: ${arg.outputWavPath}`);
+
+  try {
+    const globalSuppression = evaluateSuppressionFromWaveform(
+      [...samples],
+      targetSignal,
+    );
+    console.log(
+      `Global suppression (RMS, full signal): ${globalSuppression.toFixed(2)}%`,
+    );
+  } catch (assessError) {
+    console.warn(
+      `Global suppression assessment failed: ${assessError instanceof Error ? assessError.message : String(assessError)}`,
+    );
+  }
 
   return {
     optimizedVector: vector,

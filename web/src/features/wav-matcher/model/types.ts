@@ -59,6 +59,8 @@ export interface JobEntry {
     stageDurationMultiplier?: number;
   };
   suppressionPercent: number;
+  /** Честный глобальный suppression финального WAV (может отсутствовать у старых job) */
+  globalSuppressionPercent?: number | null;
   targetInfo?: MatchTargetInfo;
   errorMessage?: string;
   createdAt: string;
@@ -70,6 +72,7 @@ export interface JobListEntry {
   id: string;
   status: JobStatus;
   suppressionPercent: number;
+  globalSuppressionPercent?: number | null;
   params: {
     numOscillators: number;
     maxIterations: number;

@@ -24,6 +24,8 @@ export interface MatchWorkerResult {
     numChannels: number;
   };
   suppressionPercent: number;
+  /** Честный глобальный suppression финального WAV; null, если оценка не удалась */
+  globalSuppressionPercent: number | null;
   bestVector: number[];
   synthConfig: ArgCreateSynth;
 }

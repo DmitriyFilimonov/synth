@@ -41,6 +41,8 @@ export interface JobRecord {
   createdAt: string;
   updatedAt: string;
   suppressionPercent: number;
+  /** Честный глобальный suppression финального WAV; null, если оценка не удалась или job старый */
+  globalSuppressionPercent?: number | null;
   targetInfo: {
     sampleRate: number;
     numSamples: number;
@@ -96,6 +98,7 @@ function createFallbackRecord(id: string): JobRecord {
     createdAt: now,
     updatedAt: now,
     suppressionPercent: 0,
+    globalSuppressionPercent: null,
     targetInfo: null,
     bestVector: null,
     synthConfig: null,
@@ -138,6 +141,7 @@ export async function createJob(
     createdAt: now,
     updatedAt: now,
     suppressionPercent: 0,
+    globalSuppressionPercent: null,
     targetInfo: null,
     bestVector: null,
     synthConfig: null,
@@ -157,6 +161,7 @@ export async function updateJobStatus(
       JobRecord,
       | 'progress'
       | 'suppressionPercent'
+      | 'globalSuppressionPercent'
       | 'targetInfo'
       | 'errorMessage'
       | 'bestVector'
@@ -178,6 +183,10 @@ export async function updateJobStatus(
     }
     if (partial.suppressionPercent !== undefined) {
       record.suppressionPercent = partial.suppressionPercent;
+    }
+    if (partial.globalSuppressionPercent !== undefined) {
+      record.globalSuppressionPercent =
+        partial.globalSuppressionPercent;
     }
     if (partial.targetInfo !== undefined) {
       record.targetInfo = partial.targetInfo;

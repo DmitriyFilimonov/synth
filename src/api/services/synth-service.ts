@@ -49,6 +49,8 @@ interface MatchedFile {
     numChannels: number;
   };
   suppressionPercent: number;
+  /** Честный глобальный suppression финального WAV; null, если оценка не удалась */
+  globalSuppressionPercent: number | null;
   synthConfig: ArgCreateSynth;
 }
 
@@ -161,6 +163,8 @@ export async function matchWav(
         history.length > 0
           ? (history[history.length - 1]?.suppressionPercent ?? 0)
           : 0,
+      globalSuppressionPercent:
+        result.globalSuppressionPercent ?? null,
       synthConfig: result.synthConfig,
     };
   } finally {
@@ -303,6 +307,8 @@ async function runMatchJob(
         history.length > 0
           ? (history[history.length - 1]?.suppressionPercent ?? 0)
           : 0,
+      globalSuppressionPercent:
+        result.globalSuppressionPercent ?? null,
       targetInfo: result.targetInfo,
       bestVector: result.bestVector,
       synthConfig: result.synthConfig,

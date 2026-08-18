@@ -312,6 +312,15 @@ function JobDetail({
         {currentSup.toFixed(2)}%
       </div>
 
+      {job?.status === 'completed' &&
+        job.globalSuppressionPercent != null && (
+          <div className={styles.detailMeta}>
+            GLOBAL (RMS): {job.globalSuppressionPercent.toFixed(2)}% —
+            честное подавление по всему сигналу; число выше — surrogate J
+            из оптимизации (занижен)
+          </div>
+        )}
+
       {stageInfo &&
         (job?.status === 'running' || job?.status === 'queued') && (
           <div className={styles.stageInfo}>
@@ -425,6 +434,8 @@ function JobListCard({
       </div>
       <div className={styles.jobSuppression}>
         Suppression: {job.suppressionPercent.toFixed(2)}%
+        {job.globalSuppressionPercent != null &&
+          ` (global: ${job.globalSuppressionPercent.toFixed(2)}%)`}
       </div>
       <div className={styles.jobTime}>
         {formatTime(job.createdAt)}

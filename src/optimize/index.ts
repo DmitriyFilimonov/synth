@@ -3,7 +3,11 @@ export {
   DEFAULT_COORD_DESCENT_CONFIG,
   type CoordinateDescentConfig,
 } from './coordinate-descent';
-export { evaluateSuppression, createWaveForm } from './evaluate';
+export {
+  evaluateSuppression,
+  evaluateSuppressionFromWaveform,
+  createWaveForm,
+} from './evaluate';
 export {
   stagedOptimize,
   extrapolateVectorBetweenStages,

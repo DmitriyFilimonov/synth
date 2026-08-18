@@ -114,6 +114,7 @@ export const matchHandler = async (
       history: result.history,
       targetInfo: result.targetInfo,
       suppressionPercent: result.suppressionPercent,
+      globalSuppressionPercent: result.globalSuppressionPercent,
       wavBase64: result.buffer.toString('base64'),
       synthConfig: result.synthConfig,
     });
@@ -293,6 +294,7 @@ export const getJobStatusHandler = async (
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
       suppressionPercent: job.suppressionPercent,
+      globalSuppressionPercent: job.globalSuppressionPercent ?? null,
       targetInfo: job.targetInfo,
       bestVector: job.bestVector,
       synthConfig: job.synthConfig,
@@ -313,6 +315,8 @@ export const getJobsListHandler = async (
         id: job.id,
         status: job.status,
         suppressionPercent: job.suppressionPercent,
+        globalSuppressionPercent:
+          job.globalSuppressionPercent ?? null,
         params: job.params,
         createdAt: job.createdAt,
         updatedAt: job.updatedAt,

@@ -1,6 +1,9 @@
 /* eslint-disable no-console */
 import { parentPort } from 'worker_threads';
-import { stagedOptimize } from './optimize';
+import {
+  stagedOptimize,
+  evaluateSuppressionFromWaveform,
+} from './optimize';
 import { generateOutput } from './match';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 import { readWav } from './read-wav';
@@ -153,7 +156,7 @@ parentPort.on('message', (msg: WorkerMessage) => {
       history = result.history;
     }
 
-    generateOutput({
+    const { samples } = generateOutput({
       vector,
       targetSignal,
       numSamples: targetWav.samples.length,
@@ -163,6 +166,24 @@ parentPort.on('message', (msg: WorkerMessage) => {
     });
 
     const optimizedConfig = mapVectorToSynthConfig(vector);
+
+    // Честный глобальный suppression (1 - RMS(остаток)/RMS(таргет))
+    // по финальному WAV — в отличие от surrogate J в истории.
+    // Не критично для результата: при ошибке поле будет null.
+    let globalSuppressionPercent: number | null = null;
+    try {
+      globalSuppressionPercent = evaluateSuppressionFromWaveform(
+        [...samples],
+        targetSignal,
+      );
+      console.log(
+        `Global suppression (RMS, full signal): ${globalSuppressionPercent.toFixed(2)}%`,
+      );
+    } catch (assessError) {
+      console.warn(
+        `Global suppression assessment failed: ${assessError instanceof Error ? assessError.message : String(assessError)}`,
+      );
+    }
 
     parentPort?.postMessage({
       type: 'done',
@@ -178,6 +199,7 @@ parentPort.on('message', (msg: WorkerMessage) => {
           history.length > 0
             ? (history[history.length - 1]?.suppressionPercent ?? 0)
             : 0,
+        globalSuppressionPercent,
         bestVector: vector,
         synthConfig: optimizedConfig,
       },

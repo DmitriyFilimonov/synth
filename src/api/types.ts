@@ -52,6 +52,8 @@ export interface MatchResult {
     numChannels: number;
   };
   suppressionPercent: number;
+  /** Честный глобальный suppression финального WAV; null, если оценка не удалась */
+  globalSuppressionPercent: number | null;
   wavBase64: string;
   synthConfig: ArgCreateSynth;
 }
@@ -97,6 +99,8 @@ export interface JobStatusResponse {
   createdAt: string;
   updatedAt: string;
   suppressionPercent: number;
+  /** Честный глобальный suppression финального WAV; null, если оценка не удалась или job старый */
+  globalSuppressionPercent: number | null;
   targetInfo: {
     sampleRate: number;
     numSamples: number;
@@ -128,6 +132,7 @@ export interface JobListItem {
   id: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   suppressionPercent: number;
+  globalSuppressionPercent: number | null;
   params: MatchParams;
   createdAt: string;
   updatedAt: string;
