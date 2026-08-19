@@ -26,6 +26,22 @@ import {
   getResultFilePath,
 } from './job-store';
 
+function formatRussianDateTime(date: Date): string {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${day}.${month}.${year} ${hours}:${minutes}:${seconds}`;
+}
+
+function generateJobName(targetFileName?: string): string {
+  const baseName = targetFileName?.trim() || 'target';
+  const timestamp = formatRussianDateTime(new Date());
+  return `${baseName} ${timestamp}`;
+}
+
 interface GeneratedFile {
   buffer: Buffer;
   sampleRate: number;
@@ -183,9 +199,11 @@ export async function matchWavWithJob(
   hpoTrials?: number,
   staged?: boolean,
   hpo?: boolean,
+  targetFileName?: string,
 ): Promise<string> {
   const jobId = randomUUID();
   const inputFileName = `${jobId}_input.wav`;
+  const jobName = generateJobName(targetFileName);
 
   await createJob(
     jobId,
@@ -200,6 +218,7 @@ export async function matchWavWithJob(
       hpo,
     },
     inputFileName,
+    jobName,
   );
 
   const inputPath = getInputFilePath(jobId);

@@ -23,6 +23,8 @@ export interface JobEntry {
 
 export interface JobRecord {
   id: string;
+  /** Human-readable name: "<targetFileName> DD.MM.YYYY HH:MM:SS" или "target DD.MM.YYYY HH:MM:SS" */
+  name: string;
   status: JobStatus;
   progress: JobEntry[];
   params: {
@@ -89,6 +91,7 @@ function createFallbackRecord(id: string): JobRecord {
   const now = new Date().toISOString();
   return {
     id,
+    name: '',
     status: 'running',
     progress: [],
     params: { numOscillators: 0, maxIterations: 0 },
@@ -127,11 +130,13 @@ export async function createJob(
     staged?: boolean;
   },
   inputFileName: string,
+  name: string,
 ): Promise<JobRecord> {
   await ensureJobsDir();
   const now = new Date().toISOString();
   const record: JobRecord = {
     id,
+    name,
     status: 'queued',
     progress: [],
     params,

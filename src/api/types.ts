@@ -68,6 +68,8 @@ export interface CreateMatchJobRequest {
   stageDurationMultiplier?: number;
   staged?: boolean;
   wavBase64?: string;
+  /** Название целевого файла (отображается в UI как "targetFileName DD.MM.YYYY HH:MM:SS") */
+  targetFileName?: string;
 }
 
 export interface MatchParams {
@@ -83,6 +85,8 @@ export interface MatchParams {
 
 export interface JobStatusResponse {
   id: string;
+  /** Human-readable name: "<targetFileName> DD.MM.YYYY HH:MM:SS" */
+  name: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
   progress: {
     iteration: number;

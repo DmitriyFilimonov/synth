@@ -220,6 +220,7 @@ export const createMatchJobHandler = async (
       hpoTrials,
       staged,
       hpo,
+      queryParams.fileName,
     );
 
     res.status(202).json({ id: jobId });
@@ -261,6 +262,7 @@ export const createMatchJobJsonHandler = async (
       body.hpoTrials,
       body.staged,
       body.hpo,
+      body.targetFileName,
     );
 
     res.status(202).json({ id: jobId });
@@ -285,6 +287,7 @@ export const getJobStatusHandler = async (
     const job = await getJob(id);
     res.json({
       id: job.id,
+      name: job.name,
       status: job.status,
       progress: job.progress,
       params: job.params,
@@ -313,6 +316,7 @@ export const getJobsListHandler = async (
     res.json(
       jobs.map((job) => ({
         id: job.id,
+        name: job.name,
         status: job.status,
         suppressionPercent: job.suppressionPercent,
         globalSuppressionPercent:
