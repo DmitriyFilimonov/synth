@@ -414,7 +414,18 @@ const finalPruneOscillators = (
   }
   pruneCandidates.sort((a, b) => a.volume - b.volume);
 
-  let score = currentBest;
+  // Стартовый score считаем честно от кэша, а не доверяем
+  // currentBest: он может устареть относительно текущего генома
+  // (например, после random restart), и тогда откаты prune-решений
+  // сравнивались бы с лживым значением.
+  let score = evaluateSuppressionWindowed(
+    waveformCache.getWaveform(),
+    targetSignal,
+    0.5,
+    0.3,
+    sampleRate,
+    spectralProfile,
+  );
   for (const { base } of pruneCandidates) {
     const savedFlag = genome[base] ?? 0;
     genome[base] = 0;
@@ -723,6 +734,18 @@ export const coordinateDescent = (
           waveformCache.rebuild(genome);
           syncFlagsToCache(genome, waveformCache, numOsc);
           restartCount = 0;
+          // currentBest обязан соответствовать новому геному: иначе
+          // устаревший (высокий) score замораживает спуск — все
+          // кандидаты хуже него, SA отвергает любые ухудшения, а
+          // финальный restore не срабатывает (bestScore == currentBest).
+          currentBest = evaluateSuppressionWindowed(
+            waveformCache.getWaveform(),
+            targetSignal,
+            0.5,
+            0.3,
+            sampleRate,
+            spectralProfile,
+          );
         } else {
           const enabledOscs: number[] = [];
           for (let osc = 0; osc < numOsc; osc++) {

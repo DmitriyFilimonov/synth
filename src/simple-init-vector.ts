@@ -5,6 +5,7 @@ import {
   ampEnvConfigNormales,
 } from './synth';
 import { SAMPLE_LENGTH_IN_SECONDS } from './consts';
+import { calculateRMS } from './rms';
 import {
   computeAmplitudeEnvelope,
   estimateFreqOverTime,
@@ -88,8 +89,14 @@ const findDominantFrequenciesWide = (
   count: number,
   resolution: number = 2,
 ): Array<{ frequency: number; amplitude: number }> => {
-  // Goertzel at multiple centers to cover wide range efficiently
-  const centers = [200, 440, 660, 880, 1100, 1320, 1540, 1760];
+  // Goertzel at multiple centers to cover wide range efficiently.
+  // Низкие центры обязательны: без них диапазон начинался со 100 Гц,
+  // и таргеты с энергией ниже (бас ~50-80 Гц) инициализировались
+  // ближайшими доступными частотами (~102/112 Гц) — гарантированный
+  // промах и застревание coordinate descent.
+  const centers = [
+    60, 140, 200, 440, 660, 880, 1100, 1320, 1540, 1760,
+  ];
   const searchRange = 100;
 
   const spectrum: Array<{ frequency: number; amplitude: number }> =
@@ -172,6 +179,18 @@ export const simpleInitVector = (
   const minRms = Math.min(...rmsValues);
   const modulationRatio = maxRms / Math.max(minRms, 1);
 
+  // Эффективная длительность сигнала: момент, где огибающая
+  // необратимо падает ниже 5% пика. Затухающий таргет (удар, щелчок)
+  // заканчивается раньше конца буфера; если поставить осцилляторам
+  // ampEnv duration на весь буфер, их хвост звучит в тишине таргета
+  // и взрывает windowed-score (окно с targetRMS~0 делит на ~0).
+  const AMP_TAIL_RATIO = 0.05;
+  const ampTailThreshold = Math.max(maxRms * AMP_TAIL_RATIO, 8);
+  const tailEntry = ampEnv.find((e) => e.rms < ampTailThreshold);
+  const effectiveDurationSec = tailEntry
+    ? Math.max(tailEntry.timeSeconds + 1024 / sampleRate, 0.05)
+    : samples.length / sampleRate;
+
   const sampleArray = Array.from(samples);
 
   let initList: OscInit[] = [];
@@ -182,24 +201,49 @@ export const simpleInitVector = (
     const firstQuarter = sampleArray.slice(0, quarterLen);
     const lastQuarter = sampleArray.slice(3 * quarterLen);
 
-    // Find dominant frequencies in first quarter (higher sweep range)
-    const firstPeaks = findDominantFrequenciesWide(
-      firstQuarter,
-      sampleRate,
-      3,
+    // В тихой четверти искать пики бессмысленно: «доминанты» там —
+    // случайный мусор шума квантования, который превращает осциллятор
+    // в chirp на постороннюю частоту с полной амплитудой (init
+    // оказывается хуже тишины, coordinate descent застревает около 0%).
+    const SILENCE_RMS_ABS = 8; // int16 ≈ −72 dBFS
+    const SILENCE_RMS_REL = 0.02;
+    const firstQuarterRms = calculateRMS(firstQuarter);
+    const lastQuarterRms = calculateRMS(lastQuarter);
+    const silenceThreshold = Math.max(
+      SILENCE_RMS_ABS,
+      Math.max(firstQuarterRms, lastQuarterRms) * SILENCE_RMS_REL,
     );
-    // Find dominant frequencies in last quarter (lower sweep range)
-    const lastPeaks = findDominantFrequenciesWide(
-      lastQuarter,
-      sampleRate,
-      3,
-    );
+    const firstSilent = firstQuarterRms < silenceThreshold;
+    const lastSilent = lastQuarterRms < silenceThreshold;
 
-    // Match peaks between quarters: freq sweeps high→low
-    const freqFirst1 = firstPeaks[0]?.frequency ?? estimatedFreq;
-    const freqFirst2 = firstPeaks[1]?.frequency ?? estimatedFreq + 5;
-    const freqLast1 = lastPeaks[0]?.frequency ?? estimatedFreq;
-    const freqLast2 = lastPeaks[1]?.frequency ?? estimatedFreq + 5;
+    // Find dominant frequencies in first quarter (higher sweep range)
+    const firstPeaks = firstSilent
+      ? []
+      : findDominantFrequenciesWide(firstQuarter, sampleRate, 3);
+    // Find dominant frequencies in last quarter (lower sweep range)
+    const lastPeaks = lastSilent
+      ? []
+      : findDominantFrequenciesWide(lastQuarter, sampleRate, 3);
+
+    // Match peaks between quarters: freq sweeps high→low.
+    // Тихая четверть не даёт своих пиков: берём пики другой четверти
+    // (chirp вырождается в стабильную частоту), затем среднюю частоту.
+    const freqFirst1 =
+      firstPeaks[0]?.frequency ??
+      lastPeaks[0]?.frequency ??
+      estimatedFreq;
+    const freqFirst2 =
+      firstPeaks[1]?.frequency ??
+      lastPeaks[1]?.frequency ??
+      estimatedFreq + 5;
+    const freqLast1 =
+      lastPeaks[0]?.frequency ??
+      firstPeaks[0]?.frequency ??
+      estimatedFreq;
+    const freqLast2 =
+      lastPeaks[1]?.frequency ??
+      firstPeaks[1]?.frequency ??
+      estimatedFreq + 5;
 
     const p1Full = extractPhaseAndAmplitude(
       samples,
@@ -228,7 +272,7 @@ export const simpleInitVector = (
       absAmplitude: p2Full.amplitude,
     });
     console.log(
-      `  Beats: ~${freqFirst1.toFixed(0)}→${freqLast1.toFixed(0)} & ~${freqFirst2.toFixed(0)}→${freqLast2.toFixed(0)} Hz (modulation=${modulationRatio.toFixed(1)}x)`,
+      `  Beats: ~${freqFirst1.toFixed(0)}→${freqLast1.toFixed(0)} & ~${freqFirst2.toFixed(0)}→${freqLast2.toFixed(0)} Hz (modulation=${modulationRatio.toFixed(1)}x${firstSilent ? ', 1st quarter silent' : ''}${lastSilent ? ', last quarter silent' : ''})`,
     );
     console.log(
       `  Phases: ${((p1Full.phase * 180) / Math.PI).toFixed(0)}° & ${((p2Full.phase * 180) / Math.PI).toFixed(0)}° amps=${p1Full.amplitude.toFixed(0)} ${p2Full.amplitude.toFixed(0)}`,
@@ -318,8 +362,6 @@ export const simpleInitVector = (
     0,
   );
 
-  const rmsReduction = 0.284;
-
   const vector = new Array<number>(
     maxOscillators * OSC_PARAMS_PER_OSCILLATOR,
   ).fill(0);
@@ -330,7 +372,7 @@ export const simpleInitVector = (
     oscConfigNormales.duration.max,
   );
   const ampEnvDurationNorm = normalize(
-    sampleLength,
+    effectiveDurationSec,
     ampEnvConfigNormales.duration.min,
     ampEnvConfigNormales.duration.max,
   );
@@ -373,10 +415,14 @@ export const simpleInitVector = (
         ? extractedAmp / totalExtractedAmp
         : 1 / numOsc;
 
+    // Пиковая амплитуда из RMS-доли: A = rms·√2. Деления на
+    // rmsReduction нет намеренно: с ним synth оказывался в ~3.5 раза
+    // громче таргета по энергии, init-score уходил сильно ниже нуля
+    // (хуже тишины) и coordinate descent застревал на заглушке.
     const oscRmsEach = targetSignalRms * Math.sqrt(oscProportion);
     const oscStart = Math.min(
       Math.max(
-        (oscRmsEach * Math.sqrt(2)) / 32767 / rmsReduction,
+        (oscRmsEach * Math.sqrt(2)) / 32767,
         ampEnvConfigNormales.startLevel.min,
       ),
       0.95,
