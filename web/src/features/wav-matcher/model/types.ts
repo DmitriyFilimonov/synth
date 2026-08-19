@@ -50,6 +50,8 @@ export interface SynthConfig {
 
 export interface JobEntry {
   id: string;
+  /** Человекочитаемое имя job (может отсутствовать у старых job) */
+  name?: string;
   status: JobStatus;
   progress: MatchHistoryEntry[];
   params: {
@@ -70,6 +72,8 @@ export interface JobEntry {
 
 export interface JobListEntry {
   id: string;
+  /** Человекочитаемое имя job (может отсутствовать у старых job) */
+  name?: string;
   status: JobStatus;
   suppressionPercent: number;
   globalSuppressionPercent?: number | null;

@@ -26,6 +26,7 @@ export async function createMatchJob(
     );
   if (config.staged !== undefined)
     params.set('staged', String(config.staged));
+  if (file.name) params.set('fileName', file.name);
 
   const response = await fetch(
     `/api/match/job?${params.toString()}`,

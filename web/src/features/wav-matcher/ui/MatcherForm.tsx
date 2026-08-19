@@ -278,7 +278,7 @@ function JobDetail({
       <div className={styles.detailHeader}>
         <div>
           <h3 className={styles.detailTitle}>
-            JOB: {jobId.slice(0, 12).toUpperCase()}
+            {job?.name ?? `JOB: ${jobId.slice(0, 12).toUpperCase()}`}
           </h3>
           <div className={styles.detailMeta}>
             OSC: {job?.params.numOscillators ?? '–'} · IT:{' '}
@@ -316,8 +316,8 @@ function JobDetail({
         job.globalSuppressionPercent != null && (
           <div className={styles.detailMeta}>
             GLOBAL (RMS): {job.globalSuppressionPercent.toFixed(2)}% —
-            честное подавление по всему сигналу; число выше — surrogate J
-            из оптимизации (занижен)
+            честное подавление по всему сигналу; число выше —
+            surrogate J из оптимизации (занижен)
           </div>
         )}
 
@@ -422,7 +422,7 @@ function JobListCard({
     <div className={styles.jobCard} onClick={() => onOpen(job.id)}>
       <div className={styles.jobHeader}>
         <span className={styles.jobId}>
-          {job.id.slice(0, 8).toUpperCase()}
+          {job.name ?? job.id.slice(0, 8).toUpperCase()}
         </span>
         <span className={`${styles.jobStatus} ${styles[job.status]}`}>
           {getStatusLabel(job.status)}
