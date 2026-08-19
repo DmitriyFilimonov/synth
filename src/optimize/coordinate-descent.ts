@@ -40,6 +40,15 @@ export interface CoordinateDescentConfig {
   maxRestartsBeforeRandomRestart: number;
   /** Kick fallback: if score < bestScore × threshold, restore genome. */
   kickFallbackThreshold: number;
+  /**
+   * Max acceptable regression (p.p.) after a full random restart.
+   * If `newScore < bestScore - limit`, the genome is restored from
+   * bestGenome. Random restart is meant to explore, so some
+   * regression is tolerated; the limit only rejects catastrophic
+   * blow-ups (e.g. 50 oscillators randomized to a state with
+   * residual RMS ≫ target — score of −100000% and worse).
+   */
+  randomRestartRegressionLimit: number;
   /** Three-phase step schedule (applies to non-freq/phase params). */
   restartSchedule: Array<{
     startStep: number;
@@ -103,6 +112,7 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
   earlyExitSuppression: 98,
   maxRestartsBeforeRandomRestart: 5,
   kickFallbackThreshold: 0.8,
+  randomRestartRegressionLimit: 30,
   restartSchedule: [
     { startStep: 0.025, minStep: 0.01, label: 'EXPLORATION' },
     { startStep: 0.01, minStep: 0.003, label: 'REFINEMENT' },
@@ -746,6 +756,26 @@ export const coordinateDescent = (
             sampleRate,
             spectralProfile,
           );
+
+          // Guard против катастрофических random restart:
+          // рандомизация 9 параметров всех 50 осцилляторов может
+          // дать состояние с residual RMS в сотни раз больше target
+          // (score < -10000%). Из такого состояния CD выбирается
+          // сотнями итераций и без гарантии возврата к bestScore.
+          if (
+            currentBest <
+            bestScore - cfg.randomRestartRegressionLimit
+          ) {
+            console.log(
+              `[CoordDescent] Random restart catastrophic (` +
+                `score=${currentBest.toFixed(2)}%, best=` +
+                `${bestScore.toFixed(2)}%), restoring from best`,
+            );
+            genome = bestGenome.slice();
+            waveformCache.rebuild(genome);
+            syncFlagsToCache(genome, waveformCache, numOsc);
+            currentBest = bestScore;
+          }
         } else {
           const enabledOscs: number[] = [];
           for (let osc = 0; osc < numOsc; osc++) {

@@ -25,6 +25,7 @@ export interface CoordinateDescentConfig {
   earlyExitSuppression: number;
   maxRestartsBeforeRandomRestart: number;
   kickFallbackThreshold: number;
+  randomRestartRegressionLimit: number;
   restartSchedule: Array<{
     startStep: number;
     minStep: number;
