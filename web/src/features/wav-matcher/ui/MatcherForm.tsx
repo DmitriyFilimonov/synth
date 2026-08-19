@@ -45,10 +45,10 @@ function OptimizationChart({
   const chartW = width - padding.left - padding.right;
   const chartH = height - padding.top - padding.bottom;
 
-  const maxSup = Math.max(
-    ...progress.map((p) => p.suppressionPercent),
-    0.01,
-  );
+  const supValues = progress.map((p) => p.suppressionPercent);
+  const minSup = Math.min(0, ...supValues);
+  const maxSup = Math.max(0.01, ...supValues);
+  const supRange = maxSup - minSup;
 
   const lastIter = progress[progress.length - 1]?.iteration ?? 0;
   const firstIter = progress[0]?.iteration ?? 1;
@@ -57,9 +57,11 @@ function OptimizationChart({
   const x = (iter: number) =>
     padding.left + ((iter - firstIter) / iterRange) * chartW;
   const y = (sup: number) =>
-    padding.top + chartH - (sup / maxSup) * chartH;
+    padding.top + chartH - ((sup - minSup) / supRange) * chartH;
 
-  const ticksY = [0, 0.25, 0.5, 0.75, 1].map((f) => maxSup * f);
+  const ticksY = [0, 0.25, 0.5, 0.75, 1].map(
+    (f) => minSup + supRange * f,
+  );
 
   // Separate HPO and CD entries for different visual rendering
   const cdEntries = progress.filter((p) => p.phase !== 'hpo');
@@ -108,6 +110,16 @@ function OptimizationChart({
           </text>
         </g>
       ))}
+      {minSup < 0 && (
+        <line
+          x1={padding.left}
+          y1={y(0)}
+          x2={width - padding.right}
+          y2={y(0)}
+          stroke={CHART_COLOR_AXIS}
+          strokeWidth="1"
+        />
+      )}
       {stageBoundaries.map((iter, i) => {
         if (i === 0) return null;
         return (
