@@ -6,8 +6,9 @@ import {
   SAMPLE_RATE,
 } from '../../consts';
 import { matchWithWorker } from '../../match-worker';
-import { simpleInitVector } from '../../simple-init-vector';
+import { dualWindowInitVector } from '../../dual-window-init-vector';
 import { estimateFundamentalFreq } from '../../signal-analysis';
+import { mapVectorToSynthConfig } from '../../vector-to-synth-config';
 import { readWav } from '../../read-wav';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -127,7 +128,7 @@ export async function matchWav(
     }[] = [];
 
     const targetWavData = readWav(tempInput);
-    const initialVector = simpleInitVector(
+    const initialVector = dualWindowInitVector(
       targetWavData.samples,
       SAMPLE_RATE,
       numOscillators,
@@ -161,7 +162,9 @@ export async function matchWav(
       staged,
       hpo,
       onProgress: (entry) => {
-        history.push(entry);
+        // Drop bestVector to keep response history compact.
+        const { bestVector: _bv, ...historyEntry } = entry;
+        history.push(historyEntry);
       },
     });
 
@@ -271,12 +274,16 @@ async function runMatchJob(
   }[] = [];
   let lastUpdateMs = 0;
   const UPDATE_THROTTLE_MS = 1000;
+  // Latest best-so-far snapshot from the optimizer. Kept out of
+  // `history` (which is trimmed for OOM safety) so we always have
+  // the freshest vector to persist even after history rotation.
+  let latestBestVector: number[] | null = null;
 
   try {
     await updateJobStatus(jobId, 'running');
 
     const targetWavData = readWav(inputPath);
-    const initialVector = simpleInitVector(
+    const initialVector = dualWindowInitVector(
       targetWavData.samples,
       SAMPLE_RATE,
       numOscillators,
@@ -305,14 +312,38 @@ async function runMatchJob(
       staged,
       hpo,
       onProgress: (entry) => {
-        history.push(entry);
+        // Strip bestVector from history entries — it bloats the
+        // job.json file and duplicates data we persist separately.
+        const { bestVector: entryVector, ...historyEntry } = entry;
+        history.push(historyEntry);
+        // Cap history to prevent job.json from ballooning past the
+        // JSON stringify threshold on long runs; matches optimizer-
+        // worker safeguard. Trims oldest entries.
+        if (history.length > 10000) {
+          history.splice(0, 5000);
+        }
+        if (entryVector !== undefined) {
+          latestBestVector = [...entryVector];
+        }
         const now = Date.now();
         if (now - lastUpdateMs >= UPDATE_THROTTLE_MS) {
           lastUpdateMs = now;
-          void updateJobStatus(jobId, 'running', {
+          // Persist progress + latest best snapshot so a running
+          // job exposes its intermediate synth config. Any failure
+          // here (I/O hiccup) must not break optimization; the
+          // updateJobStatus promise is fire-and-forget with its own
+          // internal error logging.
+          const update: Parameters<typeof updateJobStatus>[2] = {
             progress: [...history],
             suppressionPercent: entry.suppressionPercent,
-          });
+          };
+          if (latestBestVector !== null) {
+            update.bestVector = latestBestVector;
+            update.synthConfig = mapVectorToSynthConfig([
+              ...latestBestVector,
+            ]);
+          }
+          void updateJobStatus(jobId, 'running', update);
         }
       },
     });

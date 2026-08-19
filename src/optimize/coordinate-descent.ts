@@ -474,12 +474,16 @@ const emitProgress = (
   iteration: number,
   suppressionPercent: number,
   cycle?: string,
+  bestVector?: readonly number[],
 ): void => {
   const entry: ProgressEntry = {
     iteration,
     suppressionPercent,
     cycle,
   };
+  if (bestVector !== undefined) {
+    entry.bestVector = bestVector;
+  }
   history.push(entry);
   onProgress?.(entry);
 };
@@ -682,9 +686,15 @@ export const coordinateDescent = (
         currentBest + cfg.significantImprovementThreshold;
       currentBest = result.score;
 
+      let bestVectorSnapshot: number[] | undefined;
       if (currentBest > bestScore) {
         bestScore = currentBest;
         bestGenome = genome.slice();
+        // Snapshot the newly-improved best genome so consumers
+        // (e.g. job store) can persist intermediate synth configs.
+        // Passed by copy — subsequent mutations of genome must not
+        // alter what the callback sees.
+        bestVectorSnapshot = bestGenome.slice();
       }
 
       const genomeActuallyChanged =
@@ -704,6 +714,7 @@ export const coordinateDescent = (
         iter + 1,
         currentBest,
         cycle.label,
+        bestVectorSnapshot,
       );
 
       iter++;
@@ -985,6 +996,7 @@ export const coordinateDescent = (
     iter,
     currentBest,
     lastCycleLabel,
+    genome.slice(),
   );
 
   return { vector: genome, history };

@@ -13,6 +13,8 @@ export interface MatchWorkerProgress {
   stageIndex?: number;
   totalStages?: number;
   stageDurationMs?: number;
+  /** Snapshot of best-so-far normalized parameter vector. */
+  bestVector?: readonly number[];
 }
 
 export interface MatchWorkerResult {

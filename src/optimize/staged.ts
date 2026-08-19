@@ -388,6 +388,9 @@ const runFlatOptimization = (arg: {
               stageDurationMs: (totalSamples / sampleRate) * 1000,
               cycle: entry.cycle,
             };
+            if (entry.bestVector !== undefined) {
+              wrappedEntry.bestVector = entry.bestVector;
+            }
             allHistory.push(wrappedEntry);
             onProgress(wrappedEntry);
           }
@@ -442,6 +445,9 @@ const runFlatOptimization = (arg: {
             stageDurationMs: (totalSamples / sampleRate) * 1000,
             cycle: entry.cycle,
           };
+          if (entry.bestVector !== undefined) {
+            wrappedEntry.bestVector = entry.bestVector;
+          }
           allHistory.push(wrappedEntry);
           onProgress(wrappedEntry);
         }
@@ -606,6 +612,9 @@ export const stagedOptimize = (
         stageDurationMs: durationMs,
         cycle: entry.cycle,
       };
+      if (entry.bestVector !== undefined) {
+        wrappedEntry.bestVector = entry.bestVector;
+      }
       allHistory.push(wrappedEntry);
       onProgress?.(wrappedEntry);
     };

@@ -16,7 +16,7 @@ import { createSynth, ArgCreateSynth } from './synth';
 import { writeWav } from './write-wav';
 import { MAX_AMPLITUDE_16_BIT_WAV_ENCODED } from './consts';
 import { matchVisualize } from './match-visualize';
-import { fftInitVector } from './fft-init-vector';
+import { dualWindowInitVector } from './dual-window-init-vector';
 import { estimateFundamentalFreq } from './signal-analysis';
 
 interface ArgMatch {
@@ -121,10 +121,10 @@ export const match = (arg: ArgMatch): MatchResult => {
 
   const defaultVector = arg.initialVector
     ? [...arg.initialVector]
-    : fftInitVector(targetWav.samples, SAMPLE_RATE);
+    : dualWindowInitVector(targetWav.samples, SAMPLE_RATE);
 
   if (!arg.initialVector) {
-    console.log(`Initialized via fft-init-vector`);
+    console.log(`Initialized via dual-window-init-vector`);
   }
 
   console.log(`Vector size: ${defaultVector.length} parameters`);
