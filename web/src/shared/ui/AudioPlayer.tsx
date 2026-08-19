@@ -3,9 +3,13 @@ import styles from './AudioPlayer.module.css';
 
 interface AudioPlayerProps {
   url: string;
+  downloadName?: string;
 }
 
-export function AudioPlayer({ url }: AudioPlayerProps) {
+export function AudioPlayer({
+  url,
+  downloadName = 'generated.wav',
+}: AudioPlayerProps) {
   useEffect(() => {
     return () => URL.revokeObjectURL(url);
   }, [url]);
@@ -14,7 +18,7 @@ export function AudioPlayer({ url }: AudioPlayerProps) {
     <div className={styles.wrapper}>
       <audio controls src={url} className={styles.audio} />
       <a
-        download="generated.wav"
+        download={downloadName}
         href={url}
         className={styles.download}
       >

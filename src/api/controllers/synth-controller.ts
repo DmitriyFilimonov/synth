@@ -29,6 +29,33 @@ const PRESETS_MAP: Record<string, ArgCreateSynth> = {
   synthPreset1,
 };
 
+/**
+ * Заменяет символы, недопустимые в именах файлов (Windows/POSIX).
+ */
+function sanitizeFileName(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, '_').trim();
+}
+
+/**
+ * Базовое имя файла для скачивания: имя job (target + дата),
+ * для старых job без name — id.
+ */
+function jobFileBase(job: { id: string; name?: string }): string {
+  const name = job.name?.trim();
+  return name ? sanitizeFileName(name) : job.id;
+}
+
+/**
+ * Content-Disposition с ASCII-fallback и RFC 5987 UTF-8 filename*
+ * (имена таргетов могут быть кириллическими).
+ */
+function contentDisposition(fileName: string): string {
+  const ascii = fileName
+    .replace(/[^\x20-\x7e]/g, '_')
+    .replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
 export const generateHandler = async (
   req: Request,
   res: Response,
@@ -363,7 +390,7 @@ export const downloadJobResultHandler = async (
     res.set('Content-Type', 'audio/wav');
     res.set(
       'Content-Disposition',
-      `attachment; filename="matched_${id}.wav"`,
+      contentDisposition(`${jobFileBase(job)}_matched.wav`),
     );
     res.send(buffer);
   } catch {
@@ -399,7 +426,7 @@ export const downloadJobParamsHandler = async (
     res.set('Content-Type', 'application/json');
     res.set(
       'Content-Disposition',
-      `attachment; filename="synth_params_${id}.json"`,
+      contentDisposition(`${jobFileBase(job)}_params.json`),
     );
     res.json(job.synthConfig);
   } catch {

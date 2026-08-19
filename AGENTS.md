@@ -516,8 +516,8 @@ Express отдаёт статику из `web/dist/` и настроен как 
 | `POST`   | `/api/match/job/json`                 | Создать job подбора (raw WAV binary). Body `targetFileName` — название файла для отображения   |
 | `GET`    | `/api/match/jobs`                     | Список всех job (с `name` в каждом: `"<fileName> DD.MM.YYYY HH:MM:SS"`)                       |
 | `GET`    | `/api/match/jobs/:id`                 | Статус конкретного job (поле `name` — человеческое имя)                                        |
-| `GET`    | `/api/match/jobs/:id/download`        | Скачать результат WAV (completed job)                                                          |
-| `GET`    | `/api/match/jobs/:id/download-params` | Скачать параметры подбора JSON (completed job)                                                  |
+| `GET`    | `/api/match/jobs/:id/download`        | Скачать результат WAV (completed job). Имя файла: `"<job name>_matched.wav"` (RFC 5987)         |
+| `GET`    | `/api/match/jobs/:id/download-params` | Скачать параметры подбора JSON (completed job). Имя файла: `"<job name>_params.json"`           |
 | `DELETE` | `/api/match/jobs/:id`                 | Удалить job и связанные файлы                                                                 |
 
 **Поле `name` в job:** формат `"<targetFileName> DD.MM.YYYY HH:MM:SS"` (российский стандарт). Если `targetFileName` не передан — `"target DD.MM.YYYY HH:MM:SS"`.

@@ -227,7 +227,7 @@ function JobDetail({
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `synth_params_${jobId.slice(0, 8)}.json`;
+      a.download = `${downloadBase}_params.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -249,6 +249,12 @@ function JobDetail({
         return 'Failed';
     }
   };
+
+  const downloadBase = (() => {
+    const name = job?.name?.trim();
+    if (name) return name.replace(/[\\/:*?"<>|]/g, '_');
+    return jobId.slice(0, 8);
+  })();
 
   const currentSup = (() => {
     if (!job) return 0;
@@ -375,7 +381,10 @@ function JobDetail({
 
       {audioUrl && (
         <>
-          <AudioPlayer url={audioUrl} />
+          <AudioPlayer
+            url={audioUrl}
+            downloadName={`${downloadBase}_matched.wav`}
+          />
           <div className={styles.resultActions}>
             <Button onClick={handleDownloadParams}>
               Download JSON
