@@ -7,8 +7,6 @@ import {
 import { generateOutput } from './match';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 import { readWav } from './read-wav';
-import { MATCH_DEFAULT_HPO_TRIALS } from './match-defaults';
-import type { TPEConfig } from './optimize/hpo';
 
 if (!parentPort) {
   throw new Error('Must run as worker thread');
@@ -71,12 +69,6 @@ interface WorkerMessage {
   maxIterations: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
-  stageDurationMultiplier?: number;
-  hpoTrials?: number;
-  hpoTpeConfig?: Partial<TPEConfig>;
-  fundamentalHz?: number;
-  staged?: boolean;
-  hpo?: boolean;
 }
 
 parentPort.on('message', (msg: WorkerMessage) => {
@@ -84,77 +76,32 @@ parentPort.on('message', (msg: WorkerMessage) => {
     const targetWav = readWav(msg.targetWavPath);
     const targetSignal = [...targetWav.samples];
 
-    const hasUserOverride =
-      msg.stepGrowthAdd !== undefined &&
-      msg.stepDecayFactor !== undefined;
+    const PROGRESS_THROTTLE_MS = 100;
+    let lastProgressMs = 0;
 
-    let vector: number[];
-    let history: Array<{
-      iteration: number;
-      suppressionPercent: number;
-      phase?: 'hpo' | 'cd';
-      stageIndex?: number;
-      totalStages?: number;
-      stageDurationMs?: number;
-    }>;
+    const result = stagedOptimize({
+      initialVector: msg.initialVector,
+      targetSignal,
+      sampleRate: msg.sampleRate,
+      maxIterations: msg.maxIterations,
+      stepGrowthAdd: msg.stepGrowthAdd,
+      stepDecayFactor: msg.stepDecayFactor,
+      onProgress: (entry) => {
+        const now = Date.now();
+        if (now - lastProgressMs >= PROGRESS_THROTTLE_MS) {
+          lastProgressMs = now;
+          parentPort?.postMessage({
+            type: 'progress',
+            data: entry,
+          });
+        }
+      },
+    });
 
-    if (!hasUserOverride) {
-      const nTrials = msg.hpoTrials ?? MATCH_DEFAULT_HPO_TRIALS;
-      const numOscillators = msg.initialVector.length / 10;
+    const vector = result.vector;
+    const history = result.history;
 
-      console.log(
-        `Starting staged optimization with per-stage HPO: ${nTrials} trials/stage, ${numOscillators} oscillators`,
-      );
-
-      const PROGRESS_THROTTLE_MS = 100;
-      let lastProgressMs = 0;
-
-      const stagedResult = stagedOptimize({
-        initialVector: msg.initialVector,
-        targetSignal,
-        sampleRate: msg.sampleRate,
-        maxIterations: msg.maxIterations,
-        hpoTrials: nTrials,
-        hpo: msg.hpo,
-        tpeConfig: msg.hpoTpeConfig,
-        stageDurationMultiplier: msg.stageDurationMultiplier,
-        fundamentalHz: msg.fundamentalHz,
-        staged: msg.staged,
-        onProgress: (entry) => {
-          const now = Date.now();
-          if (now - lastProgressMs >= PROGRESS_THROTTLE_MS) {
-            lastProgressMs = now;
-            parentPort?.postMessage({
-              type: 'progress',
-              data: entry,
-            });
-          }
-        },
-      });
-
-      vector = stagedResult.vector;
-      history = stagedResult.history;
-
-      console.log(`StagedOpt complete.`);
-    } else {
-      const result = stagedOptimize({
-        initialVector: msg.initialVector,
-        targetSignal,
-        sampleRate: msg.sampleRate,
-        maxIterations: msg.maxIterations,
-        stepGrowthAdd: msg.stepGrowthAdd,
-        stepDecayFactor: msg.stepDecayFactor,
-        stageDurationMultiplier: msg.stageDurationMultiplier,
-        fundamentalHz: msg.fundamentalHz,
-        staged: msg.staged,
-        onProgress: (entry) => {
-          parentPort?.postMessage({ type: 'progress', data: entry });
-        },
-      });
-
-      vector = result.vector;
-      history = result.history;
-    }
+    console.log(`Optimization complete.`);
 
     const { samples } = generateOutput({
       vector,

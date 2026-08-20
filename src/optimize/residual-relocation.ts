@@ -7,7 +7,7 @@ import {
 import { oscConfigNormales, ampEnvConfigNormales } from '../synth';
 import {
   WaveformCache,
-  SpectralProfile,
+  UsefulZone,
   evaluateSuppressionWindowed,
 } from './evaluate';
 
@@ -258,7 +258,7 @@ const collectCoveredFreqsHz = (
  * @param arg.targetSignal - Эталонный сигнал
  * @param arg.sampleRate - Частота дискретизации, Гц
  * @param arg.score - Текущий windowed-score (стартовая точка)
- * @param arg.spectralProfile - Спектральный профиль таргета
+ * @param arg.usefulZone - Полезная зона таргета для оценки score
  * @returns Лучший windowed-score после прохода
  * @remarks Сырая ровная огибающая relocate почти никогда не
  *   оптимальна (у таргетного тона своя затухающая огибающая),
@@ -276,7 +276,7 @@ const relocationGreedyPass = (arg: {
   targetSignal: readonly number[];
   sampleRate: number;
   score: number;
-  spectralProfile: SpectralProfile;
+  usefulZone: UsefulZone;
 }): number => {
   const {
     genome,
@@ -284,7 +284,7 @@ const relocationGreedyPass = (arg: {
     oscIndex,
     targetSignal,
     sampleRate,
-    spectralProfile,
+    usefulZone,
   } = arg;
   const base = oscIndex * OSC_PARAMS;
 
@@ -322,10 +322,8 @@ const relocationGreedyPass = (arg: {
       const probe = evaluateSuppressionWindowed(
         waveformCache.getWaveform(),
         targetSignal,
-        0.5,
-        0.3,
         sampleRate,
-        spectralProfile,
+        usefulZone,
       );
       if (probe > best) {
         best = probe;
@@ -348,7 +346,8 @@ const relocationGreedyPass = (arg: {
  * @param arg.targetSignal - Эталонный сигнал
  * @param arg.sampleRate - Частота дискретизации, Гц
  * @param arg.currentScore - Текущий windowed-score генома
- * @param arg.spectralProfile - Спектральный профиль таргета
+ * @param arg.usefulZone - Полезная зона таргета, прокинутая в
+ *   метрику для оценки score после relocation
  * @param arg.minImprovement - Минимальное улучшение score (п.п.)
  *   для принятия relocation (дефолт 0)
  * @returns relocated=true и новый score, если relocation принят;
@@ -371,7 +370,7 @@ export const tryRelocateOscillator = (arg: {
   targetSignal: readonly number[];
   sampleRate: number;
   currentScore: number;
-  spectralProfile: SpectralProfile;
+  usefulZone: UsefulZone;
   /** Минимальное улучшение score (п.п.) для принятия relocation. */
   minImprovement?: number;
 }): { relocated: boolean; score: number } => {
@@ -382,7 +381,7 @@ export const tryRelocateOscillator = (arg: {
     targetSignal,
     sampleRate,
     currentScore,
-    spectralProfile,
+    usefulZone,
     minImprovement = 0,
   } = arg;
 
@@ -467,12 +466,10 @@ export const tryRelocateOscillator = (arg: {
     score: evaluateSuppressionWindowed(
       waveformCache.getWaveform(),
       targetSignal,
-      0.5,
-      0.3,
       sampleRate,
-      spectralProfile,
+      usefulZone,
     ),
-    spectralProfile,
+    usefulZone,
   });
 
   if (score > currentScore + minImprovement) {

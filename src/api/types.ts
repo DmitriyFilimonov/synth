@@ -26,12 +26,8 @@ export interface GenerateRequest {
 export interface MatchRequestBody {
   numOscillators?: number;
   maxIterations?: number;
-  hpoTrials?: number;
-  hpo?: boolean;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
-  stageDurationMultiplier?: number;
-  staged?: boolean;
   wavBase64?: string;
 }
 
@@ -39,11 +35,7 @@ export interface MatchResult {
   history: {
     iteration: number;
     suppressionPercent: number;
-    phase?: 'hpo' | 'cd';
     status?: string;
-    stageIndex?: number;
-    totalStages?: number;
-    stageDurationMs?: number;
   }[];
   targetInfo: {
     sampleRate: number;
@@ -61,12 +53,8 @@ export interface MatchResult {
 export interface CreateMatchJobRequest {
   numOscillators?: number;
   maxIterations?: number;
-  hpoTrials?: number;
-  hpo?: boolean;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
-  stageDurationMultiplier?: number;
-  staged?: boolean;
   wavBase64?: string;
   /** Название целевого файла (отображается в UI как "targetFileName DD.MM.YYYY HH:MM:SS") */
   targetFileName?: string;
@@ -75,12 +63,8 @@ export interface CreateMatchJobRequest {
 export interface MatchParams {
   numOscillators: number;
   maxIterations: number;
-  hpoTrials?: number;
-  hpo?: boolean;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
-  stageDurationMultiplier?: number;
-  staged?: boolean;
 }
 
 export interface JobStatusResponse {
@@ -91,10 +75,6 @@ export interface JobStatusResponse {
   progress: {
     iteration: number;
     suppressionPercent: number;
-    phase?: 'hpo' | 'cd';
-    stageIndex?: number;
-    totalStages?: number;
-    stageDurationMs?: number;
   }[];
   params: MatchParams;
   inputFileName: string;

@@ -3,10 +3,7 @@ import { SAMPLE_RATE } from './consts';
 import { readWav } from './read-wav';
 import { match } from './match';
 import { simpleInitVector } from './simple-init-vector';
-import {
-  MATCH_DEFAULT_OSCILLATORS,
-  MATCH_DEFAULT_HPO_TRIALS,
-} from './match-defaults';
+import { MATCH_DEFAULT_OSCILLATORS } from './match-defaults';
 import { writeFileSync, renameSync } from 'node:fs';
 
 const targetWavPath = './fixtures/output15.wav';
@@ -28,7 +25,6 @@ const result = match({
   outputWavPath,
   initialVector,
   onProgress: () => {},
-  hpoTrials: MATCH_DEFAULT_HPO_TRIALS,
 });
 
 const paramsPath = `${outputWavPath}.params.json`;

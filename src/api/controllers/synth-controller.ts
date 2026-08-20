@@ -131,10 +131,6 @@ export const matchHandler = async (
       maxIterations,
       body.stepGrowthAdd,
       body.stepDecayFactor,
-      body.stageDurationMultiplier,
-      body.hpoTrials,
-      body.staged,
-      body.hpo,
     );
 
     res.json({
@@ -203,37 +199,19 @@ export const createMatchJobHandler = async (
       queryParams.maxIterations ?? String(MATCH_DEFAULT_ITERATIONS),
       10,
     );
-    const hpoTrialsInt = parseInt(queryParams.hpoTrials ?? '', 10);
     const stepGrowthAddFloat = parseFloat(
       queryParams.stepGrowthAdd ?? '',
     );
     const stepDecayFactorFloat = parseFloat(
       queryParams.stepDecayFactor ?? '',
     );
-    const stageDurationMultiplierFloat = parseFloat(
-      queryParams.stageDurationMultiplier ?? '',
-    );
-    const staged =
-      queryParams.staged !== undefined
-        ? queryParams.staged === 'true'
-        : undefined;
-    const hpo =
-      queryParams.hpo !== undefined
-        ? queryParams.hpo === 'true'
-        : undefined;
 
-    const hpoTrials = isNaN(hpoTrialsInt) ? undefined : hpoTrialsInt;
     const stepGrowthAdd = isNaN(stepGrowthAddFloat)
       ? undefined
       : stepGrowthAddFloat;
     const stepDecayFactor = isNaN(stepDecayFactorFloat)
       ? undefined
       : stepDecayFactorFloat;
-    const stageDurationMultiplier = isNaN(
-      stageDurationMultiplierFloat,
-    )
-      ? undefined
-      : stageDurationMultiplierFloat;
 
     const jobId = await matchWavWithJob(
       req.body,
@@ -243,10 +221,6 @@ export const createMatchJobHandler = async (
       isNaN(maxIterations) ? MATCH_DEFAULT_ITERATIONS : maxIterations,
       stepGrowthAdd,
       stepDecayFactor,
-      stageDurationMultiplier,
-      hpoTrials,
-      staged,
-      hpo,
       queryParams.fileName,
     );
 
@@ -285,10 +259,6 @@ export const createMatchJobJsonHandler = async (
       maxIterations,
       body.stepGrowthAdd,
       body.stepDecayFactor,
-      body.stageDurationMultiplier,
-      body.hpoTrials,
-      body.staged,
-      body.hpo,
       body.targetFileName,
     );
 

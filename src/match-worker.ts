@@ -3,16 +3,11 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 import type { ArgCreateSynth } from './synth';
-import type { TPEConfig } from './optimize/hpo';
 
 export interface MatchWorkerProgress {
   iteration: number;
   suppressionPercent: number;
-  phase?: 'hpo' | 'cd';
   status?: string;
-  stageIndex?: number;
-  totalStages?: number;
-  stageDurationMs?: number;
   /** Snapshot of best-so-far normalized parameter vector. */
   bestVector?: readonly number[];
 }
@@ -40,13 +35,7 @@ interface MatchWorkerArgs {
   maxIterations: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
-  stageDurationMultiplier?: number;
   onProgress?: (entry: MatchWorkerProgress) => void;
-  hpoTrials?: number;
-  hpoTpeConfig?: Partial<TPEConfig>;
-  fundamentalHz?: number;
-  staged?: boolean;
-  hpo?: boolean;
 }
 
 function resolveWorkerPath(): {
@@ -102,14 +91,8 @@ export function matchWithWorker(
       initialVector: arg.initialVector,
       sampleRate: arg.sampleRate,
       maxIterations: arg.maxIterations,
-      fundamentalHz: arg.fundamentalHz,
       stepGrowthAdd: arg.stepGrowthAdd,
       stepDecayFactor: arg.stepDecayFactor,
-      stageDurationMultiplier: arg.stageDurationMultiplier,
-      hpoTrials: arg.hpoTrials,
-      hpoTpeConfig: arg.hpoTpeConfig,
-      staged: arg.staged,
-      hpo: arg.hpo,
     });
   });
 }

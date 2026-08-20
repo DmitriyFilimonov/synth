@@ -4,9 +4,9 @@ import { VOLUME_PRUNE_THRESHOLD } from '../consts';
 import {
   evaluateSuppressionWindowed,
   findOptimalScale,
-  computeSpectralProfile,
+  computeUsefulZone,
   WaveformCache,
-  SpectralProfile,
+  UsefulZone,
 } from './evaluate';
 import { tryRelocateOscillator } from './residual-relocation';
 import type {
@@ -160,7 +160,7 @@ const optimizeSingleParameter = (
   targetSignal: readonly number[],
   sampleRate: number,
   currentBest: number,
-  spectralProfile: SpectralProfile,
+  usefulZone: UsefulZone,
   temperature = 0,
 ): {
   genome: number[];
@@ -188,10 +188,8 @@ const optimizeSingleParameter = (
     const score = evaluateSuppressionWindowed(
       waveformCache.getWaveform(),
       targetSignal,
-      0.5,
-      0.3,
       sampleRate,
-      spectralProfile,
+      usefulZone,
     );
     if (score > bestScore) {
       bestScore = score;
@@ -254,7 +252,7 @@ const syncFlagsToCache = (
  * @param frequencyStep - Шаг частоты для текущего цикла
  * @param phaseStep - Шаг фазы для текущего цикла
  * @param minStep - Минимальный шаг non-freq/phase параметров
- * @param spectralProfile - Спектральный профиль таргета
+ * @param usefulZone - Полезная зона таргета для метрики
  * @param temperature - Температура simulated annealing (0 — чистый
  *   greedy)
  * @param relocationAttempts - Счётчик relocation-попыток на
@@ -283,7 +281,7 @@ const optimizeIteration = (
   frequencyStep: number,
   phaseStep: number,
   minStep: number,
-  spectralProfile: SpectralProfile,
+  usefulZone: UsefulZone,
   temperature = 0,
   relocationAttempts?: number[],
   maxRelocationAttemptsPerOsc = 0,
@@ -318,7 +316,7 @@ const optimizeIteration = (
         targetSignal,
         sampleRate,
         score,
-        spectralProfile,
+        usefulZone,
         temperature,
       );
       genome = result.genome;
@@ -355,7 +353,7 @@ const optimizeIteration = (
             targetSignal,
             sampleRate,
             currentScore: score,
-            spectralProfile,
+            usefulZone,
             minImprovement: relocationMinImprovement,
           })
         : { relocated: false, score };
@@ -369,10 +367,8 @@ const optimizeIteration = (
         const scoreOff = evaluateSuppressionWindowed(
           waveformCache.getWaveform(),
           targetSignal,
-          0.5,
-          0.3,
           sampleRate,
-          spectralProfile,
+          usefulZone,
         );
         if (scoreOff > score) {
           genome[base] = 0;
@@ -397,7 +393,7 @@ const optimizeIteration = (
  * @param currentBest - Текущий лучший windowed-score
  * @param numOsc - Число осцилляторов в геноме
  * @param sampleRate - Частота дискретизации, Гц
- * @param spectralProfile - Спектральный профиль таргета
+ * @param usefulZone - Полезная зона таргета для метрики
  * @returns Windowed-score после прунинга
  * @remarks Кандидаты (volume < VOLUME_PRUNE_THRESHOLD) отключаются
  *   в порядке возрастания volume; отключение откатывается, если
@@ -409,10 +405,10 @@ const finalPruneOscillators = (
   genome: number[],
   waveformCache: WaveformCache,
   targetSignal: readonly number[],
-  currentBest: number,
+  _currentBest: number,
   numOsc: number,
   sampleRate: number,
-  spectralProfile: SpectralProfile,
+  usefulZone: UsefulZone,
 ): number => {
   const pruneCandidates: { base: number; volume: number }[] = [];
   for (let osc = 0; osc < numOsc; osc++) {
@@ -431,10 +427,8 @@ const finalPruneOscillators = (
   let score = evaluateSuppressionWindowed(
     waveformCache.getWaveform(),
     targetSignal,
-    0.5,
-    0.3,
     sampleRate,
-    spectralProfile,
+    usefulZone,
   );
   for (const { base } of pruneCandidates) {
     const savedFlag = genome[base] ?? 0;
@@ -445,10 +439,8 @@ const finalPruneOscillators = (
     const scoreAfter = evaluateSuppressionWindowed(
       waveformCache.getWaveform(),
       targetSignal,
-      0.5,
-      0.3,
       sampleRate,
-      spectralProfile,
+      usefulZone,
     );
     if (score - scoreAfter > 0.05) {
       genome[base] = savedFlag;
@@ -548,10 +540,7 @@ export const coordinateDescent = (
   const actualStepDecayFactor =
     stepDecayFactor ?? cfg.stagnationStepDecayFactor;
 
-  const spectralProfile = computeSpectralProfile(
-    targetSignal,
-    sampleRate,
-  );
+  const usefulZone = computeUsefulZone(targetSignal, sampleRate);
   const waveformCache = new WaveformCache(
     genome,
     sampleRate,
@@ -560,10 +549,8 @@ export const coordinateDescent = (
   let currentBest = evaluateSuppressionWindowed(
     waveformCache.getWaveform(),
     targetSignal,
-    0.5,
-    0.3,
     sampleRate,
-    spectralProfile,
+    usefulZone,
   );
   const history: ProgressEntry[] = [];
   let stagnation = 0;
@@ -674,7 +661,7 @@ export const coordinateDescent = (
         frequencyStep,
         phaseStep,
         cycle.minStep,
-        spectralProfile,
+        usefulZone,
         temperature,
         relocationAttempts,
         cfg.maxRelocationAttemptsPerOsc,
@@ -762,10 +749,8 @@ export const coordinateDescent = (
           currentBest = evaluateSuppressionWindowed(
             waveformCache.getWaveform(),
             targetSignal,
-            0.5,
-            0.3,
             sampleRate,
-            spectralProfile,
+            usefulZone,
           );
 
           // Guard против катастрофических random restart:
@@ -817,10 +802,8 @@ export const coordinateDescent = (
           currentBest = evaluateSuppressionWindowed(
             waveformCache.getWaveform(),
             targetSignal,
-            0.5,
-            0.3,
             sampleRate,
-            spectralProfile,
+            usefulZone,
           );
 
           if (currentBest < bestScore * cfg.kickFallbackThreshold) {
@@ -896,7 +879,7 @@ export const coordinateDescent = (
     currentBest,
     numOsc,
     sampleRate,
-    spectralProfile,
+    usefulZone,
   );
 
   syncFlagsToCache(genome, waveformCache, numOsc);
@@ -916,16 +899,14 @@ export const coordinateDescent = (
   const preScaleScore = evaluateSuppressionWindowed(
     generated,
     targetSignal,
-    0.5,
-    0.3,
     sampleRate,
-    spectralProfile,
+    usefulZone,
   );
   const { scale, suppressionPercent: scaleScore } = findOptimalScale(
     generated,
     targetSignal,
     sampleRate,
-    spectralProfile,
+    usefulZone,
   );
 
   console.log(
@@ -949,10 +930,8 @@ export const coordinateDescent = (
     const scaledScore = evaluateSuppressionWindowed(
       scaledCache.getWaveform(),
       targetSignal,
-      0.5,
-      0.3,
       sampleRate,
-      spectralProfile,
+      usefulZone,
     );
 
     if (scaledScore > preScaleScore) {

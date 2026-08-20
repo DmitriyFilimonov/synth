@@ -7,7 +7,6 @@ import {
 } from '../../consts';
 import { matchWithWorker } from '../../match-worker';
 import { dualWindowInitVector } from '../../dual-window-init-vector';
-import { estimateFundamentalFreq } from '../../signal-analysis';
 import { mapVectorToSynthConfig } from '../../vector-to-synth-config';
 import { readWav } from '../../read-wav';
 import { tmpdir } from 'node:os';
@@ -54,10 +53,6 @@ interface MatchedFile {
   history: {
     iteration: number;
     suppressionPercent: number;
-    phase?: 'hpo' | 'cd';
-    stageIndex?: number;
-    totalStages?: number;
-    stageDurationMs?: number;
   }[];
   targetInfo: {
     sampleRate: number;
@@ -107,10 +102,6 @@ export async function matchWav(
   maxIterations: number,
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
-  stageDurationMultiplier?: number,
-  hpoTrials?: number,
-  staged?: boolean,
-  hpo?: boolean,
 ): Promise<MatchedFile> {
   const tempInput = join(tmpdir(), `${randomUUID()}_input.wav`);
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
@@ -121,10 +112,6 @@ export async function matchWav(
     const history: {
       iteration: number;
       suppressionPercent: number;
-      phase?: 'hpo' | 'cd';
-      stageIndex?: number;
-      totalStages?: number;
-      stageDurationMs?: number;
     }[] = [];
 
     const targetWavData = readWav(tempInput);
@@ -134,33 +121,14 @@ export async function matchWav(
       numOscillators,
     );
 
-    const fundamentalHz =
-      estimateFundamentalFreq(targetWavData.samples, SAMPLE_RATE) ??
-      undefined;
-    if (fundamentalHz !== undefined) {
-      console.log(
-        `[Service] Fundamental: ${fundamentalHz.toFixed(1)} Hz`,
-      );
-    }
-
-    const hasUserOverride =
-      stepGrowthAdd !== undefined && stepDecayFactor !== undefined;
-
     const result = await matchWithWorker({
       targetWavPath: tempInput,
       outputWavPath: tempOutput,
       initialVector,
       sampleRate: 44100,
       maxIterations,
-      fundamentalHz,
-      ...(hasUserOverride
-        ? { stepGrowthAdd, stepDecayFactor }
-        : { hpoTrials }),
-      ...(stageDurationMultiplier !== undefined
-        ? { stageDurationMultiplier }
-        : {}),
-      staged,
-      hpo,
+      stepGrowthAdd,
+      stepDecayFactor,
       onProgress: (entry) => {
         // Drop bestVector to keep response history compact.
         const { bestVector: _bv, ...historyEntry } = entry;
@@ -198,10 +166,6 @@ export async function matchWavWithJob(
   maxIterations: number,
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
-  stageDurationMultiplier?: number,
-  hpoTrials?: number,
-  staged?: boolean,
-  hpo?: boolean,
   targetFileName?: string,
 ): Promise<string> {
   const jobId = randomUUID();
@@ -215,10 +179,6 @@ export async function matchWavWithJob(
       maxIterations,
       stepGrowthAdd,
       stepDecayFactor,
-      stageDurationMultiplier,
-      hpoTrials,
-      staged,
-      hpo,
     },
     inputFileName,
     jobName,
@@ -235,10 +195,6 @@ export async function matchWavWithJob(
       inputPath,
       stepGrowthAdd,
       stepDecayFactor,
-      stageDurationMultiplier,
-      hpoTrials,
-      staged,
-      hpo,
     ).catch((err) => {
       const message =
         err instanceof Error ? err.message : 'Unknown error';
@@ -258,19 +214,11 @@ async function runMatchJob(
   inputPath: string,
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
-  stageDurationMultiplier?: number,
-  hpoTrials?: number,
-  staged?: boolean,
-  hpo?: boolean,
 ): Promise<void> {
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
   const history: {
     iteration: number;
     suppressionPercent: number;
-    phase?: 'hpo' | 'cd';
-    stageIndex?: number;
-    totalStages?: number;
-    stageDurationMs?: number;
   }[] = [];
   let lastUpdateMs = 0;
   const UPDATE_THROTTLE_MS = 1000;
@@ -289,28 +237,14 @@ async function runMatchJob(
       numOscillators,
     );
 
-    const fundamentalHz =
-      estimateFundamentalFreq(targetWavData.samples, SAMPLE_RATE) ??
-      undefined;
-
-    const hasUserOverride =
-      stepGrowthAdd !== undefined && stepDecayFactor !== undefined;
-
     const result = await matchWithWorker({
       targetWavPath: inputPath,
       outputWavPath: tempOutput,
       initialVector,
       sampleRate: 44100,
       maxIterations,
-      fundamentalHz,
-      ...(hasUserOverride
-        ? { stepGrowthAdd, stepDecayFactor }
-        : { hpoTrials }),
-      ...(stageDurationMultiplier !== undefined
-        ? { stageDurationMultiplier }
-        : {}),
-      staged,
-      hpo,
+      stepGrowthAdd,
+      stepDecayFactor,
       onProgress: (entry) => {
         // Strip bestVector from history entries — it bloats the
         // job.json file and duplicates data we persist separately.

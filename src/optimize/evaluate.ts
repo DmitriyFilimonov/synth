@@ -10,11 +10,100 @@ import {
   mapVectorToSynthConfigForOsc,
 } from '../vector-to-synth-config';
 
-const WINDOW_SIZE_SECONDS = 0.1; // 100ms окна
+/**
+ * Multi-scale window sizes (seconds). Metric evaluates suppression on each
+ * scale independently over the useful zone and combines them. Fine scale
+ * (10ms) captures attack transients; medium (50ms) captures body dynamics;
+ * coarse (200ms) captures overall shape. The combined score forces CD to
+ * fix errors on all timescales — a hole in any scale drags the score down.
+ */
+const MULTI_SCALE_WINDOWS_SECONDS = [0.01, 0.05, 0.2] as const;
+
+/**
+ * RMS threshold (int16 units) below which a 1ms probe window is considered
+ * silence when detecting useful-signal boundaries. Set as a fraction of the
+ * peak 1ms RMS in the target: everything below 1% of peak counts as silence.
+ */
+const USEFUL_ZONE_SILENCE_FRACTION = 0.01;
 
 /** Границы оптимального масштаба при аналитическом подборе. */
 const SCALE_MIN = 0.05;
 const SCALE_MAX = 100;
+
+/**
+ * Диапазон полезного сигнала внутри target'а: `[startSample, endSample)`.
+ * Всё вне этого диапазона в target'е — цифровая тишина; окна метрики режем
+ * только по [start, end), чтобы тишина не разбавляла средний score. При
+ * этом сам синтез всегда генерируется на всю длину буфера, и если он даёт
+ * ненулевые сэмплы вне useful-зоны — это ловится через ringing penalty.
+ */
+export interface UsefulZone {
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * Автоматически определяет границы полезного сигнала по target'у.
+ * Разбивает сигнал на непересекающиеся 1мс-окна, считает RMS каждого,
+ * находит peak-window RMS. Полезная зона — от первого до последнего окна,
+ * RMS которого ≥ 1% от peak. Всё, что вне зоны — цифровая тишина (даже
+ * если формально int16 значения не строго 0).
+ */
+export const computeUsefulZone = (
+  targetSignal: readonly number[],
+  sampleRate: number,
+): UsefulZone => {
+  const total = targetSignal.length;
+  if (total === 0) {
+    return { start: 0, end: 0 };
+  }
+
+  const probeSize = Math.max(1, Math.round(0.001 * sampleRate));
+  const numProbes = Math.floor(total / probeSize);
+  if (numProbes === 0) {
+    return { start: 0, end: total };
+  }
+
+  let peakRms = 0;
+  const probeRms = new Float64Array(numProbes);
+  for (let p = 0; p < numProbes; p++) {
+    const s = p * probeSize;
+    let sumSq = 0;
+    for (let i = 0; i < probeSize; i++) {
+      const v = targetSignal[s + i] ?? 0;
+      sumSq += v * v;
+    }
+    const rms = Math.sqrt(sumSq / probeSize);
+    probeRms[p] = rms;
+    if (rms > peakRms) {
+      peakRms = rms;
+    }
+  }
+
+  if (peakRms === 0) {
+    return { start: 0, end: total };
+  }
+
+  const threshold = peakRms * USEFUL_ZONE_SILENCE_FRACTION;
+  let firstProbe = 0;
+  while (
+    firstProbe < numProbes &&
+    (probeRms[firstProbe] ?? 0) < threshold
+  ) {
+    firstProbe++;
+  }
+  let lastProbe = numProbes - 1;
+  while (
+    lastProbe > firstProbe &&
+    (probeRms[lastProbe] ?? 0) < threshold
+  ) {
+    lastProbe--;
+  }
+
+  const start = firstProbe * probeSize;
+  const end = Math.min(total, (lastProbe + 1) * probeSize);
+  return { start, end };
+};
 
 export const createWaveForm = (
   vectorValues: readonly number[],
@@ -56,144 +145,6 @@ export const evaluateSuppression = (
     targetSignal.length,
   );
   return evaluateSuppressionFromWaveform(generated, targetSignal);
-};
-
-const goertzel = (
-  signal: readonly number[],
-  sampleRate: number,
-  targetFreq: number,
-): { magnitude: number; phase: number } => {
-  const n = signal.length;
-  const k = (targetFreq * n) / sampleRate;
-  const omega = (2 * Math.PI * k) / n;
-  const coeff = 2 * Math.cos(omega);
-
-  let sPrev = 0;
-  let sPrev2 = 0;
-  for (let i = 0; i < n; i++) {
-    const sCurr = (signal[i] ?? 0) + coeff * sPrev - sPrev2;
-    sPrev2 = sPrev;
-    sPrev = sCurr;
-  }
-
-  const power =
-    sPrev2 * sPrev2 + sPrev * sPrev - coeff * sPrev * sPrev2;
-  const magnitude = Math.sqrt(power) / n;
-  const real = sPrev - sPrev2 * Math.cos(omega);
-  const imag = sPrev2 * Math.sin(omega);
-  const phase = Math.atan2(imag, real);
-
-  return { magnitude, phase };
-};
-
-const spectralOverlap = (
-  targetSignal: readonly number[],
-  generated: readonly number[],
-  sampleRate: number,
-  frequencies: number[],
-  targetMagnitudes: number[],
-): number => {
-  let overlapSum = 0;
-
-  for (let f = 0; f < frequencies.length; f++) {
-    const freq = frequencies[f]!;
-    const targetMag = targetMagnitudes[f] ?? 0;
-    const genGoertzel = goertzel(generated, sampleRate, freq);
-
-    const magnitudeDiff = Math.abs(targetMag - genGoertzel.magnitude);
-
-    if (targetMag > 0) {
-      const relativeError = magnitudeDiff / targetMag;
-      overlapSum += Math.max(0, 1 - relativeError);
-    }
-  }
-
-  return frequencies.length > 0 ? overlapSum / frequencies.length : 0;
-};
-
-const findDominantFrequencies = (
-  signal: readonly number[],
-  sampleRate: number,
-  count: number,
-  searchMinFreq: number = 20,
-  searchMaxFreq: number = 5000,
-  resolution: number = 5,
-): number[] => {
-  const spectrum: { freq: number; mag: number }[] = [];
-
-  for (
-    let freq = searchMinFreq;
-    freq <= searchMaxFreq;
-    freq += resolution
-  ) {
-    const g = goertzel(signal, sampleRate, freq);
-    spectrum.push({ freq, mag: g.magnitude });
-  }
-
-  spectrum.sort((a, b) => b.mag - a.mag);
-
-  const result: number[] = [];
-  const minSeparationHz = 15;
-
-  for (const peak of spectrum) {
-    if (result.length >= count) {
-      break;
-    }
-    const tooClose = result.some(
-      (r) => Math.abs(r - peak.freq) < minSeparationHz,
-    );
-    if (!tooClose && peak.mag > 0.1) {
-      result.push(peak.freq);
-    }
-  }
-
-  return result;
-};
-
-/**
- * Спектральный профиль таргетного сигнала: доминантные частоты и их
- * амплитуды/фазы (Goertzel). Инвариантен для всех evaluate-вызовов,
- * поэтому вычисляется один раз на запуск оптимизации.
- */
-export interface SpectralProfile {
-  freqs: number[];
-  targetMagnitudes: number[];
-}
-
-export const computeSpectralProfile = (
-  targetSignal: readonly number[],
-  sampleRate: number,
-  numPeaks: number = 5,
-): SpectralProfile => {
-  const freqs = findDominantFrequencies(
-    targetSignal,
-    sampleRate,
-    numPeaks,
-  );
-  const targetMagnitudes: number[] = [];
-  for (const freq of freqs) {
-    const g = goertzel(targetSignal, sampleRate, freq);
-    targetMagnitudes.push(g.magnitude);
-  }
-  return { freqs, targetMagnitudes };
-};
-
-const computeSpectralScore = (
-  targetSignal: readonly number[],
-  generated: readonly number[],
-  sampleRate: number,
-  profile: SpectralProfile,
-): number => {
-  if (profile.freqs.length === 0) {
-    return 0;
-  }
-  return spectralOverlap(
-    targetSignal,
-    generated,
-    sampleRate,
-    profile.freqs,
-    profile.targetMagnitudes,
-  );
 };
 
 const rangeRMS = (
@@ -249,112 +200,177 @@ const suppressionForRange = (
 };
 
 /**
- * Evaluates suppression using continuous window coverage.
+ * Штраф за «звон» синтеза на цифровой тишине target'а: за пределами useful
+ * зоны target = 0, поэтому любой ненулевой синтез там даёт err_RMS > 0
+ * при target_RMS = 0. Считаем нормированный «выхлоп» синтеза в тишине
+ * относительно peak target RMS в полезной зоне — это даёт CD прямой
+ * сигнал: «убей звон осцилляторов за пределами полезного сигнала».
+ */
+const computeRingingPenalty = (
+  generated: readonly number[],
+  targetSignal: readonly number[],
+  usefulZone: UsefulZone,
+  peakTargetRms: number,
+): number => {
+  if (peakTargetRms <= 0) {
+    return 0;
+  }
+  const total = generated.length;
+  let outSumSq = 0;
+  let outCount = 0;
+  for (let i = 0; i < usefulZone.start; i++) {
+    const g = generated[i] ?? 0;
+    outSumSq += g * g;
+    outCount++;
+  }
+  for (let i = usefulZone.end; i < total; i++) {
+    const g = generated[i] ?? 0;
+    outSumSq += g * g;
+    outCount++;
+  }
+  if (outCount === 0) {
+    return 0;
+  }
+  const outRms = Math.sqrt(outSumSq / outCount);
+  return (outRms / peakTargetRms) * 100;
+};
+
+/**
+ * Multi-scale windowed suppression score restricted to the useful zone.
  *
- * Strategy: contiguous non-overlapping windows of fixed size.
- * - Full windows get weight = 1.0
- * - A trailing partial window gets weight = tailLength / windowSize
+ * For each scale (10ms/50ms/200ms) the useful range [start, end) is
+ * partitioned into non-overlapping windows; each window's suppression is
+ * computed with `suppressionForRange`; windows below 1 target-RMS are
+ * skipped so silence inside the useful zone does not dominate the average.
+ * The final score aggregates all three scales with equal weight, then a
+ * ringing penalty is subtracted for any synthesizer energy outside the
+ * useful zone (where the target is digital silence).
+ */
+const evaluateMultiScaleWindowed = (
+  generated: readonly number[],
+  targetSignal: readonly number[],
+  sampleRate: number,
+  usefulZone: UsefulZone,
+): number => {
+  const length = usefulZone.end - usefulZone.start;
+  if (length <= 0) {
+    return 0;
+  }
+
+  let peakTargetRms = 0;
+  const scaleScores: number[] = [];
+  for (const scaleSec of MULTI_SCALE_WINDOWS_SECONDS) {
+    const windowSize = Math.max(1, Math.round(scaleSec * sampleRate));
+    if (windowSize > length) {
+      continue;
+    }
+    const fullWindows = Math.floor(length / windowSize);
+    const tailLength = length - fullWindows * windowSize;
+
+    let sumScoreWeighted = 0;
+    let totalWeight = 0;
+
+    for (let w = 0; w < fullWindows; w++) {
+      const s = usefulZone.start + w * windowSize;
+      const tgtRms = rangeRMS(targetSignal, s, windowSize);
+      if (tgtRms > peakTargetRms) {
+        peakTargetRms = tgtRms;
+      }
+      if (tgtRms < 1) {
+        continue;
+      }
+      const score = suppressionForRange(
+        generated,
+        targetSignal,
+        s,
+        windowSize,
+      );
+      sumScoreWeighted += score;
+      totalWeight += 1;
+    }
+    if (tailLength > 0) {
+      const s = usefulZone.start + fullWindows * windowSize;
+      const tgtRms = rangeRMS(targetSignal, s, tailLength);
+      if (tgtRms > peakTargetRms) {
+        peakTargetRms = tgtRms;
+      }
+      if (tgtRms >= 1) {
+        const score = suppressionForRange(
+          generated,
+          targetSignal,
+          s,
+          tailLength,
+        );
+        const weight = tailLength / windowSize;
+        sumScoreWeighted += score * weight;
+        totalWeight += weight;
+      }
+    }
+
+    if (totalWeight > 0) {
+      scaleScores.push(sumScoreWeighted / totalWeight);
+    }
+  }
+
+  if (scaleScores.length === 0) {
+    return 0;
+  }
+
+  const avgScale =
+    scaleScores.reduce((a, b) => a + b, 0) / scaleScores.length;
+  const worstScale = Math.min(...scaleScores);
+  // Bias toward worst-scale to force fixing errors on every timescale.
+  const combined = worstScale * 0.5 + avgScale * 0.5;
+
+  const ringingPenalty = computeRingingPenalty(
+    generated,
+    targetSignal,
+    usefulZone,
+    peakTargetRms,
+  );
+
+  return combined - ringingPenalty;
+};
+
+/**
+ * Evaluates suppression using multi-scale windowed RMS on the useful zone
+ * of the target, minus a ringing penalty for synthesizer energy outside
+ * the zone.
  *
- * This guarantees every sample is included with proportional weight.
+ * Windows are cut at three time scales (10ms/50ms/200ms) inside the useful
+ * zone; each scale contributes its average per-window suppression; the
+ * combined score biases toward the worst-performing scale so CD cannot
+ * ignore attack transients or the tail of the useful signal. Beyond the
+ * useful zone target is digital silence — any synthesized energy there
+ * is charged as a penalty proportional to peak target RMS.
+ *
+ * The synthesizer is always generated on the full buffer length; the
+ * useful zone only restricts which samples enter the RMS integral.
+ * Ringing that leaks outside the zone is caught by the penalty term,
+ * so the JSON-encoded synth config stays consistent with the full 500ms
+ * signal even though the metric focuses on the informative interval.
+ *
+ * `usefulZone` — оптимизация: если передан, метрика не пересчитывает зону
+ * при каждом вызове (тысячи раз за итерацию CD). Callers, знающие target
+ * заранее, вычисляют её один раз через `computeUsefulZone(target, rate)`
+ * и пробрасывают сюда. Если не передан — вычисляется на лету.
+ *
  * Масштаб НЕ подбирается: score честный (фиксированный масштаб 1),
  * амплитуду оптимизируют параметры volume (offset 9).
  */
 export const evaluateSuppressionWindowed = (
   generated: readonly number[],
   targetSignal: readonly number[],
-  penaltyWeight = 0.5,
-  spectralWeight = 0.3,
   sampleRate = 44100,
-  spectralProfile?: SpectralProfile,
+  usefulZone?: UsefulZone,
 ): number => {
-  const length = targetSignal.length;
-  const windowSize = Math.round(WINDOW_SIZE_SECONDS * sampleRate);
-
-  // Full contiguous windows from start
-  const fullWindows = Math.floor(length / windowSize);
-  const tailLength = length - fullWindows * windowSize;
-
-  let windowScoreSum = 0;
-  let totalWeight = 0;
-
-  // Full windows (weight = 1.0 each)
-  for (let w = 0; w < fullWindows; w++) {
-    const start = w * windowSize;
-
-    const targetRMS = rangeRMS(targetSignal, start, windowSize);
-
-    if (targetRMS < 1) {
-      continue;
-    }
-
-    const localBestScore = suppressionForRange(
-      generated,
-      targetSignal,
-      start,
-      windowSize,
-    );
-
-    windowScoreSum += localBestScore;
-    totalWeight += 1;
-  }
-
-  // Trailing partial window (weight proportional to coverage)
-  if (tailLength > 0) {
-    const start = fullWindows * windowSize;
-
-    const targetRMS = rangeRMS(targetSignal, start, tailLength);
-
-    if (targetRMS >= 1) {
-      const localBestScore = suppressionForRange(
-        generated,
-        targetSignal,
-        start,
-        tailLength,
-      );
-
-      const weight = tailLength / windowSize;
-      windowScoreSum += localBestScore * weight;
-      totalWeight += weight;
-    }
-  }
-
-  if (totalWeight === 0) {
-    const assessment = assessCancellationQuality({
-      target: [...targetSignal],
-      generated: generated.map((s) => -s),
-    });
-    return assessment.suppressionPercent;
-  }
-
-  const avgLocalScore = windowScoreSum / totalWeight;
-
-  const globalBestScore = suppressionForRange(
+  const zone =
+    usefulZone ?? computeUsefulZone(targetSignal, sampleRate);
+  return evaluateMultiScaleWindowed(
     generated,
     targetSignal,
-    0,
-    length,
-  );
-
-  const shapePenalty = Math.max(0, globalBestScore - avgLocalScore);
-
-  const resolvedProfile =
-    spectralProfile ??
-    computeSpectralProfile(targetSignal, sampleRate);
-
-  const spectralScore =
-    spectralWeight > 0
-      ? computeSpectralScore(
-          targetSignal,
-          generated,
-          sampleRate,
-          resolvedProfile,
-        )
-      : 0;
-
-  return (
-    avgLocalScore * (1 - spectralWeight) +
-    spectralScore * spectralWeight -
-    penaltyWeight * shapePenalty
+    sampleRate,
+    zone,
   );
 };
 
@@ -362,7 +378,7 @@ export const findOptimalScale = (
   generated: readonly number[],
   targetSignal: readonly number[],
   sampleRate = 44100,
-  spectralProfile?: SpectralProfile,
+  usefulZone?: UsefulZone,
 ): { scale: number; suppressionPercent: number } => {
   let dot = 0;
   let genSqSum = 0;
@@ -382,10 +398,8 @@ export const findOptimalScale = (
   const suppressionPercent = evaluateSuppressionWindowed(
     scaled,
     targetSignal,
-    0.5,
-    0.3,
     sampleRate,
-    spectralProfile,
+    usefulZone,
   );
 
   return { scale, suppressionPercent };

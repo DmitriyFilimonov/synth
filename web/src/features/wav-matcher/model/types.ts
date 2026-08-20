@@ -10,19 +10,12 @@ export interface MatchTargetInfo {
 export interface MatchHistoryEntry {
   iteration: number;
   suppressionPercent: number;
-  phase?: 'hpo' | 'cd';
   status?: string;
-  stageIndex?: number;
-  totalStages?: number;
-  stageDurationMs?: number;
 }
 
 export interface MatchConfig {
   numOscillators?: number;
   maxIterations?: number;
-  hpo?: boolean;
-  stageDurationMultiplier?: number;
-  staged?: boolean;
 }
 
 export interface SynthOscConfig {
@@ -57,8 +50,6 @@ export interface JobEntry {
   params: {
     numOscillators: number;
     maxIterations: number;
-    hpo?: boolean;
-    stageDurationMultiplier?: number;
   };
   suppressionPercent: number;
   /** Честный глобальный suppression финального WAV (может отсутствовать у старых job) */
@@ -80,8 +71,6 @@ export interface JobListEntry {
   params: {
     numOscillators: number;
     maxIterations: number;
-    hpo?: boolean;
-    stageDurationMultiplier?: number;
   };
   createdAt: string;
   updatedAt: string;

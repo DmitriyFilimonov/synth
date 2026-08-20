@@ -33,9 +33,9 @@
 ### Автоинициализация («без ручного ввода параметров»)
 
 Стартовая конфигурация осцилляторов (частоты, фазы, амплитуды)
-формируется автоматически из анализа сигнала (FFT / Goertzel /
+формируется автоматически из анализа сигнала (dual-window Goertzel /
 simple-init-vector). Пользователь задаёт только параметры прогона
-(`maxIterations`, `numOscillators`, HPO-флаги и т.п.), но не начальные
+(`maxIterations`, `numOscillators` и т.п.), но не начальные
 значения осцилляторов.
 
 ### Целевая метрика
@@ -44,12 +44,13 @@ simple-init-vector). Пользователь задаёт только пара
   coordinate descent).
 - 100% (посэмпловое совпадение) — идеал, но маловероятен и не является
   обязательным критерием.
-- Текущее состояние: ~63% J (windowed surrogate) на реальных таргетах
-  после residual-guided relocation (историческое плато ~50%; анализ в
-  `README.md`) — известное промежуточное состояние, а не цель: изменения
-  не должны его деградировать, приоритет — приближение к 98%.
+- Текущее состояние: ~80% J (multi-scale windowed surrogate) на реальных
+  таргетах после residual-guided relocation (историческое плато ~50% на
+  single-scale, ~63% на однооконном — анализ в `README.md`) — известное
+  промежуточное состояние, а не цель: изменения не должны его деградировать,
+  приоритет — приближение к 98%.
   Важно: J занижен относительно честного глобального suppression
-  (оконное усреднение + спектральный член + шкала по амплитуде) —
+  (оконное усреднение + ringing penalty + шкала по амплитуде) —
   субъективное качество результата систематически лучше числа в job.
 
 ## Команды разработки
@@ -157,8 +158,7 @@ Generate → Compare → Save WAV + SVG
 | `src/write-wav.ts`               | Запись `Int16Array` в WAV-файл                                                                                                                                                                                                                                                                      |
 | `src/synth-config-to-vector.ts`  | Нормализация конфига → вектор `number[]` `[0, 1]`                                                                                                                                                                                                                                                   |
 | `src/vector-to-synth-config.ts`  | Денормализация вектора → конфиг (50 осцилляторов)                                                                                                                                                                                                                                                   |
-| `src/optimize/`                  | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (оценка suppression), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (поэтапная или плоская оптимизация), `residual-relocation.ts` (relocation слабых осцилляторов на пики остатка)          |
-| `src/optimize/hpo/`              | Hyperparameter optimization (Optuna-style): `run-hpo.ts` (координатор), `study.ts` (Study), `trial.ts` (Trial), `sampler.ts` (Sampler + RandomSampler), `sampler-tpe.ts` (TPE), `param-space.ts` (пространство гиперпараметров), `types.ts`                                                         |
+| `src/optimize/`                  | Модуль оптимизации: `index.ts` (реэкспорт), `coordinate-descent.ts` (алгоритм), `evaluate.ts` (multi-scale windowed-оценка suppression), `consts.ts` (константы), `types.ts` (типы), `staged.ts` (обёртка над coordinateDescent), `residual-relocation.ts` (relocation слабых осцилляторов на пики остатка) |
 | `src/signal-analysis.ts`         | Анализ сигналов: автокорреляция (фундаментальная частота), amplitude envelope (RMS-окна), freqOverTime (zero-crossing)                                                                                                                                                                              |
 | `src/spectrogram.ts`             | STFT-анализ: Hanning window, FFT, peak detection, кластеризация гармоник в траектории, fit osc envelopes                                                                                                                                                                                            |
 | `src/fft.ts`                     | Cooley-Tukey radix-2 FFT, extraction доминантных гармоник с bias к фундаментальным                                                                                                                                                                                                                  |
@@ -215,173 +215,38 @@ Generate → Compare → Save WAV + SVG
 - После completion — финальный прунинг: осцилляторы с `startLevel < VOLUME_PRUNE_THRESHOLD` (0.005, −46 dB) отключаются; откат если score падает > 0.05 п.п. Порог понижен с 0.02 (−34 dB): при 0.02 rich-спектральные таргеты завершались с 3–8 активными осцилляторами из 50, теряя тембровые детали. `VOLUME_MIN` = 0.001 держит `clampVolume` ниже prune-порога, чтобы `startLevel` мог опуститься ниже 0.005 и корректно триггерить prune-проверку.
 - Scale fitting: подбор оптимального масштаба громкости (`findOptimalScale`) после оптимизации; множитель пишется в `startLevel`, затем геном **пересинтезируется и переоценивается** (score с отмасштабированного waveform не переиспользуется)
 - Volume (offset 9): мультипликативный шаг (`center * (1 ± step)`), ограничен `clampVolume` → `[VOLUME_MIN, 1]`
-- Все константы алгоритма вынесены в `CoordinateDescentConfig` и могут быть переопределены через HPO. Значения по умолчанию — `DEFAULT_COORD_DESCENT_CONFIG`.
+- Все константы алгоритма вынесены в `CoordinateDescentConfig` и могут быть переопределены при вызовe. Значения по умолчанию — `DEFAULT_COORD_DESCENT_CONFIG`.
 - Логи `[CoordDescent]` (Plateau kick, Step grown/decayed) выводятся через
   `optimizer-worker.ts` с отдельным троттлингом: important-сообщения `[...]`
   идут через 5ms, а `Iteration X:` прогресс — через 50ms.
+- **Multi-scale windowed-метрика** (`evaluate.ts`): заменяет single-scale
+  оконную оценку. `computeUsefulZone()` авто-детектит `[start, end)` полезного
+  сигнала через 1ms RMS-пробы (>1% пика). Три масштаба окон (10/50/200ms):
+  комбинация `0.5 * worst_scale + 0.5 * avg_scale` (чувствительна к атаке,
+  хвосту, транзиентам — без маскировки громкими участками).
+  `computeRingingPenalty` штрафуется за энергию synth вне полезной зоны
+  (ringing/tail артефакты). Синтез всегда 500ms (контракт не меняется).
 
-### Поэтапная и плоская оптимизация (src/optimize/staged.ts)
+### Плоская оптимизация (src/optimize/staged.ts)
 
-**Режимы работы:**
-Параметр `staged` (дефолт `true`) управляет режимом оптимизации.
-
-**Staged mode (`staged: true`):**
-Оптимизация идёт по нарастающим стадиям длительности сигнала (от
-вычисленной `computeInitialStageMs(fundamentalHz)` до полного сигнала).
-Перед каждым CD-этапом HPO на коротком сигнале подбирает
-hyperparameters (шаги, пороги, decay).
-
-```
-Stage 1 (computeInitialStageMs): HPO → CD → extrapolate durations
-Stage 2 (...): HPO → CD → extrapolate durations
-...
-Stage N (full): HPO → CD → final vector
-```
-
-**Flat mode (`staged: false`):**
-Один проход HPO на полном сигнале, затем один проход CD на полном сигнале.
-Без стадий, без экстраполяции длительностей. `stageDurationMultiplier` и
-`initialStageMs` игнорируются.
+**Теперь — тонкая обёртка над `coordinateDescent`.** Поэтапная оптимизация и HPO
+удалены. Флаг `staged` (по умолчанию `true`) игнорируется; `stageDurationMultiplier`,
+`initialStageMs`, `hpo`, `hpoTrials`, `staged` — тоже игнорируются.
 
 ```
-Full signal: HPO → CD → final vector
+Full signal: coordinateDescent → final vector
 ```
 
-**Параметры HPO в стадиях (staged mode):**
-
-Стадии генерируются группами до 3 длительностей (base, base+10ms,
-base+20ms), затем base × `stageDurationMultiplier`. Множитель
-клампится снизу к 2.0 (иначе экспоненциальная proliferation стадий);
-дефолт из `match-defaults.ts` — 2.
-
-`computeInitialStageMs` вычисляет первую стадию из периода фундаментальной
-частоты: 4..10 полных циклов, кламп [10, 100] мс. Вызывается в `match.ts`
-через `estimateFundamentalFreq()` из `signal-analysis.ts` (автокорреляция).
-Результат прокидывается через `stagedOptimize.fundamentalHz` →
-`optimizer-worker.ts` (worker thread) → `synth-service.ts` (HTTP API, sync
-и async job). Если `fundamentalHz` не определена или ≤ 0, используется
-дефолт 10 мс.
-
-- `hpoTrials` — число trials на стадию (дефолт `MATCH_DEFAULT_HPO_TRIALS = 2`;
-  standalone-путь в `match.ts` дефолтит 30)
-- `hpo` — вкл/выкл HPO (по умолчанию `true`). При `false` HPO полностью
-  пропускается в обоих режимах (staged и flat), идёт только CD с дефолтными
-  гиперпараметрами — даже если `hpoTrials` задан
-- Реальное число trials на стадию масштабируется вниз для длинных стадий:
-  `computeHpoTrialsForStage` (база 441 сэмпл ≈ 10ms, диапазон 3..25)
-- `cdIterationsPerTrial` — фиксированные CD-итерации внутри HPO trial (дефолт 7)
-- `maxIterations` — CD после HPO, управляется пользователем (дефолт 100)
-- `staged` — режим оптимизации: `true` (по умолчанию) = поэтапный, `false` = один HPO + один CD на полном сигнале без стадий; при `false` `stageDurationMultiplier` и `initialStageMs` игнорируются
-- `stageDurationMultiplier` — передаётся извне, множитель роста длительностей стадий, НЕ входит в пространство HPO; игнорируется при `staged: false`
-- `initialStageMs` — длительность первой стадии (мс), передаётся извне, НЕ входит в HPO; если не задана, вычисляется из `fundamentalHz` через `computeInitialStageMs`; расписание стадий строится один раз до старта и не меняется
-- `fundamentalHz` — фундаментальная частота (Гц), извлекается автокорреляцией (`signal-analysis.ts`); если передана, `initialStageMs` вычисляется автоматически: 4..10 циклов, кламп [10, 100] мс
-- `hasUserOverride` — оба `stepGrowthAdd` И `stepDecayFactor` заданы,
-  либо `hpo === false` → HPO полностью отключается, идёт чистый CD
-  с дефолтными гиперпараметрами; при `hpo: false` HPO не запускается
-  ни в staged, ни в flat режиме
-- Guard от регрессии HPO: `bestVector` принимается только если его
-  windowed-score на окне стадии ≥ score входного (экстраполированного)
-  вектора; иначе CD стартует с входного вектора
-- Экстраполяция длительностей между стадиями использует диапазоны
-  нормализации из `synth.ts` (`[1/44100, 0.5]` с) — тот же источник
-  истины, что и `vector-to-synth-config.ts`
-- Наблюдения (params → value) кумулятивно передаются между стадиями через
-  `initialObservations` — TPE строит модель на всей истории, не теряя данные
-- `nStartupTrials` адаптивен: 1 при ≤3 trials, 2 при ≤8, 5 при ≤20, иначе 10
-- `bandwidth` адаптивен: 2.5x при 2 наблюдениях, 1.8x при ≤5, 1.3x при ≤15, 1x при 15+
-
-**ProgressEntry поля:**
-
-- `phase` — `'hpo'` или `'cd'` (разделение в UI)
-- `iterationOffset` — кумулятивный сдвиг итераций между стадиями (только CD, HPO не считается)
-- `bestVector?` — снапшот лучшего нормализованного вектора параметров. Присылается CD **только когда обновился best-ever score** (не каждую итерацию — экономия трафика). API `synth-service.ts` конвертирует его в `synthConfig` и записывает в job-запись через `updateJobStatus` (тот же throttle 1s, что и для progress). Это даёт наблюдаемость running-джобы: пользователь видит промежуточный synthConfig, не дожидаясь completion. Из финальной history в API `bestVector` вырезается (пишется только в отдельные поля job-записи, чтобы не дублировать данные)
-
-### HPO (src/optimize/hpo/)
-
-Оптимизация гиперпараметров координатного спуска в стиле Optuna.
-Используется как внутри staged optimization (per-stage), так и самостоятельно.
-
-**Принцип работы (standalone):**
-
-1. FFT инициализирует параметры осцилляторов (начальный вектор)
-2. HPO-координатор запускает N trials
-3. В каждом trial TPE-сэмплер предлагает гиперпараметры (шаги, пороги, decay factors)
-4. Coordinate descent запускается с `cdIterationsPerTrial` (дефолт 7)
-5. Полученный suppressionPercent возвращается в TPE для обновления модели
-6. После всех trials возвращается лучшая комбинация гиперпараметров + вектор
-7. Финальный CD запускается с лучшими гиперпараметрами на `cdIterationsPerTrial`
-
-**Компоненты:**
-
-- `Study` + `Trial` — управление trials, Optuna-style API (`suggestFloat`, `suggestInt`, `suggestCategorical`)
-- `Sampler` — интерфейс алгоритмов выборки
-- `RandomSampler` — равномерная выборка (baseline + warmup)
-- `TPESampler` — Tree-structured Parzen Estimator (основной алгоритм)
-- `runHPO` — координатор: trial → hyperparams → coordinateDescent → suppression → TPE update
-- `param-space.ts` — пространство гиперпараметров с диапазонами и дефолтами
-
-**Архитектура TPE:**
-
-- Разделяет trials на «good» (лучшие γ%) и «bad» (остальные)
-- Строит KDE l(x) = P(x|good) и g(x) = P(x|bad) для каждого параметра
-- Сэмплирует кандидатов из l(x), выбирает по max l(x)/g(x) ratio
-- `nStartupTrials` адаптивен: зависит от числа trials (см. ниже), НЕ фиксирован
-- `bandwidth` адаптивен: зависит от числа accumulated observations
-
-**Кумулятивные наблюдения между стадиями:**
-При staged-оптимизации каждое завершённое HPO-наблюдение (params → value)
-передаётся в следующую стадию через `initialObservations`. TPE строит модель
-по всей истории, а не только по текущей стадии — это предотвращает сужение
-диапазона гиперпараметров на поздних этапах.
-
-**Адаптивные параметры TPE:**
-
-- `nStartupTrials`: 1 при ≤3 trials, 2 при ≤8, 5 при ≤20, иначе 10
-  (вместо фиксированных 10, что блокировало TPE при nTrials=2)
-- `bandwidth` (KDE kernel): 2.5×base при 2 наблюдениях, 1.8× при ≤5,
-  1.3× при ≤15, 1× при 15+ (шире на ранних стадиях для эксплорации)
-
-**Пространство гиперпараметров (HYPERPARAM_SPACE):**
-
-- `stepGrowthAdd` — [0.0001, 0.01] (log)
-- `stepDecayFactor` — [0.85, 0.995]
-- `explorationStartStep` — [0.005, 0.1]
-- `explorationMinStep` — [0.001, 0.05]
-- `refinementStartStep` — [0.001, 0.05]
-- `refinementMinStep` — [0.0005, 0.02]
-- `precisionStartStep` — [0.0005, 0.02]
-- `precisionMinStep` — [1e-6, 0.002] (log)
-- `stagnationExitThreshold` — 2..12
-- `stagnationDecayFactor` — [0.5, 0.95]
-- `plateauRestartThreshold` — 2..10
-- `stepGrowthThreshold` — 2..15
-- `significantImprovementThreshold` — [0.0005, 0.1] (log)
-- `earlyExitSuppression` — [90, 99.9]
-- `maxRestartsBeforeRandomRestart` — 2..10
-- `kickFallbackThreshold` — [0.5, 0.95]
-- `frequencyStep` — [5e-8, 5e-7] (log) — мелкий шаг freqBase/freqStart в PRECISION, дефолт 0.0000001
-- `frequencyStepCoarse` — [1e-5, 5e-4] (log) — грубый шаг freqBase/freqStart в EXPLORATION, дефолт 0.0001
-- `frequencyStepRefine` — [1e-6, 1e-5] (log) — средний шаг freqBase/freqStart в REFINEMENT, дефолт 0.000005
-- `phaseStep` — [0.0015, 0.006] — шаг для phase (offset 5) в EXPLORATION, дефолт 0.003125 ≈ 1.1°
-- `phaseStepRefine` — [0.0003, 0.002] — шаг для phase в REFINEMENT, дефолт 0.00078 ≈ 0.3°
-- `phaseStepPrecision` — [0.00005, 0.0005] — шаг для phase в PRECISION, дефолт 0.0002 ≈ 0.07°
-- `saInitialTemp` — [0.5, 8] — начальная температура simulated annealing (в п.п. score), дефолт 3
-- `saCoolingRate` — [0.95, 0.999] — геометрический коэффициент охлаждения SA за итерацию, дефолт 0.99
-
-> `iterations` НЕ является гиперпараметром — пользователь контролирует через
-> `maxIterations`. `stageDurationMultiplier`, `initialStageMs` и `staged` также
-> исключены из HPO и передаются независимо. Внутри HPO trial CD запускается
-> на `cdIterationsPerTrial` (дефолт 7).
+`fundamentalHz` используется только для `computeInitialStageMs` как информация
+(в текущей flat-реализации не влияет на расписание стадий — стадий больше нет).
 
 #### Стоимость оценки кандидата
 
 `WaveformCache` (`evaluate.ts`) пересинтезирует только вклад
 затронутого осциллятора (O(n) вместо O(n·m) полного ресинтеза) —
 инкрементальная сумма поддерживается в актуальном состоянии.
-Спектральный профиль таргета (`SpectralProfile`, 5 доминантных
-частот Goertzel-сканом 20–5000 Гц) инвариантен и вычисляется один раз
-на запуск оптимизации. Оставшаяся стоимость одной пробы: синтез одного
-осциллятора O(n) + windowed-оценка O(n) — сотни проб на итерацию
+Оставшаяся стоимость одной пробы: синтез одного
+осциллятора O(n) + multi-scale windowed-оценка O(n) — сотни проб на итерацию
 (~540 при 30 активных осцилляторах). Любая правка оптимизатора не
 должна увеличивать число проб кандидатов без необходимости.
 
@@ -389,8 +254,7 @@ base+20ms), затем base × `stageDurationMultiplier`. Множитель
 
 Все константы алгоритма параметризованы через `CoordinateDescentConfig`
 и могут быть переопределены при вызове `coordinateDescent()`. Значения
-по умолчанию — `DEFAULT_COORD_DESCENT_CONFIG`. HPO подбирает оптимальные
-значения этих параметров через TPE-сэмплер.
+по умолчанию — `DEFAULT_COORD_DESCENT_CONFIG`.
 
 ### HTTP-сервер (`src/api/`)
 

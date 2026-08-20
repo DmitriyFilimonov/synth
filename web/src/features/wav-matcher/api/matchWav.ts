@@ -18,14 +18,6 @@ export async function createMatchJob(
     params.set('numOscillators', String(config.numOscillators));
   if (config.maxIterations)
     params.set('maxIterations', String(config.maxIterations));
-  if (config.hpo !== undefined) params.set('hpo', String(config.hpo));
-  if (config.stageDurationMultiplier !== undefined)
-    params.set(
-      'stageDurationMultiplier',
-      String(config.stageDurationMultiplier),
-    );
-  if (config.staged !== undefined)
-    params.set('staged', String(config.staged));
   if (file.name) params.set('fileName', file.name);
 
   const response = await fetch(
@@ -112,9 +104,6 @@ export async function matchWav(
       wavBase64: base64,
       numOscillators: config.numOscillators,
       maxIterations: config.maxIterations,
-      hpo: config.hpo,
-      stageDurationMultiplier: config.stageDurationMultiplier,
-      staged: config.staged,
     }),
   });
 

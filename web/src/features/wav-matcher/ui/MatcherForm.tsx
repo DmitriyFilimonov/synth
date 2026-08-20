@@ -17,7 +17,6 @@ import styles from './MatcherForm.module.css';
 const CHART_COLOR_LINE = '#3b82f6';
 const CHART_COLOR_GRID = '#2a2a2a';
 const CHART_COLOR_AXIS = '#555555';
-const CHART_COLOR_STAGE = '#f59e0b';
 
 type ViewMode = 'upload' | 'list' | 'detail';
 const POLLING_INTERVAL = 1000;
@@ -33,8 +32,6 @@ function OptimizationChart({
   progress: {
     iteration: number;
     suppressionPercent: number;
-    phase?: 'hpo' | 'cd';
-    stageIndex?: number;
   }[];
   height?: number;
 }) {
@@ -54,38 +51,21 @@ function OptimizationChart({
   const firstIter = progress[0]?.iteration ?? 1;
   const iterRange = Math.max(lastIter - firstIter, 1);
 
-  const x = (iter: number) =>
+  const x = (iter: number): number =>
     padding.left + ((iter - firstIter) / iterRange) * chartW;
-  const y = (sup: number) =>
+  const y = (sup: number): number =>
     padding.top + chartH - ((sup - minSup) / supRange) * chartH;
 
   const ticksY = [0, 0.25, 0.5, 0.75, 1].map(
     (f) => minSup + supRange * f,
   );
 
-  // Separate HPO and CD entries for different visual rendering
-  const cdEntries = progress.filter((p) => p.phase !== 'hpo');
-  const hpoEntries = progress.filter((p) => p.phase === 'hpo');
-
-  const cdPathD = cdEntries
+  const pathD = progress
     .map(
       (p, i) =>
         `${i === 0 ? 'M' : 'L'} ${x(p.iteration).toFixed(1)} ${y(p.suppressionPercent).toFixed(1)}`,
     )
     .join(' ');
-
-  const hasStages = progress.some((p) => p.stageIndex !== undefined);
-  const stageBoundaries: number[] = [];
-  if (hasStages) {
-    const seenStages = new Set<number>();
-    for (const p of progress) {
-      const si = p.stageIndex;
-      if (si !== undefined && !seenStages.has(si)) {
-        seenStages.add(si);
-        stageBoundaries.push(p.iteration);
-      }
-    }
-  }
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className={styles.chart}>
@@ -120,38 +100,9 @@ function OptimizationChart({
           strokeWidth="1"
         />
       )}
-      {stageBoundaries.map((iter, i) => {
-        if (i === 0) return null;
-        return (
-          <line
-            key={i}
-            x1={x(iter)}
-            y1={padding.top}
-            x2={x(iter)}
-            y2={padding.top + chartH}
-            stroke={CHART_COLOR_STAGE}
-            strokeDasharray="3 3"
-            strokeWidth="1"
-          />
-        );
-      })}
-      {hpoEntries.length > 0 && (
-        <g>
-          {hpoEntries.map((p, i) => (
-            <circle
-              key={i}
-              cx={x(p.iteration)}
-              cy={y(p.suppressionPercent)}
-              r="2"
-              fill="#ef4444"
-              opacity="0.6"
-            />
-          ))}
-        </g>
-      )}
-      {cdPathD && (
+      {pathD && (
         <path
-          d={cdPathD}
+          d={pathD}
           fill="none"
           stroke={CHART_COLOR_LINE}
           strokeWidth="2"
@@ -279,18 +230,6 @@ function JobDetail({
     return job.suppressionPercent;
   })();
 
-  const stageInfo = (() => {
-    if (!job || job.progress.length === 0) return null;
-    const last = job.progress[job.progress.length - 1];
-    if (!last || last.stageIndex === undefined) return null;
-    return {
-      current: last.stageIndex + 1,
-      total: last.totalStages ?? 0,
-      durationMs: last.stageDurationMs ?? 0,
-      phase: last.phase ?? 'cd',
-    };
-  })();
-
   return (
     <div className={styles.detail}>
       <div className={styles.detailHeader}>
@@ -336,41 +275,6 @@ function JobDetail({
             GLOBAL (RMS): {job.globalSuppressionPercent.toFixed(2)}% —
             честное подавление по всему сигналу; число выше —
             surrogate J из оптимизации (занижен)
-          </div>
-        )}
-
-      {stageInfo &&
-        (job?.status === 'running' || job?.status === 'queued') && (
-          <div className={styles.stageInfo}>
-            <span className={styles.stageLabel}>
-              STAGE {stageInfo.current}/{stageInfo.total}
-            </span>
-            <span
-              className={styles.phaseBadge}
-              style={{
-                background:
-                  stageInfo.phase === 'hpo'
-                    ? '#991b1b55'
-                    : '#1e3a5f55',
-                color:
-                  stageInfo.phase === 'hpo' ? '#ef4444' : '#3b82f6',
-              }}
-            >
-              {stageInfo.phase === 'hpo'
-                ? `HPO`
-                : `CD ${job.params.maxIterations}it`}
-            </span>
-            <span className={styles.stageDuration}>
-              {stageInfo.durationMs}ms
-            </span>
-            <div className={styles.stageProgressBar}>
-              <div
-                className={styles.stageProgressFill}
-                style={{
-                  width: `${(stageInfo.current / stageInfo.total) * 100}%`,
-                }}
-              />
-            </div>
           </div>
         )}
 
@@ -469,10 +373,6 @@ export function MatcherForm() {
   const [file, setFile] = useState<File | null>(null);
   const [numOscillators, setNumOscillators] = useState('5');
   const [maxIterations, setMaxIterations] = useState('20');
-  const [hpo, setHpo] = useState(true);
-  const [staged, setStaged] = useState(true);
-  const [stageDurationMultiplier, setStageDurationMultiplier] =
-    useState('1');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const [uploadError, setUploadError] = useState<string>('');
@@ -577,11 +477,6 @@ export function MatcherForm() {
       await createMatchJob(file, {
         numOscillators: Number(numOscillators),
         maxIterations: Number(maxIterations),
-        hpo,
-        stageDurationMultiplier: staged
-          ? Number(stageDurationMultiplier)
-          : undefined,
-        staged,
       });
 
       await listJobs().then(setJobList);
@@ -701,43 +596,6 @@ export function MatcherForm() {
               onChange={(e) => setMaxIterations(e.target.value)}
             />
           </div>
-          <div className={styles.row}>
-            <label className={styles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={staged}
-                onChange={(e) => setStaged(e.target.checked)}
-                className={styles.checkbox}
-              />
-              Staged optimization
-            </label>
-          </div>
-          <div className={styles.row}>
-            <label className={styles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={hpo}
-                onChange={(e) => setHpo(e.target.checked)}
-                className={styles.checkbox}
-              />
-              Hyperparameter optimization (HPO)
-            </label>
-          </div>
-          {staged && (
-            <div className={styles.row}>
-              <Input
-                label="Stage multiplier"
-                type="number"
-                min="1"
-                step="0.5"
-                value={stageDurationMultiplier}
-                onChange={(e) =>
-                  setStageDurationMultiplier(e.target.value)
-                }
-              />
-            </div>
-          )}
-
           {error && <div className={styles.error}>{error}</div>}
 
           <Button type="submit" disabled={loading || !file}>
