@@ -36,10 +36,19 @@ const SCALE_MAX = 100;
  * только по [start, end), чтобы тишина не разбавляла средний score. При
  * этом сам синтез всегда генерируется на всю длину буфера, и если он даёт
  * ненулевые сэмплы вне useful-зоны — это ловится через ringing penalty.
+ *
+ * `silentProbes` — маска тишины по 1мс-пробам: `1` там, где локальный RMS
+ * таргета ниже порога тишины. Тишина бывает и ВНУТРИ [start, end): у
+ * таргетов с плавным затуханием поздний всплеск растягивает зону через
+ * длинный тихий хвост. Такие пробы нельзя оценивать относительной шкалой
+ * (`1 - resid/target` при target≈0 уходит в сотни процентов минуса), они
+ * штрафуются абсолютно — см. `computeRingingPenalty`.
  */
 export interface UsefulZone {
   readonly start: number;
   readonly end: number;
+  readonly silentProbes: Uint8Array;
+  readonly probeSize: number;
 }
 
 /**
@@ -48,20 +57,34 @@ export interface UsefulZone {
  * находит peak-window RMS. Полезная зона — от первого до последнего окна,
  * RMS которого ≥ 1% от peak. Всё, что вне зоны — цифровая тишина (даже
  * если формально int16 значения не строго 0).
+ *
+ * Дополнительно возвращает маску тишины по тем же пробам: тихие пробы
+ * встречаются и внутри зоны (плавно затухающие таргеты), и относительной
+ * шкалой их оценивать нельзя.
  */
 export const computeUsefulZone = (
   targetSignal: readonly number[],
   sampleRate: number,
 ): UsefulZone => {
   const total = targetSignal.length;
+  const probeSize = Math.max(1, Math.round(0.001 * sampleRate));
   if (total === 0) {
-    return { start: 0, end: 0 };
+    return {
+      start: 0,
+      end: 0,
+      silentProbes: new Uint8Array(0),
+      probeSize,
+    };
   }
 
-  const probeSize = Math.max(1, Math.round(0.001 * sampleRate));
   const numProbes = Math.floor(total / probeSize);
   if (numProbes === 0) {
-    return { start: 0, end: total };
+    return {
+      start: 0,
+      end: total,
+      silentProbes: new Uint8Array(0),
+      probeSize,
+    };
   }
 
   let peakRms = 0;
@@ -81,10 +104,20 @@ export const computeUsefulZone = (
   }
 
   if (peakRms === 0) {
-    return { start: 0, end: total };
+    return {
+      start: 0,
+      end: total,
+      silentProbes: new Uint8Array(numProbes).fill(1),
+      probeSize,
+    };
   }
 
   const threshold = peakRms * USEFUL_ZONE_SILENCE_FRACTION;
+  const silentProbes = new Uint8Array(numProbes);
+  for (let p = 0; p < numProbes; p++) {
+    silentProbes[p] = (probeRms[p] ?? 0) < threshold ? 1 : 0;
+  }
+
   let firstProbe = 0;
   while (
     firstProbe < numProbes &&
@@ -102,7 +135,7 @@ export const computeUsefulZone = (
 
   const start = firstProbe * probeSize;
   const end = Math.min(total, (lastProbe + 1) * probeSize);
-  return { start, end };
+  return { start, end, silentProbes, probeSize };
 };
 
 export const createWaveForm = (
@@ -200,15 +233,18 @@ const suppressionForRange = (
 };
 
 /**
- * Штраф за «звон» синтеза на цифровой тишине target'а: за пределами useful
- * зоны target = 0, поэтому любой ненулевой синтез там даёт err_RMS > 0
- * при target_RMS = 0. Считаем нормированный «выхлоп» синтеза в тишине
- * относительно peak target RMS в полезной зоне — это даёт CD прямой
- * сигнал: «убей звон осцилляторов за пределами полезного сигнала».
+ * Штраф за «звон» синтеза на тишине target'а: там, где target ≈ 0, любой
+ * ненулевой синтез даёт err_RMS > 0 при target_RMS ≈ 0. Считаем
+ * нормированный «выхлоп» синтеза в тишине относительно peak target RMS —
+ * это даёт CD прямой сигнал: «убей звон осцилляторов там, где сигнала нет».
+ *
+ * Область штрафа — все тихие пробы (`silentProbes`), а не только сэмплы вне
+ * `[start, end)`. У таргетов с плавным затуханием тихий хвост попадает
+ * ВНУТРЬ зоны, и оконная относительная метрика его корректно оценить не
+ * может; абсолютная нормировка по peak RMS — может.
  */
 const computeRingingPenalty = (
   generated: readonly number[],
-  targetSignal: readonly number[],
   usefulZone: UsefulZone,
   peakTargetRms: number,
 ): number => {
@@ -216,18 +252,31 @@ const computeRingingPenalty = (
     return 0;
   }
   const total = generated.length;
+  const { silentProbes, probeSize } = usefulZone;
   let outSumSq = 0;
   let outCount = 0;
-  for (let i = 0; i < usefulZone.start; i++) {
+
+  for (let p = 0; p < silentProbes.length; p++) {
+    if (silentProbes[p] === 0) {
+      continue;
+    }
+    const from = p * probeSize;
+    const to = Math.min(from + probeSize, total);
+    for (let i = from; i < to; i++) {
+      const g = generated[i] ?? 0;
+      outSumSq += g * g;
+      outCount++;
+    }
+  }
+
+  // Хвост короче пробы всегда лежит за последней пробой, а значит и за
+  // границей полезной зоны — он тоже тишина.
+  for (let i = silentProbes.length * probeSize; i < total; i++) {
     const g = generated[i] ?? 0;
     outSumSq += g * g;
     outCount++;
   }
-  for (let i = usefulZone.end; i < total; i++) {
-    const g = generated[i] ?? 0;
-    outSumSq += g * g;
-    outCount++;
-  }
+
   if (outCount === 0) {
     return 0;
   }
@@ -240,11 +289,17 @@ const computeRingingPenalty = (
  *
  * For each scale (10ms/50ms/200ms) the useful range [start, end) is
  * partitioned into non-overlapping windows; each window's suppression is
- * computed with `suppressionForRange`; windows below 1 target-RMS are
- * skipped so silence inside the useful zone does not dominate the average.
+ * computed with `suppressionForRange` and averaged **weighted by target
+ * window energy**. The weighting is load-bearing: the per-window score is
+ * relative (`1 - resid/target`), so a near-silent window inside the zone
+ * scores in the hundreds of percent negative and, averaged unweighted,
+ * dominates everything. Energy weighting also makes this surrogate track
+ * the honest global suppression instead of understating it.
+ *
  * The final score aggregates all three scales with equal weight, then a
- * ringing penalty is subtracted for any synthesizer energy outside the
- * useful zone (where the target is digital silence).
+ * ringing penalty is subtracted for synthesizer energy in the target's
+ * silent regions — which the energy weighting has deliberately stopped
+ * scoring, so the penalty is what keeps the tail under control.
  */
 const evaluateMultiScaleWindowed = (
   generated: readonly number[],
@@ -285,8 +340,9 @@ const evaluateMultiScaleWindowed = (
         s,
         windowSize,
       );
-      sumScoreWeighted += score;
-      totalWeight += 1;
+      const weight = tgtRms * tgtRms;
+      sumScoreWeighted += score * weight;
+      totalWeight += weight;
     }
     if (tailLength > 0) {
       const s = usefulZone.start + fullWindows * windowSize;
@@ -301,7 +357,7 @@ const evaluateMultiScaleWindowed = (
           s,
           tailLength,
         );
-        const weight = tailLength / windowSize;
+        const weight = tgtRms * tgtRms * (tailLength / windowSize);
         sumScoreWeighted += score * weight;
         totalWeight += weight;
       }
@@ -324,7 +380,6 @@ const evaluateMultiScaleWindowed = (
 
   const ringingPenalty = computeRingingPenalty(
     generated,
-    targetSignal,
     usefulZone,
     peakTargetRms,
   );
