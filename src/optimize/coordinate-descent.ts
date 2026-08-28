@@ -74,6 +74,18 @@ export interface CoordinateDescentConfig {
    */
   cycleProgressEpsilon: number;
   /**
+   * Сколько окон подряд должны недобрать `cycleProgressEpsilon`,
+   * прежде чем цикл перестанет продлеваться за мягкий потолок.
+   *
+   * Одного окна недостаточно: CD движется рывками (плато, затем
+   * прорыв через пинок или принятие ухудшения в SA), и одиночное
+   * затишье не означает исчерпания цикла. Замер (`Mark Bester`,
+   * 300 итераций): приросты по окнам шли +13.04, +0.22, +0.91,
+   * +1.68, +0.60, +0.27 п.п. — при пороге в одно окно EXPLORATION
+   * обрывался на затишье +0.22, хотя следующее окно дало +1.68.
+   */
+  cycleProgressMisses: number;
+  /**
    * Доля номинальных бюджетов последующих циклов, которую текущий
    * цикл не имеет права занять, даже если продолжает улучшаться.
    * Гарантирует, что финальная полировка не останется без итераций.
@@ -145,6 +157,7 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
   seed: 1,
   cycleProgressWindow: 30,
   cycleProgressEpsilon: 0.5,
+  cycleProgressMisses: 2,
   cycleReserveFraction: 0.5,
   frequencyStep: 0.0000001,
   frequencyStepCoarse: 0.0001,
@@ -729,6 +742,7 @@ export const coordinateDescent = (
     let windowStartIter = iter;
     let windowStartBest = bestScore;
     let cycleStillImproving = true;
+    let cycleProgressMissCount = 0;
 
     while (
       iter < cycleHardCap &&
@@ -799,13 +813,21 @@ export const coordinateDescent = (
       // cycleProgressEpsilon, цикл больше не продлевается за мягкий
       // потолок и уступает итерации следующему.
       if (iter - windowStartIter >= cfg.cycleProgressWindow) {
+        const windowGain = bestScore - windowStartBest;
+        if (windowGain >= cfg.cycleProgressEpsilon) {
+          cycleProgressMissCount = 0;
+        } else {
+          cycleProgressMissCount++;
+        }
         cycleStillImproving =
-          bestScore - windowStartBest >= cfg.cycleProgressEpsilon;
+          cycleProgressMissCount < cfg.cycleProgressMisses;
         if (!cycleStillImproving && iter >= cycleSoftCap) {
           console.log(
             `[CoordDescent] Cycle ${cycle.label} stopped improving ` +
-              `(+${(bestScore - windowStartBest).toFixed(3)}pp over ` +
-              `${cfg.cycleProgressWindow} iters), advancing at ${iter}`,
+              `(+${windowGain.toFixed(3)}pp over ` +
+              `${cfg.cycleProgressWindow} iters, ` +
+              `${cycleProgressMissCount} misses in a row), ` +
+              `advancing at ${iter}`,
           );
         }
         windowStartIter = iter;

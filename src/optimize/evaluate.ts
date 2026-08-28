@@ -20,6 +20,30 @@ import {
 const MULTI_SCALE_WINDOWS_SECONDS = [0.01, 0.05, 0.2] as const;
 
 /**
+ * Усиление веса окон в начале полезной зоны (атака).
+ *
+ * Вес окна в метрике пропорционален энергии таргета в нём, а энергия
+ * бочки сосредоточена в теле, не в атаке: на шкале 10мс первые 10мс
+ * получают всего 2.3–6.5% общего веса. При этом именно в атаке живёт
+ * всё, что не низ: доля энергии выше 200 Гц в первых 10мс составляет
+ * 31–89% против 2–10% по сигналу целиком (замер на 4 таргетах). Из-за
+ * этого оптимизатору выгодно жертвовать атакой и верхами ради долей
+ * процента в теле — остаток в атаке 17–25% против 2–8% в теле.
+ *
+ * Дробление окон эту диспропорцию НЕ лечит: при весе ∝ RMS² суммарный
+ * вес участка равен его энергии и от нарезки не зависит. Нужен явный
+ * множитель.
+ *
+ * `boost = 1` — поведение без усиления.
+ */
+export const attackWeighting = {
+  /** Длительность усиливаемого участка от начала полезной зоны (с). */
+  durationSec: 0.01,
+  /** Множитель веса окон, попадающих в этот участок. */
+  boost: 1,
+};
+
+/**
  * RMS threshold (int16 units) below which a 1ms probe window is considered
  * silence when detecting useful-signal boundaries. Set as a fraction of the
  * peak 1ms RMS in the target: everything below 1% of peak counts as silence.
@@ -313,6 +337,9 @@ const evaluateMultiScaleWindowed = (
   }
 
   let peakTargetRms = 0;
+  const attackBoostEnd =
+    usefulZone.start +
+    Math.round(attackWeighting.durationSec * sampleRate);
   const scaleScores: number[] = [];
   for (const scaleSec of MULTI_SCALE_WINDOWS_SECONDS) {
     const windowSize = Math.max(1, Math.round(scaleSec * sampleRate));
@@ -340,7 +367,10 @@ const evaluateMultiScaleWindowed = (
         s,
         windowSize,
       );
-      const weight = tgtRms * tgtRms;
+      const weight =
+        tgtRms *
+        tgtRms *
+        (s < attackBoostEnd ? attackWeighting.boost : 1);
       sumScoreWeighted += score * weight;
       totalWeight += weight;
     }
@@ -357,7 +387,11 @@ const evaluateMultiScaleWindowed = (
           s,
           tailLength,
         );
-        const weight = tgtRms * tgtRms * (tailLength / windowSize);
+        const weight =
+          tgtRms *
+          tgtRms *
+          (tailLength / windowSize) *
+          (s < attackBoostEnd ? attackWeighting.boost : 1);
         sumScoreWeighted += score * weight;
         totalWeight += weight;
       }
