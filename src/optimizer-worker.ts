@@ -5,6 +5,7 @@ import {
   evaluateSuppressionFromWaveform,
 } from './optimize';
 import { generateOutput } from './match';
+import { attackWeighting } from './optimize/evaluate';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 import { readWav } from './read-wav';
 
@@ -67,6 +68,7 @@ interface WorkerMessage {
   initialVector: number[];
   sampleRate: number;
   maxIterations: number;
+  attackBoost?: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
 }
@@ -75,6 +77,14 @@ parentPort.on('message', (msg: WorkerMessage) => {
   try {
     const targetWav = readWav(msg.targetWavPath);
     const targetSignal = [...targetWav.samples];
+
+    // Вес атаки задаётся на job. Каждый job поднимает свой worker-
+    // поток, поэтому модульное состояние метрики здесь изолировано и
+    // не протекает между параллельными прогонами.
+    if (typeof msg.attackBoost === 'number' && msg.attackBoost > 0) {
+      attackWeighting.boost = msg.attackBoost;
+      console.log(`[Worker] attack weight boost: ${msg.attackBoost}`);
+    }
 
     const PROGRESS_THROTTLE_MS = 100;
     let lastProgressMs = 0;

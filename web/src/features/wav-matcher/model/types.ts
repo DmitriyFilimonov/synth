@@ -16,6 +16,12 @@ export interface MatchHistoryEntry {
 export interface MatchConfig {
   numOscillators?: number;
   maxIterations?: number;
+  /**
+   * Множитель веса окон метрики в первые 10 мс полезной зоны.
+   * `1` — без усиления (максимум формального suppression).
+   * Выше — точнее атака и верхние полосы ценой ~1 п.п. suppression.
+   */
+  attackBoost?: number;
 }
 
 export interface SynthOscConfig {

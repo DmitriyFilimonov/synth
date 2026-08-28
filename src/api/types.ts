@@ -28,6 +28,12 @@ export interface MatchRequestBody {
   maxIterations?: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
+  /**
+   * Множитель веса окон метрики в первые 10 мс полезной зоны.
+   * `1` — без усиления. Выше — оптимизатор точнее держит атаку и
+   * верхние полосы ценой ~1 п.п. глобального suppression.
+   */
+  attackBoost?: number;
   wavBase64?: string;
 }
 
@@ -55,6 +61,8 @@ export interface CreateMatchJobRequest {
   maxIterations?: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
+  /** См. `MatchRequestBody.attackBoost`. */
+  attackBoost?: number;
   wavBase64?: string;
   /** Название целевого файла (отображается в UI как "targetFileName DD.MM.YYYY HH:MM:SS") */
   targetFileName?: string;
@@ -65,6 +73,8 @@ export interface MatchParams {
   maxIterations: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
+  /** См. `MatchRequestBody.attackBoost`. */
+  attackBoost?: number;
 }
 
 export interface JobStatusResponse {

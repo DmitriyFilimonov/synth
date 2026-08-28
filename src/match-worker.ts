@@ -33,6 +33,7 @@ interface MatchWorkerArgs {
   initialVector: number[];
   sampleRate: number;
   maxIterations: number;
+  attackBoost?: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
   onProgress?: (entry: MatchWorkerProgress) => void;
@@ -91,6 +92,7 @@ export function matchWithWorker(
       initialVector: arg.initialVector,
       sampleRate: arg.sampleRate,
       maxIterations: arg.maxIterations,
+      attackBoost: arg.attackBoost,
       stepGrowthAdd: arg.stepGrowthAdd,
       stepDecayFactor: arg.stepDecayFactor,
     });

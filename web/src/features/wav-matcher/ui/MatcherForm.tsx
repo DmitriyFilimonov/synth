@@ -373,6 +373,7 @@ export function MatcherForm() {
   const [file, setFile] = useState<File | null>(null);
   const [numOscillators, setNumOscillators] = useState('5');
   const [maxIterations, setMaxIterations] = useState('20');
+  const [attackBoost, setAttackBoost] = useState('1');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
   const [uploadError, setUploadError] = useState<string>('');
@@ -477,6 +478,7 @@ export function MatcherForm() {
       await createMatchJob(file, {
         numOscillators: Number(numOscillators),
         maxIterations: Number(maxIterations),
+        attackBoost: Number(attackBoost),
       });
 
       await listJobs().then(setJobList);
@@ -594,6 +596,16 @@ export function MatcherForm() {
               step="1"
               value={maxIterations}
               onChange={(e) => setMaxIterations(e.target.value)}
+            />
+            <Input
+              label="Attack boost"
+              title="Вес первых 10 мс в метрике. 1 — максимум формального suppression; выше — точнее атака и верхние полосы ценой ~1 п.п."
+              type="number"
+              min="1"
+              max="32"
+              step="1"
+              value={attackBoost}
+              onChange={(e) => setAttackBoost(e.target.value)}
             />
           </div>
           {error && <div className={styles.error}>{error}</div>}

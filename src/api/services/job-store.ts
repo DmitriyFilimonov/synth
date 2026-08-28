@@ -32,6 +32,8 @@ export interface JobRecord {
     maxIterations: number;
     stepGrowthAdd?: number;
     stepDecayFactor?: number;
+    /** Множитель веса окон метрики в первые 10 мс. `1` — без усиления. */
+    attackBoost?: number;
     stageDurationMultiplier?: number;
     hpoTrials?: number;
     hpo?: boolean;
@@ -124,6 +126,8 @@ export async function createJob(
     maxIterations: number;
     stepGrowthAdd?: number;
     stepDecayFactor?: number;
+    /** Множитель веса окон метрики в первые 10 мс. `1` — без усиления. */
+    attackBoost?: number;
     stageDurationMultiplier?: number;
     hpoTrials?: number;
     hpo?: boolean;

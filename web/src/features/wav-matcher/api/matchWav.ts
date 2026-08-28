@@ -18,6 +18,8 @@ export async function createMatchJob(
     params.set('numOscillators', String(config.numOscillators));
   if (config.maxIterations)
     params.set('maxIterations', String(config.maxIterations));
+  if (config.attackBoost)
+    params.set('attackBoost', String(config.attackBoost));
   if (file.name) params.set('fileName', file.name);
 
   const response = await fetch(
@@ -104,6 +106,7 @@ export async function matchWav(
       wavBase64: base64,
       numOscillators: config.numOscillators,
       maxIterations: config.maxIterations,
+      attackBoost: config.attackBoost,
     }),
   });
 

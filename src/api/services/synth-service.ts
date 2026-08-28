@@ -102,6 +102,7 @@ export async function matchWav(
   maxIterations: number,
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
+  attackBoost?: number,
 ): Promise<MatchedFile> {
   const tempInput = join(tmpdir(), `${randomUUID()}_input.wav`);
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
@@ -127,6 +128,7 @@ export async function matchWav(
       initialVector,
       sampleRate: 44100,
       maxIterations,
+      attackBoost,
       stepGrowthAdd,
       stepDecayFactor,
       onProgress: (entry) => {
@@ -167,6 +169,7 @@ export async function matchWavWithJob(
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
   targetFileName?: string,
+  attackBoost?: number,
 ): Promise<string> {
   const jobId = randomUUID();
   const inputFileName = `${jobId}_input.wav`;
@@ -179,6 +182,7 @@ export async function matchWavWithJob(
       maxIterations,
       stepGrowthAdd,
       stepDecayFactor,
+      attackBoost,
     },
     inputFileName,
     jobName,
@@ -195,6 +199,7 @@ export async function matchWavWithJob(
       inputPath,
       stepGrowthAdd,
       stepDecayFactor,
+      attackBoost,
     ).catch((err) => {
       const message =
         err instanceof Error ? err.message : 'Unknown error';
@@ -214,6 +219,7 @@ async function runMatchJob(
   inputPath: string,
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
+  attackBoost?: number,
 ): Promise<void> {
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
   const history: {
@@ -243,6 +249,7 @@ async function runMatchJob(
       initialVector,
       sampleRate: 44100,
       maxIterations,
+      attackBoost,
       stepGrowthAdd,
       stepDecayFactor,
       onProgress: (entry) => {
