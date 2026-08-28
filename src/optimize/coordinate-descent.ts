@@ -56,6 +56,30 @@ export interface CoordinateDescentConfig {
     label: string;
   }>;
   /**
+   * Сид ГПСЧ. Прогон полностью детерминирован: один и тот же seed при
+   * прочих равных даёт идентичный результат. Меняй seed, чтобы взять
+   * независимую выборку (мультистарт, оценка дисперсии).
+   */
+  seed: number;
+  /**
+   * Окно (в итерациях), на котором проверяется, продолжает ли цикл
+   * приносить прогресс. Цикл, исчерпавший свою долю бюджета, но всё
+   * ещё улучшающий bestScore быстрее `cycleProgressEpsilon` за окно,
+   * продолжает работу вплоть до `cycleReserveFraction`-резерва.
+   */
+  cycleProgressWindow: number;
+  /**
+   * Минимальный прирост bestScore (п.п.) за `cycleProgressWindow`
+   * итераций, при котором цикл считается всё ещё продуктивным.
+   */
+  cycleProgressEpsilon: number;
+  /**
+   * Доля номинальных бюджетов последующих циклов, которую текущий
+   * цикл не имеет права занять, даже если продолжает улучшаться.
+   * Гарантирует, что финальная полировка не останется без итераций.
+   */
+  cycleReserveFraction: number;
+  /**
    * Fine frequency step (offsets 1, 2), used in the last cycle.
    * Absolute vector step, not a multiplier. Default 1e-7 ≈ 0.002 Hz.
    */
@@ -118,6 +142,10 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
     { startStep: 0.01, minStep: 0.003, label: 'REFINEMENT' },
     { startStep: 0.0025, minStep: 0.0001, label: 'PRECISION' },
   ],
+  seed: 1,
+  cycleProgressWindow: 30,
+  cycleProgressEpsilon: 0.5,
+  cycleReserveFraction: 0.5,
   frequencyStep: 0.0000001,
   frequencyStepCoarse: 0.0001,
   frequencyStepRefine: 0.000005,
@@ -152,6 +180,30 @@ const getParamStep = (
   return Math.max(baseStep, minStep);
 };
 
+/**
+ * Детерминированный ГПСЧ (mulberry32). Один и тот же `seed` даёт
+ * побитово одинаковый прогон.
+ *
+ * `Math.random()` не сидируется, и из-за этого два прогона одной и той
+ * же конфигурации расходились: замер на `Danilo Ercole.wav` (250
+ * итераций, три прогона) дал 83.07% / 83.74% / 85.94% — разброс
+ * 2.87 п.п. При таком шуме любое A/B требовало усреднения по
+ * нескольким запускам, а плохой прогон нельзя было воспроизвести
+ * для отладки.
+ *
+ * @param seed - Начальное состояние (любое целое).
+ * @returns Функция, возвращающая число в `[0, 1)`.
+ */
+const createRng = (seed: number): (() => number) => {
+  let a = seed >>> 0;
+  return (): number => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
 const optimizeSingleParameter = (
   genome: number[],
   waveformCache: WaveformCache,
@@ -161,6 +213,7 @@ const optimizeSingleParameter = (
   sampleRate: number,
   currentBest: number,
   usefulZone: UsefulZone,
+  rng: () => number,
   temperature = 0,
 ): {
   genome: number[];
@@ -209,7 +262,7 @@ const optimizeSingleParameter = (
     bestWorseScore > -Infinity
   ) {
     const delta = currentBest - bestWorseScore;
-    if (delta > 0 && Math.random() < Math.exp(-delta / temperature)) {
+    if (delta > 0 && rng() < Math.exp(-delta / temperature)) {
       bestScore = bestWorseScore;
       bestValue = bestWorseValue;
     }
@@ -282,6 +335,7 @@ const optimizeIteration = (
   phaseStep: number,
   minStep: number,
   usefulZone: UsefulZone,
+  rng: () => number,
   temperature = 0,
   relocationAttempts?: number[],
   maxRelocationAttemptsPerOsc = 0,
@@ -317,6 +371,7 @@ const optimizeIteration = (
         sampleRate,
         score,
         usefulZone,
+        rng,
         temperature,
       );
       genome = result.genome;
@@ -525,6 +580,8 @@ export const coordinateDescent = (
     ...config,
   };
 
+  const rng = createRng(cfg.seed);
+
   const genomeLength = initialVector.length;
   const numOsc = genomeLength / OSC_PARAMS;
 
@@ -641,13 +698,42 @@ export const coordinateDescent = (
     const cycleIterStart = iter;
     let genomeChanged = false;
 
-    const cycleIterCap = Math.min(
-      maxIterations,
+    // Мягкий потолок — номинальная доля цикла. Жёсткий — граница,
+    // за которой начинается неприкосновенный резерв последующих
+    // циклов. Между ними цикл живёт ровно до тех пор, пока приносит
+    // измеримый прогресс: доля от maxIterations сама по себе плохой
+    // критерий, потому что при урезании бюджета она молча урезает и
+    // разведку. Замер (Untitled.wav): при 250 итерациях EXPLORATION
+    // получал 88 и обрывался на середине подъёма → 71.7% global;
+    // при 500 он получал 175 и доходил до 85.5%.
+    const laterShares = cycleShares
+      .slice(cycleIndex + 1)
+      .reduce((a, b) => a + b, 0);
+    const cycleHardCap =
+      maxIterations -
+      Math.floor(
+        maxIterations * laterShares * cfg.cycleReserveFraction,
+      );
+    // Мягкий потолок обязан оставаться под жёстким: иначе цикл,
+    // стартовавший поздно (предыдущий продлился), унёс бы свою
+    // номинальную долю за границу резерва и оставил финальную
+    // полировку без итераций.
+    const cycleSoftCap = Math.min(
+      cycleHardCap,
       cycleStartIter +
         Math.floor(maxIterations * (cycleShares[cycleIndex] ?? 0.3)),
     );
 
-    while (iter < cycleIterCap) {
+    // Прогресс меряем по bestScore: он монотонен, в отличие от
+    // currentBest, который SA умеет временно ухудшать.
+    let windowStartIter = iter;
+    let windowStartBest = bestScore;
+    let cycleStillImproving = true;
+
+    while (
+      iter < cycleHardCap &&
+      (iter < cycleSoftCap || cycleStillImproving)
+    ) {
       const prevGenome = genome.slice();
       const result = optimizeIteration(
         genome,
@@ -662,6 +748,7 @@ export const coordinateDescent = (
         phaseStep,
         cycle.minStep,
         usefulZone,
+        rng,
         temperature,
         relocationAttempts,
         cfg.maxRelocationAttemptsPerOsc,
@@ -706,6 +793,25 @@ export const coordinateDescent = (
 
       iter++;
       temperature *= cfg.saCoolingRate;
+
+      // Продуктивность цикла пересчитывается раз в окно: если за
+      // cycleProgressWindow итераций bestScore вырос меньше чем на
+      // cycleProgressEpsilon, цикл больше не продлевается за мягкий
+      // потолок и уступает итерации следующему.
+      if (iter - windowStartIter >= cfg.cycleProgressWindow) {
+        cycleStillImproving =
+          bestScore - windowStartBest >= cfg.cycleProgressEpsilon;
+        if (!cycleStillImproving && iter >= cycleSoftCap) {
+          console.log(
+            `[CoordDescent] Cycle ${cycle.label} stopped improving ` +
+              `(+${(bestScore - windowStartBest).toFixed(3)}pp over ` +
+              `${cfg.cycleProgressWindow} iters), advancing at ${iter}`,
+          );
+        }
+        windowStartIter = iter;
+        windowStartBest = bestScore;
+      }
+
       if (currentBest >= cfg.earlyExitSuppression) {
         break;
       }
@@ -729,7 +835,26 @@ export const coordinateDescent = (
 
       if (plateauCount >= cfg.plateauRestartThreshold) {
         restartCount++;
-        if (restartCount >= cfg.maxRestartsBeforeRandomRestart) {
+
+        // Полный random restart запрещён в финальном цикле: PRECISION —
+        // чистый greedy-доводчик, он стартует с best-ever генома при
+        // T=0, и рандомизация 9 параметров всех осцилляторов этот
+        // замысел отменяет. Замеренный случай (Untitled.wav, 500 iter):
+        // рестарт на 420-й итерации сбросил score с 84.75% до 71.86%
+        // (12.9 п.п. — под порогом randomRestartRegressionLimit, т.е.
+        // guard не сработал), и оставшихся 80 итераций не хватило,
+        // чтобы вернуться к прежнему максимуму. В финальном цикле
+        // эскалация плато останавливается на одиночном пинке — у него
+        // есть свой откат через kickFallbackThreshold.
+        const wantsRandomRestart =
+          restartCount >= cfg.maxRestartsBeforeRandomRestart;
+        if (wantsRandomRestart && isLastCycle) {
+          // Счётчик всё равно сбрасываем, иначе он копится до конца
+          // прогона и делает лог бессмысленным.
+          restartCount = 0;
+        }
+
+        if (wantsRandomRestart && !isLastCycle) {
           console.log(
             `[CoordDescent] Random restart at iter ${iter} (best=${bestScore.toFixed(4)}%, restarts=${restartCount})`,
           );
@@ -737,7 +862,7 @@ export const coordinateDescent = (
             if (idx % OSC_PARAMS === 0) {
               return v;
             }
-            return Math.random();
+            return rng();
           });
           waveformCache.rebuild(genome);
           syncFlagsToCache(genome, waveformCache, numOsc);
@@ -783,18 +908,15 @@ export const coordinateDescent = (
             enabledOscs.push(0);
           }
           const kickOsc =
-            enabledOscs[
-              Math.floor(Math.random() * enabledOscs.length)
-            ] ?? 0;
-          const kickParam =
-            1 + Math.floor(Math.random() * (OSC_PARAMS - 1));
+            enabledOscs[Math.floor(rng() * enabledOscs.length)] ?? 0;
+          const kickParam = 1 + Math.floor(rng() * (OSC_PARAMS - 1));
           const kickIdx = kickOsc * OSC_PARAMS + kickParam;
 
           console.log(
             `[CoordDescent] Plateau kick at iter ${iter}: osc[${kickOsc}].p[${kickParam}] (restart=${restartCount})`,
           );
 
-          genome[kickIdx] = Math.random();
+          genome[kickIdx] = rng();
           waveformCache.setParam(kickIdx, genome[kickIdx] ?? 0);
 
           syncFlagsToCache(genome, waveformCache, numOsc);
@@ -858,9 +980,10 @@ export const coordinateDescent = (
       );
     }
 
-    if (iter >= cycleIterCap && iter < maxIterations) {
+    if (iter >= cycleHardCap && iter < maxIterations) {
       console.log(
-        `[CoordDescent] Cycle ${cycle.label} hit share cap at iter ${iter}, advancing`,
+        `[CoordDescent] Cycle ${cycle.label} hit reserve cap at iter ${iter}` +
+          ` (soft cap was ${cycleSoftCap}), advancing`,
       );
     }
 
