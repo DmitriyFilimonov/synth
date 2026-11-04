@@ -181,7 +181,7 @@ Generate → Compare → Save WAV + SVG
 | `src/rms.ts`                     | Расчёт RMS энергии сигнала                                                                                                                                                                                                                                                                          |
 | `src/visualize.ts`               | Генерация SVG-графиков                                                                                                                                                                                                                                                                              |
 | `src/visualize-envelopes.ts`     | Визуализация огибающих первого осциллятора                                                                                                                                                                                                                                                          |
-| `src/frequency-envelope-visualization/` | Независимый чистый модуль `renderFrequencyEnvelopesSvg(patch, options) → string`; принимает `ArgCreateSynth` и опциональные нулевые `oscillatorIndices`, не зависит от Express, `fs`, DOM или React, использует математику частотной огибающей из `synth.ts`. Модуль реализован в T1, HTTP API — в T2, standalone UI — в T3; интеграция с результатами мэтчинга остаётся задачей T4. Контракт: `docs/spec-frequency-envelope-visualization.md` |
+| `src/frequency-envelope-visualization/` | Независимый чистый модуль `renderFrequencyEnvelopesSvg(patch, options) → string`; принимает `ArgCreateSynth` и опциональные нулевые `oscillatorIndices`, не зависит от Express, `fs`, DOM или React, использует математику частотной огибающей из `synth.ts`. Модуль реализован в T1, HTTP API — в T2, standalone UI и интеграция с результатами мэтчинга — в T3–T4. Контракт: `docs/spec-frequency-envelope-visualization.md` |
 | `src/match.ts`                   | Оркестратор мэтчинга: read → optimize → generate → visualize                                                                                                                                                                                                                                        |
 | `src/match-worker.ts`            | Обёртка для запуска оптимизации в worker-потоке                                                                                                                                                                                                                                                     |
 | `src/optimizer-worker.ts`        | Реализация worker-потока: запускает optimize, генерирует WAV, визуализацию                                                                                                                                                                                                                          |
@@ -437,8 +437,8 @@ web/src/
 | `shared/ui/`                | Примитивы: `Button`, `Input`, `Select`, `AudioPlayer`                         |
 | `shared/api/`               | `fetchApi<T>` (JSON), `fetchBlob` (binary)                                    |
 | `features/synth-generator/` | Форма генерации: выбор пресета, настройка осцилляторов                        |
-| `features/wav-matcher/`     | Форма подбора: загрузка WAV, создание job, отслеживание прогресса, скачивание |
-| `features/patch-visualizer/` | Загрузка и валидация JSON-патча, выбор активных осцилляторов с исходными индексами, предпросмотр через `<img>` и скачивание того же SVG Blob; публичный `PatchVisualizer` принимает опциональный `source?: { name, patch }` для внешнего патча. Реализовано в T3; связь с `wav-matcher` только через композицию в `App.tsx`, не через импорт между features |
+| `features/wav-matcher/`     | Форма подбора: загрузка WAV, создание job, отслеживание прогресса, скачивание; completed job с `synthConfig` передаёт сохранённый patch и имя job через `onVisualize` |
+| `features/patch-visualizer/` | Загрузка и валидация JSON-патча, выбор активных осцилляторов с исходными индексами, предпросмотр через `<img>` и скачивание того же SVG Blob; публичный `PatchVisualizer` принимает опциональный `source?: { name, patch }` для внешнего патча. Standalone UI реализован в T3, подключение completed job — в T4 через композицию в `App.tsx`, без импорта между features |
 | `app/`                      | Точка входа, корневой компонент                                               |
 
 **Правила:**
@@ -514,14 +514,17 @@ Express отдаёт статику из `web/dist/` и настроен как 
 
 **Поле `name` в job:** формат `"<targetFileName> DD.MM.YYYY HH:MM:SS"` (российский стандарт). Если `targetFileName` не передан — `"target DD.MM.YYYY HH:MM:SS"`.
 
-#### Визуализация (API и standalone UI реализованы в T2–T3; интеграция с Match ожидает T4)
+#### Визуализация (API, standalone UI и интеграция с Match реализованы в T2–T4)
 
 | Метод  | Путь                                          | Описание                                                                                                                                                         |
 | ------ | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST` | `/api/visualizations/frequency-envelopes` | JSON `{ patch, oscillatorIndices? }`; `patch` — полный валидный `ArgCreateSynth`; индексы нулевые и выбирают только активные осцилляторы → `200 image/svg+xml; charset=utf-8`, `Content-Disposition: inline`; ошибки входа → `400 { error }`, неожиданные → `500 { error }`; без сохранения SVG |
 
 Общий эндпоинт используется и для загруженного пользователем патча, и
-для `job.synthConfig`. Отдельный job-эндпоинт и повторный запуск
+для `job.synthConfig`. В completed job с `synthConfig` действие
+`Visualize frequency envelopes` передаёт сохранённый patch и имя job
+через `App.tsx` в `section#visualize`, прокручивает к ней страницу и не
+запускает оптимизацию. Отдельный job-эндпоинт и повторный запуск
 оптимизации не нужны. Полная спецификация:
 `docs/spec-frequency-envelope-visualization.md`. Реализация разбита на
 пять последовательных задач T1–T5 с ограниченным контекстом и одной

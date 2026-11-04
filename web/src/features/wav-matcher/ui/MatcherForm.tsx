@@ -10,6 +10,7 @@ import type {
   JobEntry,
   JobStatus,
   JobListEntry,
+  SynthConfig,
 } from '../model/types';
 import { AudioPlayer, Button, Input } from '@/shared/ui';
 import styles from './MatcherForm.module.css';
@@ -19,6 +20,10 @@ const CHART_COLOR_GRID = '#2a2a2a';
 const CHART_COLOR_AXIS = '#555555';
 
 type ViewMode = 'upload' | 'list' | 'detail';
+type VisualizeJob = (
+  synthConfig: SynthConfig,
+  jobName: string,
+) => void;
 const POLLING_INTERVAL = 1000;
 
 async function sleep(ms: number): Promise<void> {
@@ -124,9 +129,11 @@ function OptimizationChart({
 function JobDetail({
   jobId,
   onBack,
+  onVisualize,
 }: {
   jobId: string;
   onBack: () => void;
+  onVisualize: VisualizeJob;
 }) {
   const [job, setJob] = useState<JobEntry | null>(null);
   const [audioUrl, setAudioUrl] = useState<string>('');
@@ -219,6 +226,13 @@ function JobDetail({
     return jobId.slice(0, 8);
   })();
 
+  const handleVisualize = () => {
+    if (job?.status !== 'completed' || !job.synthConfig) {
+      return;
+    }
+    onVisualize(job.synthConfig, downloadBase);
+  };
+
   const currentSup = (() => {
     if (!job) return 0;
     if (job.progress.length > 0) {
@@ -292,6 +306,11 @@ function JobDetail({
           <Button onClick={handleDownloadParams}>
             Download JSON
           </Button>
+          {job.synthConfig && (
+            <Button variant="secondary" onClick={handleVisualize}>
+              Visualize frequency envelopes
+            </Button>
+          )}
         </div>
       )}
 
@@ -305,6 +324,11 @@ function JobDetail({
             <Button onClick={handleDownloadParams}>
               Download JSON
             </Button>
+            {job?.status === 'completed' && job.synthConfig && (
+              <Button variant="secondary" onClick={handleVisualize}>
+                Visualize frequency envelopes
+              </Button>
+            )}
           </div>
         </>
       )}
@@ -369,7 +393,11 @@ function JobListCard({
   );
 }
 
-export function MatcherForm() {
+export function MatcherForm({
+  onVisualize,
+}: {
+  onVisualize: VisualizeJob;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [numOscillators, setNumOscillators] = useState('5');
   const [maxIterations, setMaxIterations] = useState('20');
@@ -540,7 +568,11 @@ export function MatcherForm() {
       </div>
 
       {viewMode === 'detail' && selectedJobId ? (
-        <JobDetail jobId={selectedJobId} onBack={handleBack} />
+        <JobDetail
+          jobId={selectedJobId}
+          onBack={handleBack}
+          onVisualize={onVisualize}
+        />
       ) : viewMode === 'list' ? (
         <div className={styles.jobList}>
           {jobList.length === 0 ? (
