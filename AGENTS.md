@@ -523,7 +523,9 @@ Express отдаёт статику из `web/dist/` и настроен как 
 Общий эндпоинт используется и для загруженного пользователем патча, и
 для `job.synthConfig`. Отдельный job-эндпоинт и повторный запуск
 оптимизации не нужны. Полная спецификация:
-`docs/spec-frequency-envelope-visualization.md`.
+`docs/spec-frequency-envelope-visualization.md`. Реализация разбита на
+пять последовательных задач T1–T5 с ограниченным контекстом и одной
+финальной проверкой: `docs/plan-frequency-envelope-visualization.md`.
 
 ## Соглашения
 

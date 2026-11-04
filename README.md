@@ -298,6 +298,8 @@ npm run viz
 > **Статус:** спецификация утверждена, реализация ожидает отдельного
 > указания. Полный контракт находится в
 > [`docs/spec-frequency-envelope-visualization.md`](docs/spec-frequency-envelope-visualization.md).
+> Порядок реализации разбит на пять задач T1–T5 в
+> [`docs/plan-frequency-envelope-visualization.md`](docs/plan-frequency-envelope-visualization.md).
 
 Новый независимый модуль `src/frequency-envelope-visualization/`
 будет принимать `ArgCreateSynth` и возвращать SVG-строку без обращения
