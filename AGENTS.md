@@ -77,7 +77,7 @@ simple-init-vector). Пользователь задаёт только пара
 | `npm run prettier:check` | Проверка форматирования (без изменений)           |
 | `npm run lint`           | Проверка ESLint                                   |
 | `npm run lint:fix`       | Автофикс ESLint                                   |
-| `npm run test`           | Заглушка тестов (not specified)                   |
+| `npm run test`           | Сейчас заглушка; по утверждённой спецификации будет запускать unit-тесты через Node test runner + `tsx` |
 
 ### Веб-интерфейс (`web/`)
 
@@ -181,6 +181,7 @@ Generate → Compare → Save WAV + SVG
 | `src/rms.ts`                     | Расчёт RMS энергии сигнала                                                                                                                                                                                                                                                                          |
 | `src/visualize.ts`               | Генерация SVG-графиков                                                                                                                                                                                                                                                                              |
 | `src/visualize-envelopes.ts`     | Визуализация огибающих первого осциллятора                                                                                                                                                                                                                                                          |
+| `src/frequency-envelope-visualization/` | **Запланировано, ещё не реализовано:** независимый чистый модуль `renderFrequencyEnvelopesSvg(patch, options) → string`; принимает `ArgCreateSynth` и опциональные нулевые `oscillatorIndices`, не зависит от Express, `fs`, DOM или React, использует математику частотной огибающей из `synth.ts`. Контракт: `docs/spec-frequency-envelope-visualization.md` |
 | `src/match.ts`                   | Оркестратор мэтчинга: read → optimize → generate → visualize                                                                                                                                                                                                                                        |
 | `src/match-worker.ts`            | Обёртка для запуска оптимизации в worker-потоке                                                                                                                                                                                                                                                     |
 | `src/optimizer-worker.ts`        | Реализация worker-потока: запускает optimize, генерирует WAV, визуализацию                                                                                                                                                                                                                          |
@@ -399,6 +400,8 @@ src/api/routes/                      → Express Router (маршрутизац�
 | `src/api/services/job-store.ts`           | Хранение job-ов в `jobs/`: создание, обновление статуса, CRUD. Файлы: `<id>.json`, `<id>_input.wav`, `<id>_result.wav`                                             |
 | `src/api/controllers/synth-controller.ts` | Контроллеры: принимают `Request`, вызывают сервисы, формируют `Response`. Маппинг ошибок на HTTP-статусы                                                           |
 | `src/api/routes/synth-routes.ts`          | Express Router: определяет URL → controller. Только маршрутизация                                                                                                  |
+| `src/api/controllers/visualization-controller.ts` | **Запланировано:** тонкий HTTP-адаптер `ArgCreateSynth + oscillatorIndices?` → независимый SVG-модуль; ошибки входа → `400`, неожиданные → `500`             |
+| `src/api/routes/visualization-routes.ts`  | **Запланировано:** `POST /api/visualizations/frequency-envelopes`, ответ `image/svg+xml; charset=utf-8`; SVG только в памяти, без записи в `jobs/`              |
 
 ### Правила создания API
 
@@ -435,6 +438,7 @@ web/src/
 | `shared/api/`               | `fetchApi<T>` (JSON), `fetchBlob` (binary)                                    |
 | `features/synth-generator/` | Форма генерации: выбор пресета, настройка осцилляторов                        |
 | `features/wav-matcher/`     | Форма подбора: загрузка WAV, создание job, отслеживание прогресса, скачивание |
+| `features/patch-visualizer/` | **Запланировано:** загрузка JSON-патча, выбор активных осцилляторов, предпросмотр и скачивание одного SVG Blob. Связь с `wav-matcher` только через композицию в `App.tsx`, не через импорт между features |
 | `app/`                      | Точка входа, корневой компонент                                               |
 
 **Правила:**
@@ -509,6 +513,17 @@ Express отдаёт статику из `web/dist/` и настроен как 
 | `DELETE` | `/api/match/jobs/:id`                 | Удалить job и связанные файлы                                                                 |
 
 **Поле `name` в job:** формат `"<targetFileName> DD.MM.YYYY HH:MM:SS"` (российский стандарт). Если `targetFileName` не передан — `"target DD.MM.YYYY HH:MM:SS"`.
+
+#### Визуализация (утверждено, ожидает реализации)
+
+| Метод  | Путь                                          | Описание                                                                                                                                                         |
+| ------ | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/api/visualizations/frequency-envelopes` | JSON `{ patch, oscillatorIndices? }`; `patch` — полный валидный `ArgCreateSynth`; индексы нулевые и выбирают только активные осцилляторы → `200 image/svg+xml`; ошибки входа → `400`; без сохранения SVG |
+
+Общий эндпоинт используется и для загруженного пользователем патча, и
+для `job.synthConfig`. Отдельный job-эндпоинт и повторный запуск
+оптимизации не нужны. Полная спецификация:
+`docs/spec-frequency-envelope-visualization.md`.
 
 ## Соглашения
 
@@ -645,8 +660,11 @@ Express отдаёт статику из `web/dist/` и настроен как 
   README (графики чувствительности метрики), они в git.
 - `test-*.ts` и `tmp_opt_test.js` в корне — одноразовые
   отладочные скрипты (закоммичены, но вне `tsconfig` `include: ["src"]`).
-  Это НЕ тестовый набор: `npm run test` — заглушка. Не добавляй туда
-  новые файлы; новый код — только в `src/`.
+  Это НЕ тестовый набор: сейчас `npm run test` — заглушка. Не добавляй
+  туда новые файлы; новый код — только в `src/`. По утверждённой
+  спецификации визуализации тесты будут расположены рядом с модулем в
+  `src/frequency-envelope-visualization/`, а `npm test` будет запускать
+  их через Node test runner + `tsx` без новых зависимостей.
 - Prettier/ESLint покрывают только `src/**/*.ts` (см. scripts).
 
 ### Асимметрия маппинга
