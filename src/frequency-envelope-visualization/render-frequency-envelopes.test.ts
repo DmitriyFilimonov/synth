@@ -85,7 +85,7 @@ const svgHeight = (svg: string): number => {
   return Number(height);
 };
 
-test('frequency envelope matches the synthesizer formula', () => {
+void test('frequency envelope matches the synthesizer formula', () => {
   const { frequencyEnvelop } = frequencyEnvelopeCreator({
     base: 440,
     modulation: 440,
@@ -102,7 +102,7 @@ test('frequency envelope matches the synthesizer formula', () => {
   );
 });
 
-test('frequency envelope retains its final value after duration', () => {
+void test('frequency envelope retains its final value after duration', () => {
   const { frequencyEnvelop } = frequencyEnvelopeCreator({
     base: 440,
     modulation: 440,
@@ -115,7 +115,7 @@ test('frequency envelope retains its final value after duration', () => {
   assert.equal(frequencyEnvelop({ x: 0.5 }), atDuration);
 });
 
-test('renderer creates a standalone SVG with 500 intervals', () => {
+void test('renderer creates a standalone SVG with 500 intervals', () => {
   const svg = renderFrequencyEnvelopesSvg(clonePreset());
   const curveCount =
     svg.match(/<path data-curve="true"/g)?.length ?? 0;
@@ -134,7 +134,7 @@ test('renderer creates a standalone SVG with 500 intervals', () => {
   assert.doesNotMatch(svg, /<script|<image|<link/);
 });
 
-test('selection preserves patch order and stable original colors', () => {
+void test('selection preserves patch order and stable original colors', () => {
   const patch = createSelectionPatch();
   const selected = renderFrequencyEnvelopesSvg(patch, {
     oscillatorIndices: [2, 0],
@@ -157,7 +157,7 @@ test('selection preserves patch order and stable original colors', () => {
   assert.match(onlyThird, /OSC 03/);
 });
 
-test('default selection excludes inactive oscillators', () => {
+void test('default selection excludes inactive oscillators', () => {
   const svg = renderFrequencyEnvelopesSvg(createSelectionPatch());
 
   assert.match(svg, /OSC 01/);
@@ -165,7 +165,7 @@ test('default selection excludes inactive oscillators', () => {
   assert.match(svg, /OSC 03/);
 });
 
-test('invalid oscillator selections are rejected', () => {
+void test('invalid oscillator selections are rejected', () => {
   const patch = createSelectionPatch();
   const invalidSelections: readonly (readonly number[])[] = [
     [],
@@ -204,7 +204,7 @@ test('invalid oscillator selections are rejected', () => {
   );
 });
 
-test('patch validation rejects malformed fields and ranges', () => {
+void test('patch validation rejects malformed fields and ranges', () => {
   const nonFinite = clonePreset();
   firstOscillator(nonFinite).osc.freqBase = Number.NaN;
 
@@ -241,7 +241,7 @@ test('patch validation rejects malformed fields and ranges', () => {
   });
 });
 
-test('optional endLevel and unknown extra fields are accepted', () => {
+void test('optional endLevel and unknown extra fields are accepted', () => {
   const patch = clonePreset() as ArgCreateSynth & {
     description?: string;
   };
@@ -251,7 +251,7 @@ test('optional endLevel and unknown extra fields are accepted', () => {
   assert.doesNotThrow(() => renderFrequencyEnvelopesSvg(patch));
 });
 
-test('rendering is deterministic and sizes the legend by rows', () => {
+void test('rendering is deterministic and sizes the legend by rows', () => {
   const patch = clonePreset();
   const source = firstOscillator(patch);
 

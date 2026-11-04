@@ -1,4 +1,8 @@
-import type { ActiveOscillator, SynthPatch } from './types';
+import type {
+  ActiveOscillator,
+  PatchOscillator,
+  SynthPatch,
+} from './types';
 
 const OSCILLATOR_NUMBER_FIELDS = [
   'freqBase',
@@ -38,6 +42,41 @@ function validateFiniteFields(
   }
 }
 
+/** Validate and narrow one oscillator entry. */
+function validateOscillator(
+  entry: unknown,
+  index: number,
+): asserts entry is PatchOscillator {
+  const path = `oscillators[${index}]`;
+  if (!isRecord(entry) || !isRecord(entry.osc)) {
+    throw new Error(`Invalid patch: ${path}.osc must be an object.`);
+  }
+
+  validateFiniteFields(
+    entry.osc,
+    OSCILLATOR_NUMBER_FIELDS,
+    `${path}.osc`,
+  );
+  if (typeof entry.osc.on !== 'boolean') {
+    throw new Error(
+      `Invalid patch: ${path}.osc.on must be a boolean.`,
+    );
+  }
+
+  if (entry.ampEnv !== undefined) {
+    if (!isRecord(entry.ampEnv)) {
+      throw new Error(
+        `Invalid patch: ${path}.ampEnv must be an object.`,
+      );
+    }
+    validateFiniteFields(
+      entry.ampEnv,
+      AMPLITUDE_NUMBER_FIELDS,
+      `${path}.ampEnv`,
+    );
+  }
+}
+
 /** Parse JSON text while preserving patch validation as a separate step. */
 export function parsePatchJson(text: string): unknown {
   try {
@@ -66,40 +105,13 @@ export function validatePatch(value: unknown): SynthPatch {
     );
   }
 
+  const oscillators: PatchOscillator[] = [];
   value.oscillators.forEach((entry, index) => {
-    const path = `oscillators[${index}]`;
-    if (!isRecord(entry) || !isRecord(entry.osc)) {
-      throw new Error(
-        `Invalid patch: ${path}.osc must be an object.`,
-      );
-    }
-
-    validateFiniteFields(
-      entry.osc,
-      OSCILLATOR_NUMBER_FIELDS,
-      `${path}.osc`,
-    );
-    if (typeof entry.osc.on !== 'boolean') {
-      throw new Error(
-        `Invalid patch: ${path}.osc.on must be a boolean.`,
-      );
-    }
-
-    if (entry.ampEnv !== undefined) {
-      if (!isRecord(entry.ampEnv)) {
-        throw new Error(
-          `Invalid patch: ${path}.ampEnv must be an object.`,
-        );
-      }
-      validateFiniteFields(
-        entry.ampEnv,
-        AMPLITUDE_NUMBER_FIELDS,
-        `${path}.ampEnv`,
-      );
-    }
+    validateOscillator(entry, index);
+    oscillators.push(entry);
   });
 
-  return value as SynthPatch;
+  return { ...value, oscillators };
 }
 
 /** Return active oscillators with their original zero-based indices. */

@@ -526,9 +526,9 @@ Express отдаёт статику из `web/dist/` и настроен как 
 через `App.tsx` в `section#visualize`, прокручивает к ней страницу и не
 запускает оптимизацию. Отдельный job-эндпоинт и повторный запуск
 оптимизации не нужны. Полная спецификация:
-`docs/spec-frequency-envelope-visualization.md`. Реализация разбита на
-пять последовательных задач T1–T5 с ограниченным контекстом и одной
-финальной проверкой: `docs/plan-frequency-envelope-visualization.md`.
+`docs/spec-frequency-envelope-visualization.md`. Реализация T1–T5 и
+финальный комплекс проверок завершены; порядок работ и фактические
+результаты: `docs/plan-frequency-envelope-visualization.md`.
 
 ## Соглашения
 
