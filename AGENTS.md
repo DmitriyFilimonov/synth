@@ -77,7 +77,7 @@ simple-init-vector). Пользователь задаёт только пара
 | `npm run prettier:check` | Проверка форматирования (без изменений)           |
 | `npm run lint`           | Проверка ESLint                                   |
 | `npm run lint:fix`       | Автофикс ESLint                                   |
-| `npm run test`           | Сейчас заглушка; по утверждённой спецификации будет запускать unit-тесты через Node test runner + `tsx` |
+| `npm run test`           | Unit-тесты визуализации частотных огибающих через Node test runner + `tsx` |
 
 ### Веб-интерфейс (`web/`)
 
@@ -181,7 +181,7 @@ Generate → Compare → Save WAV + SVG
 | `src/rms.ts`                     | Расчёт RMS энергии сигнала                                                                                                                                                                                                                                                                          |
 | `src/visualize.ts`               | Генерация SVG-графиков                                                                                                                                                                                                                                                                              |
 | `src/visualize-envelopes.ts`     | Визуализация огибающих первого осциллятора                                                                                                                                                                                                                                                          |
-| `src/frequency-envelope-visualization/` | **Запланировано, ещё не реализовано:** независимый чистый модуль `renderFrequencyEnvelopesSvg(patch, options) → string`; принимает `ArgCreateSynth` и опциональные нулевые `oscillatorIndices`, не зависит от Express, `fs`, DOM или React, использует математику частотной огибающей из `synth.ts`. Контракт: `docs/spec-frequency-envelope-visualization.md` |
+| `src/frequency-envelope-visualization/` | Независимый чистый модуль `renderFrequencyEnvelopesSvg(patch, options) → string`; принимает `ArgCreateSynth` и опциональные нулевые `oscillatorIndices`, не зависит от Express, `fs`, DOM или React, использует математику частотной огибающей из `synth.ts`. Реализовано в T1; API/UI остаются следующими задачами. Контракт: `docs/spec-frequency-envelope-visualization.md` |
 | `src/match.ts`                   | Оркестратор мэтчинга: read → optimize → generate → visualize                                                                                                                                                                                                                                        |
 | `src/match-worker.ts`            | Обёртка для запуска оптимизации в worker-потоке                                                                                                                                                                                                                                                     |
 | `src/optimizer-worker.ts`        | Реализация worker-потока: запускает optimize, генерирует WAV, визуализацию                                                                                                                                                                                                                          |
@@ -662,11 +662,10 @@ Express отдаёт статику из `web/dist/` и настроен как 
   README (графики чувствительности метрики), они в git.
 - `test-*.ts` и `tmp_opt_test.js` в корне — одноразовые
   отладочные скрипты (закоммичены, но вне `tsconfig` `include: ["src"]`).
-  Это НЕ тестовый набор: сейчас `npm run test` — заглушка. Не добавляй
-  туда новые файлы; новый код — только в `src/`. По утверждённой
-  спецификации визуализации тесты будут расположены рядом с модулем в
-  `src/frequency-envelope-visualization/`, а `npm test` будет запускать
-  их через Node test runner + `tsx` без новых зависимостей.
+  Это НЕ тестовый набор. Не добавляй туда новые файлы; новый код —
+  только в `src/`. Тесты визуализации расположены рядом с модулем в
+  `src/frequency-envelope-visualization/`; `npm test` запускает их
+  через Node test runner + `tsx` без новых зависимостей.
 - Prettier/ESLint покрывают только `src/**/*.ts` (см. scripts).
 
 ### Асимметрия маппинга
