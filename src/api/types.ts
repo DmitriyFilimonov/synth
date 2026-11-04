@@ -23,6 +23,12 @@ export interface GenerateRequest {
   sampleRate?: number;
 }
 
+/** Request body for frequency-envelope SVG visualization. */
+export interface FrequencyEnvelopeVisualizationRequest {
+  patch: ArgCreateSynth;
+  oscillatorIndices?: readonly number[];
+}
+
 export interface MatchRequestBody {
   numOscillators?: number;
   maxIterations?: number;
