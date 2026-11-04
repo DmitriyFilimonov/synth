@@ -181,7 +181,7 @@ Generate → Compare → Save WAV + SVG
 | `src/rms.ts`                     | Расчёт RMS энергии сигнала                                                                                                                                                                                                                                                                          |
 | `src/visualize.ts`               | Генерация SVG-графиков                                                                                                                                                                                                                                                                              |
 | `src/visualize-envelopes.ts`     | Визуализация огибающих первого осциллятора                                                                                                                                                                                                                                                          |
-| `src/frequency-envelope-visualization/` | Независимый чистый модуль `renderFrequencyEnvelopesSvg(patch, options) → string`; принимает `ArgCreateSynth` и опциональные нулевые `oscillatorIndices`, не зависит от Express, `fs`, DOM или React, использует математику частотной огибающей из `synth.ts`. Модуль реализован в T1, HTTP API — в T2; UI остаётся задачами T3–T4. Контракт: `docs/spec-frequency-envelope-visualization.md` |
+| `src/frequency-envelope-visualization/` | Независимый чистый модуль `renderFrequencyEnvelopesSvg(patch, options) → string`; принимает `ArgCreateSynth` и опциональные нулевые `oscillatorIndices`, не зависит от Express, `fs`, DOM или React, использует математику частотной огибающей из `synth.ts`. Модуль реализован в T1, HTTP API — в T2, standalone UI — в T3; интеграция с результатами мэтчинга остаётся задачей T4. Контракт: `docs/spec-frequency-envelope-visualization.md` |
 | `src/match.ts`                   | Оркестратор мэтчинга: read → optimize → generate → visualize                                                                                                                                                                                                                                        |
 | `src/match-worker.ts`            | Обёртка для запуска оптимизации в worker-потоке                                                                                                                                                                                                                                                     |
 | `src/optimizer-worker.ts`        | Реализация worker-потока: запускает optimize, генерирует WAV, визуализацию                                                                                                                                                                                                                          |
@@ -438,7 +438,7 @@ web/src/
 | `shared/api/`               | `fetchApi<T>` (JSON), `fetchBlob` (binary)                                    |
 | `features/synth-generator/` | Форма генерации: выбор пресета, настройка осцилляторов                        |
 | `features/wav-matcher/`     | Форма подбора: загрузка WAV, создание job, отслеживание прогресса, скачивание |
-| `features/patch-visualizer/` | **Запланировано:** загрузка JSON-патча, выбор активных осцилляторов, предпросмотр и скачивание одного SVG Blob. Связь с `wav-matcher` только через композицию в `App.tsx`, не через импорт между features |
+| `features/patch-visualizer/` | Загрузка и валидация JSON-патча, выбор активных осцилляторов с исходными индексами, предпросмотр через `<img>` и скачивание того же SVG Blob; публичный `PatchVisualizer` принимает опциональный `source?: { name, patch }` для внешнего патча. Реализовано в T3; связь с `wav-matcher` только через композицию в `App.tsx`, не через импорт между features |
 | `app/`                      | Точка входа, корневой компонент                                               |
 
 **Правила:**
@@ -514,7 +514,7 @@ Express отдаёт статику из `web/dist/` и настроен как 
 
 **Поле `name` в job:** формат `"<targetFileName> DD.MM.YYYY HH:MM:SS"` (российский стандарт). Если `targetFileName` не передан — `"target DD.MM.YYYY HH:MM:SS"`.
 
-#### Визуализация (API реализовано в T2; UI ожидает T3–T4)
+#### Визуализация (API и standalone UI реализованы в T2–T3; интеграция с Match ожидает T4)
 
 | Метод  | Путь                                          | Описание                                                                                                                                                         |
 | ------ | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -1,3 +1,4 @@
+import { PatchVisualizer } from '@/features/patch-visualizer';
 import { GeneratorForm } from '@/features/synth-generator';
 import { MatcherForm } from '@/features/wav-matcher';
 import styles from './App.module.css';
@@ -21,6 +22,11 @@ export function App() {
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>Match</h2>
         <MatcherForm />
+      </section>
+
+      <section id="visualize" className={styles.section}>
+        <h2 className={styles.sectionTitle}>Visualize</h2>
+        <PatchVisualizer />
       </section>
 
       <footer className={styles.footer}>
