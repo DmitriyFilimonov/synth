@@ -10,7 +10,8 @@ interface ArgFrequncyEnvelopeCreator {
   slope: number;
 }
 
-const frequencyEnvelopeCreator = ({
+/** Create the frequency envelope used by synthesizer oscillators. */
+export const frequencyEnvelopeCreator = ({
   modulation,
   base,
   duration,

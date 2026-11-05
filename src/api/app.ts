@@ -3,6 +3,7 @@ import type { Express } from 'express';
 import { join } from 'path';
 import { SAMPLE_RATE } from '../consts';
 import synthRoutes from './routes/synth-routes';
+import visualizationRoutes from './routes/visualization-routes';
 
 export function createApp(): Express {
   const app = express();
@@ -36,6 +37,7 @@ export function createApp(): Express {
   });
 
   app.use('/api', synthRoutes);
+  app.use('/api/visualizations', visualizationRoutes);
 
   app.use(express.static(webDist));
 

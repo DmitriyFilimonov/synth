@@ -293,6 +293,77 @@ npm run viz
 
 Чтобы изменить визуализируемый пресет, отредактируйте `src/visualize-envelopes.ts` (строка `synthPreset1`).
 
+#### Визуализация частотных огибающих из патча
+
+> **Статус:** реализовано; финальный комплекс проверок T5 успешно
+> завершён. Полный контракт находится в
+> [`docs/spec-frequency-envelope-visualization.md`](docs/spec-frequency-envelope-visualization.md),
+> результаты проверок — в
+> [`docs/plan-frequency-envelope-visualization.md`](docs/plan-frequency-envelope-visualization.md).
+
+Независимый модуль `src/frequency-envelope-visualization/` принимает
+`ArgCreateSynth` и возвращает SVG-строку без обращения к Express,
+файловой системе или DOM:
+
+```ts
+renderFrequencyEnvelopesSvg(patch, {
+  oscillatorIndices: [0, 2, 4],
+});
+```
+
+Если `oscillatorIndices` не передан, визуализируются все активные
+осцилляторы. Если передан, в общий SVG попадают только выбранные
+активные осцилляторы. Математика кривых используется из `src/synth.ts`,
+включая clamp после `osc.duration`; формула не дублируется. Ось Y
+логарифмическая: равные отношения частот занимают одинаковые
+вертикальные интервалы, поэтому саб-бас остаётся различимым рядом с
+высокочастотными кривыми.
+
+Web API использует модуль через эндпоинт:
+
+```http
+POST /api/visualizations/frequency-envelopes
+Content-Type: application/json
+```
+
+```json
+{
+  "patch": {
+    "oscillators": [
+      {
+        "osc": {
+          "freqBase": 440,
+          "freqStart": 880,
+          "duration": 0.5,
+          "slope": 0.8,
+          "phase": 0,
+          "on": true
+        },
+        "ampEnv": {
+          "startLevel": 0.5,
+          "endLevel": 0.001,
+          "duration": 0.5,
+          "slope": 0.8
+        }
+      }
+    ]
+  },
+  "oscillatorIndices": [0]
+}
+```
+
+Здесь `patch` должен содержать валидный `ArgCreateSynth`. Ответ —
+`image/svg+xml; charset=utf-8`. SVG создаётся в памяти и не сохраняется
+в `jobs/`. Отдельный эндпоинт для job не требуется: UI отправляет уже
+полученный `job.synthConfig` в общий эндпоинт.
+
+В отдельной секции `Visualize` можно загрузить JSON-патч, выбрать
+огибающие, просмотреть и скачать SVG. В завершённом задании мэтчинга
+действие `Visualize frequency envelopes` передаёт сохранённый
+`synthConfig` в ту же секцию без повторной оптимизации. Предпросмотр и
+скачиваемый файл используют один SVG Blob, поэтому содержат одинаковый
+выбранный набор кривых.
+
 ### 3. Подбор параметров к WAV
 
 Анализирует целевой WAV-файл, оптимизирует конфигурацию осцилляторов (coordinate descent + simulated annealing + residual-guided relocation) и создаёт JSON параметров осцилляторов + воссозданный WAV + визуализацию сравнения. Оптимизация выполняется в отдельном worker-потоке (`optimizer-worker.ts`), чтобы не блокировать основной поток.
@@ -485,6 +556,7 @@ npm run lint:fix       # ESLint (автофикс)
 | `src/adaptive-init-vector.ts`       | Адаптивная инициализация: детекция биений через amplitude modulation                                                                                                                                      |
 | `src/visualize-envelopes.ts`        | Генерация SVG огибающих                                                                                                                                                                                   |
 | `src/visualize.ts`                  | Утилита для построения SVG-графиков                                                                                                                                                                       |
+| `src/frequency-envelope-visualization/` | Независимый модуль `ArgCreateSynth` → SVG-строка частотных огибающих, без Express, файлового I/O и DOM                                                                                          |
 | `src/synth.ts`                      | Создатель синтезатора                                                                                                                                                                                     |
 | `src/oscillator.ts`                 | Расчёт сигнала осциллятора                                                                                                                                                                                |
 | `src/envelope.ts`                   | Экспоненциальная функция огибающей                                                                                                                                                                        |
@@ -500,6 +572,7 @@ npm run lint:fix       # ESLint (автофикс)
 | `web/src/app/`                      | Инициализация приложения, корневой лейаут                                                                                                                                                                 |
 | `web/src/features/synth-generator/` | Фича генерации WAV                                                                                                                                                                                        |
 | `web/src/features/wav-matcher/`     | Фича подбора параметров к WAV                                                                                                                                                                             |
+| `web/src/features/patch-visualizer/` | Загрузка JSON-патча, выбор частотных огибающих, предпросмотр и скачивание SVG                                                                                                                       |
 | `web/src/shared/ui/`                | Переиспользуемые UI-компоненты: `Button`, `Input`, `Select`, `AudioPlayer`                                                                                                                                |
 | `web/src/shared/api/`               | Базовый HTTP-клиент (`fetchApi`, `fetchBlob`)                                                                                                                                                             |
 
@@ -543,6 +616,12 @@ npm run lint:fix       # ESLint (автофикс)
 | `GET`    | `/api/match/jobs/:id/download`        | Скачать результат WAV (completed job)           |
 | `GET`    | `/api/match/jobs/:id/download-params` | Скачать параметры подбора JSON (completed job)  |
 | `DELETE` | `/api/match/jobs/:id`                 | Удалить job и связанные файлы                   |
+
+#### Визуализация
+
+| Метод  | Путь                                          | Описание                                                                                                      |
+| ------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/api/visualizations/frequency-envelopes` | JSON `{ patch, oscillatorIndices? }` с валидным `ArgCreateSynth` → SVG выбранных частотных огибающих в памяти |
 
 **Важные детали**
 

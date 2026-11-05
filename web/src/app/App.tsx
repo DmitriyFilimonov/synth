@@ -1,8 +1,27 @@
+import { useCallback, useState } from 'react';
+import {
+  PatchVisualizer,
+  type PatchVisualizerSource,
+} from '@/features/patch-visualizer';
 import { GeneratorForm } from '@/features/synth-generator';
 import { MatcherForm } from '@/features/wav-matcher';
 import styles from './App.module.css';
 
 export function App() {
+  const [visualizerSource, setVisualizerSource] =
+    useState<PatchVisualizerSource | null>(null);
+
+  const handleVisualize = useCallback(
+    (patch: PatchVisualizerSource['patch'], name: string) => {
+      setVisualizerSource({ name, patch });
+      document.getElementById('visualize')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    },
+    [],
+  );
+
   return (
     <main className={styles.layout}>
       <header className={styles.header}>
@@ -20,7 +39,12 @@ export function App() {
 
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>Match</h2>
-        <MatcherForm />
+        <MatcherForm onVisualize={handleVisualize} />
+      </section>
+
+      <section id="visualize" className={styles.section}>
+        <h2 className={styles.sectionTitle}>Visualize</h2>
+        <PatchVisualizer source={visualizerSource} />
       </section>
 
       <footer className={styles.footer}>
