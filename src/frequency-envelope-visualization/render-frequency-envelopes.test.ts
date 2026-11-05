@@ -78,6 +78,13 @@ const curveColor = (svg: string, index: number): string => {
   return color;
 };
 
+/** Extract the first vertical coordinate from one curve. */
+const curveStartY = (svg: string, index: number): number => {
+  const y = curveTag(svg, index).match(/ d="M [^ ]+ ([^ ]+)/)?.[1];
+  assert.ok(y, 'Curve must have a starting Y coordinate');
+  return Number(y);
+};
+
 /** Extract the numeric root SVG height. */
 const svgHeight = (svg: string): number => {
   const height = svg.match(/<svg[^>]+ height="(\d+)"/)?.[1];
@@ -130,8 +137,32 @@ void test('renderer creates a standalone SVG with 500 intervals', () => {
   assert.ok(firstPath, 'Curve must contain path data');
   assert.equal(firstPath.match(/[ML] /g)?.length, 501);
   assert.match(svg, /Time \(s\)/);
-  assert.match(svg, /Frequency \(Hz\)/);
+  assert.match(svg, /Frequency \(Hz, log\)/);
   assert.doesNotMatch(svg, /<script|<image|<link/);
+});
+
+void test('Y axis gives equal frequency ratios equal vertical spacing', () => {
+  const source = firstOscillator(clonePreset());
+  const patch: ArgCreateSynth = {
+    oscillators: [40, 400, 4000].map((frequency) => ({
+      osc: {
+        ...source.osc,
+        freqBase: frequency,
+        freqStart: frequency,
+        on: true,
+      },
+      ampEnv: { ...source.ampEnv },
+    })),
+  };
+
+  const svg = renderFrequencyEnvelopesSvg(patch);
+  const lowY = curveStartY(svg, 0);
+  const middleY = curveStartY(svg, 1);
+  const highY = curveStartY(svg, 2);
+
+  assert.ok(lowY > middleY);
+  assert.ok(middleY > highY);
+  assert.ok(Math.abs(lowY - middleY - (middleY - highY)) < 0.002);
 });
 
 void test('selection preserves patch order and stable original colors', () => {

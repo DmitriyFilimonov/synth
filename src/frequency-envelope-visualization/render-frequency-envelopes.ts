@@ -312,25 +312,22 @@ const buildSvg = (curves: Curve[]): string => {
     });
   });
 
-  const frequencySpan = maximumFrequency - minimumFrequency;
-  const padding =
-    frequencySpan === 0
-      ? Math.max(1, Math.abs(minimumFrequency) * 0.05)
-      : frequencySpan * 0.08;
-  const minimumY = Math.max(0, minimumFrequency - padding);
-  let maximumY = maximumFrequency + padding;
-
-  if (maximumY === minimumY) {
-    maximumY = minimumY + 1;
-  }
+  const logFrequencySpan = Math.log(
+    maximumFrequency / minimumFrequency,
+  );
+  const logPadding =
+    logFrequencySpan === 0 ? Math.log(1.05) : logFrequencySpan * 0.08;
+  const minimumLogY = Math.log(minimumFrequency) - logPadding;
+  const maximumLogY = Math.log(maximumFrequency) + logPadding;
 
   const plotWidth = PLOT_RIGHT - PLOT_LEFT;
   const plotHeight = PLOT_BOTTOM - PLOT_TOP;
-  const ySpan = maximumY - minimumY;
+  const logYSpan = maximumLogY - minimumLogY;
   const toSvgX = (time: number): number =>
     PLOT_LEFT + (time / SAMPLE_LENGTH_IN_SECONDS) * plotWidth;
   const toSvgY = (frequency: number): number =>
-    PLOT_BOTTOM - ((frequency - minimumY) / ySpan) * plotHeight;
+    PLOT_BOTTOM -
+    ((Math.log(frequency) - minimumLogY) / logYSpan) * plotHeight;
   const legendRows = Math.ceil(curves.length / LEGEND_COLUMNS);
   const legendStartY = PLOT_BOTTOM + 70;
   const svgHeight =
@@ -341,7 +338,7 @@ const buildSvg = (curves: Curve[]): string => {
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<svg xmlns="http://www.w3.org/2000/svg" width="${SVG_WIDTH}" height="${svgHeight}" viewBox="0 0 ${SVG_WIDTH} ${svgHeight}" role="img" aria-labelledby="frequency-envelopes-title" font-family="monospace">`,
     '<title id="frequency-envelopes-title">Frequency envelopes</title>',
-    '<desc>Frequency in hertz over 0.5 seconds for the selected oscillators.</desc>',
+    '<desc>Frequency in hertz on a logarithmic scale over 0.5 seconds for the selected oscillators.</desc>',
     `<rect width="${SVG_WIDTH}" height="${svgHeight}" fill="#ffffff"/>`,
     '<text x="500" y="28" text-anchor="middle" font-size="20" fill="#111827">Frequency envelopes</text>',
   );
@@ -356,7 +353,9 @@ const buildSvg = (curves: Curve[]): string => {
   }
 
   for (let tick = 0; tick <= Y_TICK_INTERVALS; tick += 1) {
-    const frequency = minimumY + (ySpan * tick) / Y_TICK_INTERVALS;
+    const frequency = Math.exp(
+      minimumLogY + (logYSpan * tick) / Y_TICK_INTERVALS,
+    );
     const y = toSvgY(frequency);
     elements.push(
       `<line x1="${PLOT_LEFT}" y1="${formatNumber(y)}" x2="${PLOT_RIGHT}" y2="${formatNumber(y)}" stroke="#e5e7eb" stroke-width="1"/>`,
@@ -367,7 +366,7 @@ const buildSvg = (curves: Curve[]): string => {
   elements.push(
     `<rect x="${PLOT_LEFT}" y="${PLOT_TOP}" width="${plotWidth}" height="${plotHeight}" fill="none" stroke="#6b7280" stroke-width="1"/>`,
     '<text x="530" y="458" text-anchor="middle" font-size="14" fill="#111827">Time (s)</text>',
-    '<text x="22" y="230" text-anchor="middle" font-size="14" fill="#111827" transform="rotate(-90 22 230)">Frequency (Hz)</text>',
+    '<text x="22" y="230" text-anchor="middle" font-size="14" fill="#111827" transform="rotate(-90 22 230)">Frequency (Hz, log)</text>',
   );
 
   curves.forEach((curve) => {
