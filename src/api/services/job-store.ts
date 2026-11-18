@@ -34,6 +34,8 @@ export interface JobRecord {
     stepDecayFactor?: number;
     /** Множитель веса окон метрики в первые 10 мс. `1` — без усиления. */
     attackBoost?: number;
+    /** Сид ГПСЧ оптимизатора; без него прогон идёт с дефолтным сидом. */
+    seed?: number;
     stageDurationMultiplier?: number;
     hpoTrials?: number;
     hpo?: boolean;
@@ -128,6 +130,8 @@ export async function createJob(
     stepDecayFactor?: number;
     /** Множитель веса окон метрики в первые 10 мс. `1` — без усиления. */
     attackBoost?: number;
+    /** Сид ГПСЧ оптимизатора; без него прогон идёт с дефолтным сидом. */
+    seed?: number;
     stageDurationMultiplier?: number;
     hpoTrials?: number;
     hpo?: boolean;

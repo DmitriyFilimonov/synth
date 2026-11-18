@@ -69,6 +69,8 @@ export interface CreateMatchJobRequest {
   stepDecayFactor?: number;
   /** См. `MatchRequestBody.attackBoost`. */
   attackBoost?: number;
+  /** Сид ГПСЧ оптимизатора; без него прогон идёт с дефолтным сидом. */
+  seed?: number;
   wavBase64?: string;
   /** Название целевого файла (отображается в UI как "targetFileName DD.MM.YYYY HH:MM:SS") */
   targetFileName?: string;

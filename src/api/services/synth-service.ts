@@ -170,6 +170,7 @@ export async function matchWavWithJob(
   stepDecayFactor?: number,
   targetFileName?: string,
   attackBoost?: number,
+  seed?: number,
 ): Promise<string> {
   const jobId = randomUUID();
   const inputFileName = `${jobId}_input.wav`;
@@ -183,6 +184,7 @@ export async function matchWavWithJob(
       stepGrowthAdd,
       stepDecayFactor,
       attackBoost,
+      seed,
     },
     inputFileName,
     jobName,
@@ -200,6 +202,7 @@ export async function matchWavWithJob(
       stepGrowthAdd,
       stepDecayFactor,
       attackBoost,
+      seed,
     ).catch((err) => {
       const message =
         err instanceof Error ? err.message : 'Unknown error';
@@ -220,6 +223,7 @@ async function runMatchJob(
   stepGrowthAdd?: number,
   stepDecayFactor?: number,
   attackBoost?: number,
+  seed?: number,
 ): Promise<void> {
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
   const history: {
@@ -252,6 +256,7 @@ async function runMatchJob(
       attackBoost,
       stepGrowthAdd,
       stepDecayFactor,
+      seed,
       onProgress: (entry) => {
         // Strip bestVector from history entries — it bloats the
         // job.json file and duplicates data we persist separately.

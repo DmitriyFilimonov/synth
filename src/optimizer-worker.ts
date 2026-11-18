@@ -71,6 +71,11 @@ interface WorkerMessage {
   attackBoost?: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
+  /**
+   * Сид ГПСЧ оптимизатора. Если не задан, прогон идёт с сидом из
+   * `DEFAULT_COORD_DESCENT_CONFIG` — поведение по умолчанию не меняется.
+   */
+  seed?: number;
 }
 
 parentPort.on('message', (msg: WorkerMessage) => {
@@ -96,6 +101,9 @@ parentPort.on('message', (msg: WorkerMessage) => {
       maxIterations: msg.maxIterations,
       stepGrowthAdd: msg.stepGrowthAdd,
       stepDecayFactor: msg.stepDecayFactor,
+      // Собираем config условно: spread `...DEFAULT, ...config`
+      // в coordinateDescent затирал бы дефолт значением undefined.
+      config: typeof msg.seed === 'number' ? { seed: msg.seed } : {},
       onProgress: (entry) => {
         const now = Date.now();
         if (now - lastProgressMs >= PROGRESS_THROTTLE_MS) {

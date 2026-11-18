@@ -219,6 +219,8 @@ export const createMatchJobHandler = async (
     const attackBoost = isNaN(attackBoostFloat)
       ? undefined
       : attackBoostFloat;
+    const seedInt = parseInt(queryParams.seed ?? '', 10);
+    const seed = isNaN(seedInt) ? undefined : seedInt;
 
     const jobId = await matchWavWithJob(
       req.body,
@@ -230,6 +232,7 @@ export const createMatchJobHandler = async (
       stepDecayFactor,
       queryParams.fileName,
       attackBoost,
+      seed,
     );
 
     res.status(202).json({ id: jobId });
@@ -269,6 +272,7 @@ export const createMatchJobJsonHandler = async (
       body.stepDecayFactor,
       body.targetFileName,
       body.attackBoost,
+      body.seed,
     );
 
     res.status(202).json({ id: jobId });

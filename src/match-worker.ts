@@ -36,6 +36,8 @@ interface MatchWorkerArgs {
   attackBoost?: number;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
+  /** Сид ГПСЧ оптимизатора; без него прогон идёт с дефолтным сидом. */
+  seed?: number;
   onProgress?: (entry: MatchWorkerProgress) => void;
 }
 
@@ -95,6 +97,7 @@ export function matchWithWorker(
       attackBoost: arg.attackBoost,
       stepGrowthAdd: arg.stepGrowthAdd,
       stepDecayFactor: arg.stepDecayFactor,
+      seed: arg.seed,
     });
   });
 }
