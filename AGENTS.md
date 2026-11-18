@@ -702,31 +702,6 @@ setsid nohup .opencode/tools/quota-watchdog.sh <sessionID> \
    содержит невалидный JSON, отсутствует — создавай дефолтный record,
    а не падай с `SyntaxError` или `ENOENT`.
 
-### Самовозобновление при исчерпании лимитов (quota-watchdog)
-
-При 429/квоте модель умирает посреди хода, и ретраить некому —
-ретрай живёт снаружи модели, в `.opencode/tools/quota-watchdog.sh`.
-Сторожок опрашивает сессию через `opencode api` и при
-`outcome = failed` без свежей занятости шлёт пробный prompt с
-экспоненциальной задержкой (5 → 30 мин), пока провайдер не
-восстановится и сессия не проснётся сама.
-
-**Запуск** (отсоединённо, переживает рестарт харнесса):
-
-```bash
-setsid nohup .opencode/tools/quota-watchdog.sh <sessionID> \
-  >> /tmp/opencode/quota-watchdog.log 2>&1 < /dev/null &
-```
-
-Лог — `/tmp/opencode/quota-watchdog.log`. Остановка — по PID из
-лога запуска. На новой сессии сторожок перезапускай с её ID.
-
-**Для агента, который читает пробник `[quota-watchdog]` в
-сессии:** это автоматика, не пользователь. Не отвечай пересказом —
-прочти реестр задач в `docs/plan-kick-enhancement.md`, проверь
-`npx tsx src/dataset/dataset-status.ts --dataset datasets/reference-4`
-и продолжи с текущего незавершённого пункта.
-
 ### Prettier (`.prettierrc`)
 
 - `semi: true`
