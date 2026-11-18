@@ -22,20 +22,20 @@
  * result.wav (его синтез), mangle.json (протокол порчи: что на что
  * поменяли — по этому протоколу потом проверяем восстановление).
  */
-import { mkdirSync, readFileSync } from 'node:fs';
-import { renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import {
-  MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
-  SAMPLE_RATE,
-} from '../consts';
+import { SAMPLE_RATE } from '../consts';
 import {
   ampEnvConfigNormales,
-  createSynth,
   oscConfigNormales,
   type ArgCreateSynth,
 } from '../synth';
 import { writeWav } from '../write-wav';
+import {
+  readJsonOrNullSync,
+  renderSamples,
+  writeJsonAtomicSync,
+} from './shared';
 
 /** Аргументы командной строки. */
 interface CliArgs {
@@ -152,135 +152,116 @@ function parseCliArgs(argv: string[]): CliArgs {
   return args;
 }
 
-/** Читает и парсит JSON-файл с понятной ошибкой при неудаче. */
-function readJson<T>(path: string): T {
-  let raw: string;
-  try {
-    raw = readFileSync(path, 'utf8');
-  } catch {
-    throw new Error(`Cannot read file: ${path}`);
+/** Читает JSON обязательного файла; неудача — ошибка с путём. */
+function readJsonRequired<T>(path: string): T {
+  const data = readJsonOrNullSync<T>(path);
+  if (data === null) {
+    throw new Error(`Cannot read or parse JSON: ${path}`);
   }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    throw new Error(`Cannot parse JSON: ${path}`);
-  }
+  return data;
 }
 
-/** Возвращает [min, max] допустимых значений параметра по нормалям. */
-function paramRange(param: MangleParam): [number, number] {
-  switch (param) {
-    case 'freqBase':
-      return [
-        oscConfigNormales.freqBase.min,
-        oscConfigNormales.freqBase.max,
-      ];
-    case 'freqStart':
-      return [
-        oscConfigNormales.freqStart.min,
-        oscConfigNormales.freqStart.max,
-      ];
-    case 'freqEnvSlope':
-      return [
-        oscConfigNormales.slope.min,
-        oscConfigNormales.slope.max,
-      ];
-    case 'freqEnvDuration':
-      return [
-        oscConfigNormales.duration.min,
-        oscConfigNormales.duration.max,
-      ];
-    case 'phase':
-      return [
-        oscConfigNormales.phase.min,
-        oscConfigNormales.phase.max,
-      ];
-    case 'ampEnvDuration':
-      return [
-        ampEnvConfigNormales.duration.min,
-        ampEnvConfigNormales.duration.max,
-      ];
-    case 'ampEndLevel':
-      return [
-        ampEnvConfigNormales.endLevel.min,
-        ampEnvConfigNormales.endLevel.max,
-      ];
-    case 'ampEnvSlope':
-      return [
-        ampEnvConfigNormales.slope.min,
-        ampEnvConfigNormales.slope.max,
-      ];
-    case 'ampStartLevel':
-      return [
-        ampEnvConfigNormales.startLevel.min,
-        ampEnvConfigNormales.startLevel.max,
-      ];
-  }
+/** Группа осциллятора из патча: параметры + флаг включения. */
+type OscGroup = ArgCreateSynth['oscillators'][number];
+
+/**
+ * Дескриптор параметра: как его читать, писать и каков допустимый
+ * диапазон. Одна таблица вместо трёх switch-диспетчеров: добавление
+ * параметра правится в одном месте (замечание ревизии декомпозиции).
+ */
+interface ParamDescriptor {
+  read: (group: OscGroup) => number;
+  write: (group: OscGroup, value: number) => void;
+  range: [number, number];
 }
 
-/** Читает значение параметра из группы осциллятора. */
-function readGroupParam(
-  group: ArgCreateSynth['oscillators'][number],
-  param: MangleParam,
-): number {
-  switch (param) {
-    case 'freqBase':
-      return group.osc.freqBase;
-    case 'freqStart':
-      return group.osc.freqStart;
-    case 'freqEnvSlope':
-      return group.osc.slope;
-    case 'freqEnvDuration':
-      return group.osc.duration;
-    case 'phase':
-      return group.osc.phase;
-    case 'ampEnvDuration':
-      return group.ampEnv.duration;
-    case 'ampEndLevel':
-      return group.ampEnv.endLevel ?? 0.001;
-    case 'ampEnvSlope':
-      return group.ampEnv.slope;
-    case 'ampStartLevel':
-      return group.ampEnv.startLevel;
-  }
-}
-
-/** Записывает значение параметра в группу осциллятора. */
-function writeGroupParam(
-  group: ArgCreateSynth['oscillators'][number],
-  param: MangleParam,
-  value: number,
-): void {
-  switch (param) {
-    case 'freqBase':
-      group.osc.freqBase = value;
-      break;
-    case 'freqStart':
-      group.osc.freqStart = value;
-      break;
-    case 'freqEnvSlope':
-      group.osc.slope = value;
-      break;
-    case 'freqEnvDuration':
-      group.osc.duration = value;
-      break;
-    case 'phase':
-      group.osc.phase = value;
-      break;
-    case 'ampEnvDuration':
-      group.ampEnv.duration = value;
-      break;
-    case 'ampEndLevel':
-      group.ampEnv.endLevel = value;
-      break;
-    case 'ampEnvSlope':
-      group.ampEnv.slope = value;
-      break;
-    case 'ampStartLevel':
-      group.ampEnv.startLevel = value;
-      break;
-  }
-}
+/** Таблица дескрипторов всех порчащихся параметров. */
+const PARAM_DESCRIPTORS: Record<MangleParam, ParamDescriptor> = {
+  freqBase: {
+    read: (g) => g.osc.freqBase,
+    write: (g, v) => {
+      g.osc.freqBase = v;
+    },
+    range: [
+      oscConfigNormales.freqBase.min,
+      oscConfigNormales.freqBase.max,
+    ],
+  },
+  freqStart: {
+    read: (g) => g.osc.freqStart,
+    write: (g, v) => {
+      g.osc.freqStart = v;
+    },
+    range: [
+      oscConfigNormales.freqStart.min,
+      oscConfigNormales.freqStart.max,
+    ],
+  },
+  freqEnvSlope: {
+    read: (g) => g.osc.slope,
+    write: (g, v) => {
+      g.osc.slope = v;
+    },
+    range: [oscConfigNormales.slope.min, oscConfigNormales.slope.max],
+  },
+  freqEnvDuration: {
+    read: (g) => g.osc.duration,
+    write: (g, v) => {
+      g.osc.duration = v;
+    },
+    range: [
+      oscConfigNormales.duration.min,
+      oscConfigNormales.duration.max,
+    ],
+  },
+  phase: {
+    read: (g) => g.osc.phase,
+    write: (g, v) => {
+      g.osc.phase = v;
+    },
+    range: [oscConfigNormales.phase.min, oscConfigNormales.phase.max],
+  },
+  ampEnvDuration: {
+    read: (g) => g.ampEnv.duration,
+    write: (g, v) => {
+      g.ampEnv.duration = v;
+    },
+    range: [
+      ampEnvConfigNormales.duration.min,
+      ampEnvConfigNormales.duration.max,
+    ],
+  },
+  ampEndLevel: {
+    read: (g) => g.ampEnv.endLevel ?? 0.001,
+    write: (g, v) => {
+      g.ampEnv.endLevel = v;
+    },
+    range: [
+      ampEnvConfigNormales.endLevel.min,
+      ampEnvConfigNormales.endLevel.max,
+    ],
+  },
+  ampEnvSlope: {
+    read: (g) => g.ampEnv.slope,
+    write: (g, v) => {
+      g.ampEnv.slope = v;
+    },
+    range: [
+      ampEnvConfigNormales.slope.min,
+      ampEnvConfigNormales.slope.max,
+    ],
+  },
+  ampStartLevel: {
+    read: (g) => g.ampEnv.startLevel,
+    write: (g, v) => {
+      g.ampEnv.startLevel = v;
+    },
+    range: [
+      ampEnvConfigNormales.startLevel.min,
+      ampEnvConfigNormales.startLevel.max,
+    ],
+  },
+};
 
 /**
  * Сдвигает параметр на случайную величину: частоты, длительности и
@@ -293,7 +274,7 @@ function jitterParam(
   strength: number,
   rng: () => number,
 ): number {
-  const [min, max] = paramRange(param);
+  const [min, max] = PARAM_DESCRIPTORS[param].range;
   let next: number;
   if (param === 'phase') {
     next = value + (rng() * 2 - 1) * Math.PI * strength;
@@ -332,9 +313,10 @@ function mangleRandom(
     if (group === undefined) {
       continue;
     }
-    const from = readGroupParam(group, param);
+    const descriptor = PARAM_DESCRIPTORS[param];
+    const from = descriptor.read(group);
     const to = jitterParam(param, from, args.strength, rng);
-    writeGroupParam(group, param, to);
+    descriptor.write(group, to);
     edits.push({ index, param, from, to });
   }
   return edits;
@@ -348,7 +330,9 @@ function mangleTargeted(
   patch: ArgCreateSynth,
   overridesPath: string,
 ): MangleEdit[] {
-  const overrides = readJson<OverrideEdit[]>(resolve(overridesPath));
+  const overrides = readJsonRequired<OverrideEdit[]>(
+    resolve(overridesPath),
+  );
   const edits: MangleEdit[] = [];
   for (const edit of overrides) {
     const group = patch.oscillators[edit.index];
@@ -365,42 +349,21 @@ function mangleTargeted(
       );
       continue;
     }
-    const from = readGroupParam(group, param);
-    writeGroupParam(group, param, edit.value);
+    const descriptor = PARAM_DESCRIPTORS[param];
+    const from = descriptor.read(group);
+    descriptor.write(group, edit.value);
     edits.push({ index: edit.index, param, from, to: edit.value });
   }
   return edits;
-}
-
-/** Синтезирует патч в Int16-сэмплы заданной длительности. */
-function renderSamples(
-  patch: ArgCreateSynth,
-  seconds: number,
-): Int16Array {
-  const synth = createSynth(patch);
-  const total = Math.floor(SAMPLE_RATE * seconds);
-  const samples = new Int16Array(total);
-  for (let i = 0; i < total; i += 1) {
-    samples[i] = Math.round(
-      synth({ x: i / SAMPLE_RATE }) *
-        MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
-    );
-  }
-  return samples;
-}
-
-/** Пишет JSON атомарно: временный файл + rename. */
-function writeJsonAtomic(path: string, data: unknown): void {
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2));
-  renameSync(tmp, path);
 }
 
 /** Точка входа: портит патч выбранным режимом, пишет артефакты. */
 function main(): void {
   try {
     const args = parseCliArgs(process.argv.slice(2));
-    const patch = readJson<ArgCreateSynth>(resolve(args.patchPath));
+    const patch = readJsonRequired<ArgCreateSynth>(
+      resolve(args.patchPath),
+    );
     const outDir = resolve(args.outDir);
     mkdirSync(outDir, { recursive: true });
 
@@ -412,8 +375,8 @@ function main(): void {
       throw new Error('No edits applied');
     }
 
-    writeJsonAtomic(join(outDir, 'patch.json'), patch);
-    writeJsonAtomic(join(outDir, 'mangle.json'), {
+    writeJsonAtomicSync(join(outDir, 'patch.json'), patch);
+    writeJsonAtomicSync(join(outDir, 'mangle.json'), {
       mode: args.mode,
       seed: args.seed,
       strength: args.strength,

@@ -28,18 +28,11 @@ import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   createWriteStream,
-  existsSync,
   mkdirSync,
   readdirSync,
   type WriteStream,
 } from 'node:fs';
-import {
-  copyFile,
-  readFile,
-  rename,
-  unlink,
-  writeFile,
-} from 'node:fs/promises';
+import { copyFile, unlink } from 'node:fs/promises';
 import { cpus, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { SAMPLE_RATE } from '../consts';
@@ -50,6 +43,7 @@ import {
   type MatchWorkerResult,
 } from '../match-worker';
 import { readWav } from '../read-wav';
+import { readJsonOrNull, writeJsonAtomic } from './shared';
 
 /** Аргументы командной строки сборщика. */
 interface CliArgs {
@@ -220,16 +214,6 @@ function slugifyTargets(files: string[]): Map<string, string> {
   return slugs;
 }
 
-/** Пишет JSON атомарно: временный файл + rename. */
-async function writeJsonAtomic(
-  path: string,
-  data: unknown,
-): Promise<void> {
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, JSON.stringify(data, null, 2));
-  await rename(tmp, path);
-}
-
 /** Читает ревизию кода из git; при недоступности git — null. */
 function readCodeRevision(): string | null {
   try {
@@ -269,28 +253,8 @@ function buildManifest(
  */
 async function isRunCompleted(runDir: string): Promise<boolean> {
   const runPath = join(runDir, 'run.json');
-  if (!existsSync(runPath)) {
-    return false;
-  }
-  try {
-    const raw = await readFile(runPath, 'utf8');
-    const record = JSON.parse(raw) as Partial<RunRecord>;
-    return record.status === 'completed';
-  } catch {
-    return false;
-  }
-}
-
-/** Читает сохранённый init-вектор; при битом файле — null. */
-async function loadSavedInitVector(
-  initPath: string,
-): Promise<number[] | null> {
-  try {
-    const raw = await readFile(initPath, 'utf8');
-    return JSON.parse(raw) as number[];
-  } catch {
-    return null;
-  }
+  const record = await readJsonOrNull<Partial<RunRecord>>(runPath);
+  return record?.status === 'completed';
 }
 
 /**
@@ -340,9 +304,7 @@ async function prepareInitVectors(arg: {
     const targetDir = join(arg.outDir, slug);
     mkdirSync(targetDir, { recursive: true });
     const initPath = join(targetDir, 'init-vector.json');
-    const saved = existsSync(initPath)
-      ? await loadSavedInitVector(initPath)
-      : null;
+    const saved = await readJsonOrNull<number[]>(initPath);
     if (saved !== null) {
       initVectors.set(slug, saved);
       console.log(`INIT ${slug}: reused saved vector`);

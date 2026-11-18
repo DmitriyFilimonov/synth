@@ -20,32 +20,17 @@
  * Артефакты: stability.json (машинный отчёт) и stability.md
  * (таблицы для чтения) в каталоге датасета.
  */
-import { existsSync, readdirSync } from 'node:fs';
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { MIN } from '../envelope';
 import { type ArgCreateSynth } from '../synth';
 import { mapVectorToSynthConfigForOsc } from '../vector-to-synth-config';
-
-/**
- * Структурный минимум для чтения параметров осциллятора: подходят
- * и группа из патча, и результат денормализации вектора.
- */
-interface OscParamSource {
-  osc: {
-    freqBase: number;
-    freqStart: number;
-    slope: number;
-    duration: number;
-    phase: number;
-  };
-  ampEnv: {
-    duration: number;
-    endLevel?: number;
-    slope: number;
-    startLevel: number;
-  };
-}
+import {
+  quantile,
+  readJsonOrNull,
+  writeJsonAtomic,
+  writeTextAtomic,
+} from './shared';
 
 /** Минимальный срез features.json, который читает этот анализ. */
 interface OscFeatures {
@@ -61,6 +46,14 @@ interface OscFeatures {
 /** Минимальный срез features.json уровня прогона. */
 interface RunFeatures {
   oscillators: OscFeatures[];
+}
+
+/** Срез run.json, который читает этот анализ. */
+interface RunRecordSlice {
+  status: string;
+  seed: number;
+  suppressionPercent: number | null;
+  globalSuppressionPercent: number | null;
 }
 
 /** Загруженный прогон: метаданные, патч, init-вектор, признаки. */
@@ -99,59 +92,96 @@ interface DriftCell {
   artifact: boolean;
 }
 
-/** Пороги «не двигается» по типам параметров, в денормализованных единицах. */
-const DRIFT_EPS: Record<string, number> = {
-  freqBase: 0.5,
-  freqStart: 0.5,
-  slope: 0.02,
-  duration: 0.005,
-  phase: 0.05,
-  ampEnvDuration: 0.005,
-  endLevel: 0.002,
-  ampEnvSlope: 0.02,
-  startLevel: 0.005,
-};
-
-/** Имена девяти оптимизируемых параметров осциллятора. */
-const DRIFT_PARAMS = [
-  'freqBase',
-  'freqStart',
-  'slope',
-  'duration',
-  'phase',
-  'ampEnvDuration',
-  'endLevel',
-  'ampEnvSlope',
-  'startLevel',
-] as const;
-
-/** Читает JSON-файл; при отсутствии или битом содержимом — null. */
-async function readJsonOrNull<T>(path: string): Promise<T | null> {
-  if (!existsSync(path)) {
-    return null;
-  }
-  try {
-    return JSON.parse(await readFile(path, 'utf8')) as T;
-  } catch {
-    return null;
-  }
-}
-
-/** Пишет текст или JSON атомарно: временный файл + rename. */
-async function writeAtomic(
-  path: string,
-  data: string,
-): Promise<void> {
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, data);
-  await rename(tmp, path);
+/**
+ * Структурный минимум для чтения параметров осциллятора: подходят
+ * и группа из патча, и результат денормализации вектора.
+ */
+interface OscParamSource {
+  osc: {
+    freqBase: number;
+    freqStart: number;
+    slope: number;
+    duration: number;
+    phase: number;
+  };
+  ampEnv: {
+    duration: number;
+    endLevel?: number;
+    slope: number;
+    startLevel: number;
+  };
 }
 
 /**
- * Загружает все завершённые прогоны датасета. Прогон без features.json
- * включаем с features=null — дрейф init-вектора считается и без
- * признаков.
+ * Дескриптор параметра дрейфа: как его прочитать и каков порог
+ * «не двигается» в денормализованных единицах. Одна таблица вместо
+ * связанных switch и Record порогов (замечание ревизии декомпозиции).
  */
+interface DriftParamDescriptor {
+  read: (source: OscParamSource) => number;
+  eps: number;
+}
+
+/** Таблица дескрипторов девяти оптимизируемых параметров. */
+const DRIFT_PARAM_DESCRIPTORS: Record<string, DriftParamDescriptor> =
+  {
+    freqBase: { read: (s) => s.osc.freqBase, eps: 0.5 },
+    freqStart: { read: (s) => s.osc.freqStart, eps: 0.5 },
+    slope: { read: (s) => s.osc.slope, eps: 0.02 },
+    duration: { read: (s) => s.osc.duration, eps: 0.005 },
+    phase: { read: (s) => s.osc.phase, eps: 0.05 },
+    ampEnvDuration: { read: (s) => s.ampEnv.duration, eps: 0.005 },
+    endLevel: { read: (s) => s.ampEnv.endLevel ?? MIN, eps: 0.002 },
+    ampEnvSlope: { read: (s) => s.ampEnv.slope, eps: 0.02 },
+    startLevel: { read: (s) => s.ampEnv.startLevel, eps: 0.005 },
+  };
+
+/** Имена параметров дрейфа в порядке обхода таблицы. */
+const DRIFT_PARAMS = Object.keys(DRIFT_PARAM_DESCRIPTORS);
+
+/**
+ * Загружает один прогон: run.json, patch.json, features.json.
+ * Возвращает null для незавершённых и битых прогонов (их время
+ * ещё не пришло — анализ терпим к неполному датасету).
+ */
+async function loadRun(arg: {
+  slug: string;
+  seedDir: string;
+  runDir: string;
+  initVector: number[] | null;
+}): Promise<LoadedRun | null> {
+  const label = `${arg.slug}/${arg.seedDir}`;
+  const run = await readJsonOrNull<RunRecordSlice>(
+    join(arg.runDir, 'run.json'),
+  );
+  if (run === null || run.status !== 'completed') {
+    return null;
+  }
+  const patch = await readJsonOrNull<ArgCreateSynth>(
+    join(arg.runDir, 'patch.json'),
+  );
+  if (patch === null) {
+    console.log(`WARN ${label}: no patch.json, skipped`);
+    return null;
+  }
+  const features = await readJsonOrNull<RunFeatures>(
+    join(arg.runDir, 'features.json'),
+  );
+  if (features === null) {
+    console.log(`WARN ${label}: no features.json, scalar limited`);
+  }
+  return {
+    slug: arg.slug,
+    seed: run.seed,
+    suppressionPercent: run.suppressionPercent,
+    globalSuppressionPercent: run.globalSuppressionPercent,
+    patch,
+    initVector: arg.initVector,
+    features,
+  };
+}
+
+/** Обходит каталог датасета и загружает все завершённые прогоны. */
 async function loadCompletedRuns(
   datasetDir: string,
 ): Promise<LoadedRun[]> {
@@ -163,68 +193,26 @@ async function loadCompletedRuns(
 
   for (const slug of slugs) {
     const slugDir = join(datasetDir, slug);
+    const initVector = await readJsonOrNull<number[]>(
+      join(slugDir, 'init-vector.json'),
+    );
     const seedDirs = readdirSync(slugDir, { withFileTypes: true })
       .filter((d) => d.isDirectory() && d.name.startsWith('seed-'))
       .map((d) => d.name)
       .sort();
-
     for (const seedDir of seedDirs) {
-      const runDir = join(slugDir, seedDir);
-      const run = await readJsonOrNull<{
-        status: string;
-        seed: number;
-        suppressionPercent: number | null;
-        globalSuppressionPercent: number | null;
-      }>(join(runDir, 'run.json'));
-      if (run === null || run.status !== 'completed') {
-        continue;
-      }
-      const patch = await readJsonOrNull<ArgCreateSynth>(
-        join(runDir, 'patch.json'),
-      );
-      if (patch === null) {
-        console.log(
-          `WARN ${slug}/${seedDir}: no patch.json, skipped`,
-        );
-        continue;
-      }
-      const features = await readJsonOrNull<RunFeatures>(
-        join(runDir, 'features.json'),
-      );
-      if (features === null) {
-        console.log(
-          `WARN ${slug}/${seedDir}: no features.json, ` +
-            'scalar stats limited',
-        );
-      }
-      runs.push({
+      const run = await loadRun({
         slug,
-        seed: run.seed,
-        suppressionPercent: run.suppressionPercent,
-        globalSuppressionPercent: run.globalSuppressionPercent,
-        patch,
-        initVector: await readJsonOrNull<number[]>(
-          join(slugDir, 'init-vector.json'),
-        ),
-        features,
+        seedDir,
+        runDir: join(slugDir, seedDir),
+        initVector,
       });
+      if (run !== null) {
+        runs.push(run);
+      }
     }
   }
   return runs;
-}
-
-/** Считает квантиль с линейной интерполяцией; пустой ввод — null. */
-function quantile(values: number[], q: number): number | null {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].sort((a, b) => a - b);
-  const pos = (sorted.length - 1) * q;
-  const lo = Math.floor(pos);
-  const hi = Math.min(lo + 1, sorted.length - 1);
-  const lower = sorted[lo] ?? 0;
-  const upper = sorted[hi] ?? lower;
-  return lower + (upper - lower) * (pos - lo);
 }
 
 /** Собирает скалярные метрики прогона из run.json и features.json. */
@@ -266,20 +254,64 @@ function collectScalarMetrics(runs: LoadedRun[]): ScalarMetric[] {
       run.slug,
       oscs.filter((o) => o.role === 'transient').length,
     );
-    const freqBases = oscs.map((o) => o.freqBase);
-    const ratios = oscs.map((o) => o.freqStartToBase);
-    const ampDurs = oscs.map((o) => o.ampEnvDurationSec);
-    const levels = oscs.map((o) => o.ampStartLevel);
-    const decays = oscs
-      .map((o) => o.decaySecToDb.db20)
-      .filter((d): d is number => d !== null);
-    add('freqBase_p10', run.slug, quantile(freqBases, 0.1));
-    add('freqBase_p50', run.slug, quantile(freqBases, 0.5));
-    add('freqStartToBase_p50', run.slug, quantile(ratios, 0.5));
-    add('freqStartToBase_p90', run.slug, quantile(ratios, 0.9));
-    add('ampEnvDuration_p50', run.slug, quantile(ampDurs, 0.5));
-    add('ampStartLevel_p90', run.slug, quantile(levels, 0.9));
-    add('decayDb20_p50', run.slug, quantile(decays, 0.5));
+    add(
+      'freqBase_p10',
+      run.slug,
+      quantile(
+        oscs.map((o) => o.freqBase),
+        0.1,
+      ),
+    );
+    add(
+      'freqBase_p50',
+      run.slug,
+      quantile(
+        oscs.map((o) => o.freqBase),
+        0.5,
+      ),
+    );
+    add(
+      'freqStartToBase_p50',
+      run.slug,
+      quantile(
+        oscs.map((o) => o.freqStartToBase),
+        0.5,
+      ),
+    );
+    add(
+      'freqStartToBase_p90',
+      run.slug,
+      quantile(
+        oscs.map((o) => o.freqStartToBase),
+        0.9,
+      ),
+    );
+    add(
+      'ampEnvDuration_p50',
+      run.slug,
+      quantile(
+        oscs.map((o) => o.ampEnvDurationSec),
+        0.5,
+      ),
+    );
+    add(
+      'ampStartLevel_p90',
+      run.slug,
+      quantile(
+        oscs.map((o) => o.ampStartLevel),
+        0.9,
+      ),
+    );
+    add(
+      'decayDb20_p50',
+      run.slug,
+      quantile(
+        oscs
+          .map((o) => o.decaySecToDb.db20)
+          .filter((d): d is number => d !== null),
+        0.5,
+      ),
+    );
   }
 
   return [...metrics.entries()].map(([name, values]) => ({
@@ -342,33 +374,6 @@ function classifyMetric(metric: ScalarMetric): MetricVerdict {
   };
 }
 
-/** Читает денормализованное значение одного параметра осциллятора. */
-function readParam(
-  group: OscParamSource,
-  param: (typeof DRIFT_PARAMS)[number],
-): number {
-  switch (param) {
-    case 'freqBase':
-      return group.osc.freqBase;
-    case 'freqStart':
-      return group.osc.freqStart;
-    case 'slope':
-      return group.osc.slope;
-    case 'duration':
-      return group.osc.duration;
-    case 'phase':
-      return group.osc.phase;
-    case 'ampEnvDuration':
-      return group.ampEnv.duration;
-    case 'endLevel':
-      return group.ampEnv.endLevel ?? MIN;
-    case 'ampEnvSlope':
-      return group.ampEnv.slope;
-    case 'startLevel':
-      return group.ampEnv.startLevel;
-  }
-}
-
 /**
  * Считает дрейф init → final по каждому параметру каждого слота.
  * Осциллятор участвует, только если он активен в финальном патче:
@@ -389,12 +394,12 @@ function computeInitDrift(runs: LoadedRun[]): DriftCell[] {
       }
       const initGroup = mapVectorToSynthConfigForOsc(initVector, i);
       for (const param of DRIFT_PARAMS) {
-        const finalValue = readParam(
-          { osc: group.osc, ampEnv: group.ampEnv },
-          param,
-        );
+        const descriptor = DRIFT_PARAM_DESCRIPTORS[param];
+        if (descriptor === undefined) {
+          continue;
+        }
         const drift = Math.abs(
-          finalValue - readParam(initGroup, param),
+          descriptor.read(group) - descriptor.read(initGroup),
         );
         const key = `${i}:${param}`;
         if (!cells.has(key)) {
@@ -408,18 +413,83 @@ function computeInitDrift(runs: LoadedRun[]): DriftCell[] {
   return [...cells.entries()].map(([key, drifts]) => {
     const [oscIndex, param] = key.split(':');
     const maxDrift = Math.max(...drifts);
+    const eps = DRIFT_PARAM_DESCRIPTORS[param ?? '']?.eps ?? 0;
     return {
       oscIndex: parseInt(oscIndex ?? '0', 10),
       param: param ?? '',
       activeRuns: drifts.length,
       maxDrift,
       meanDrift: drifts.reduce((a, b) => a + b, 0) / drifts.length,
-      artifact: maxDrift < (DRIFT_EPS[param ?? ''] ?? 0),
+      artifact: maxDrift < eps,
     };
   });
 }
 
-/** Строит markdown-таблицы отчёта. */
+/** Секция отчёта: global suppression по сидам каждого таргета. */
+function formatSuppressionBySeedSection(runs: LoadedRun[]): string[] {
+  const bySlug = new Map<string, number[]>();
+  for (const run of runs) {
+    if (run.globalSuppressionPercent === null) {
+      continue;
+    }
+    if (!bySlug.has(run.slug)) {
+      bySlug.set(run.slug, []);
+    }
+    (bySlug.get(run.slug) ?? []).push(run.globalSuppressionPercent);
+  }
+  const lines = ['## Global suppression по сидам', ''];
+  lines.push('| Таргет | Среднее | Размах | Прогонов |');
+  lines.push('| --- | --- | --- | --- |');
+  for (const [slug, values] of [...bySlug.entries()].sort()) {
+    const mean = values.reduce((a, b) => a + b, 0) / values.length;
+    const range = Math.max(...values) - Math.min(...values);
+    lines.push(
+      `| ${slug} | ${mean.toFixed(2)}% | ${range.toFixed(2)} п.п. | ${values.length} |`,
+    );
+  }
+  return lines;
+}
+
+/** Секция отчёта: вердикты стабильности метрик уровня прогона. */
+function formatVerdictSection(verdicts: MetricVerdict[]): string[] {
+  const lines = ['## Стабильность метрик уровня прогона', ''];
+  lines.push(
+    '| Метрика | Разброс внутри (средн.) | Разброс внутри (макс.) | Разброс между | Вердикт |',
+  );
+  lines.push('| --- | --- | --- | --- | --- |');
+  for (const v of verdicts) {
+    lines.push(
+      `| ${v.name} | ${v.withinMeanRange.toFixed(3)} | ${v.withinMaxRange.toFixed(3)} | ${v.betweenRange.toFixed(3)} | ${v.verdict} |`,
+    );
+  }
+  return lines;
+}
+
+/** Секция отчёта: параметры-артефакты init по типам. */
+function formatArtifactSection(drift: DriftCell[]): string[] {
+  const artifacts = drift.filter((d) => d.artifact);
+  const byParam = new Map<string, number>();
+  for (const cell of artifacts) {
+    byParam.set(cell.param, (byParam.get(cell.param) ?? 0) + 1);
+  }
+  const lines = [
+    '## Параметры, которые init не двигает (по слотам)',
+    '',
+  ];
+  lines.push(
+    `Слотов с max-дрейфом ниже порога: ${artifacts.length} из ${drift.length}.`,
+  );
+  lines.push('');
+  lines.push('| Параметр | Слотов-«замороженных» | Порог |');
+  lines.push('| --- | --- | --- |');
+  for (const param of DRIFT_PARAMS) {
+    const eps = DRIFT_PARAM_DESCRIPTORS[param]?.eps ?? 0;
+    lines.push(`| ${param} | ${byParam.get(param) ?? 0} | ${eps} |`);
+  }
+  return lines;
+}
+
+/** Собирает markdown-отчёт из секций. */
 function buildMarkdownReport(arg: {
   runs: LoadedRun[];
   verdicts: MetricVerdict[];
@@ -432,60 +502,11 @@ function buildMarkdownReport(arg: {
     `Прогонов: ${arg.runs.length}; таргетов: ${new Set(arg.runs.map((r) => r.slug)).size}.`,
   );
   lines.push('');
-  lines.push('## Global suppression по сидам');
+  lines.push(...formatSuppressionBySeedSection(arg.runs));
   lines.push('');
-  lines.push('| Таргет | Среднее | Размах | Прогонов |');
-  lines.push('| --- | --- | --- | --- |');
-  const bySlug = new Map<string, number[]>();
-  for (const run of arg.runs) {
-    if (run.globalSuppressionPercent === null) {
-      continue;
-    }
-    if (!bySlug.has(run.slug)) {
-      bySlug.set(run.slug, []);
-    }
-    (bySlug.get(run.slug) ?? []).push(run.globalSuppressionPercent);
-  }
-  for (const [slug, values] of [...bySlug.entries()].sort()) {
-    const mean = values.reduce((a, b) => a + b, 0) / values.length;
-    const range = Math.max(...values) - Math.min(...values);
-    lines.push(
-      `| ${slug} | ${mean.toFixed(2)}% | ${range.toFixed(2)} п.п. | ${values.length} |`,
-    );
-  }
+  lines.push(...formatVerdictSection(arg.verdicts));
   lines.push('');
-  lines.push('## Стабильность метрик уровня прогона');
-  lines.push('');
-  lines.push(
-    '| Метрика | Разброс внутри (средн.) | Разброс внутри (макс.) | Разброс между | Вердикт |',
-  );
-  lines.push('| --- | --- | --- | --- | --- |');
-  for (const v of arg.verdicts) {
-    lines.push(
-      `| ${v.name} | ${v.withinMeanRange.toFixed(3)} | ${v.withinMaxRange.toFixed(3)} | ${v.betweenRange.toFixed(3)} | ${v.verdict} |`,
-    );
-  }
-  lines.push('');
-  lines.push('## Параметры, которые init не двигает (по слотам)');
-  lines.push('');
-  const artifacts = arg.drift
-    .filter((d) => d.artifact)
-    .sort((a, b) => a.oscIndex - b.oscIndex);
-  lines.push(
-    `Слотов с max-дрейфом ниже порога: ${artifacts.length} из ${arg.drift.length}.`,
-  );
-  lines.push('');
-  const byParam = new Map<string, number>();
-  for (const cell of artifacts) {
-    byParam.set(cell.param, (byParam.get(cell.param) ?? 0) + 1);
-  }
-  lines.push('| Параметр | Слотов-«замороженных» | Порог |');
-  lines.push('| --- | --- | --- |');
-  for (const param of DRIFT_PARAMS) {
-    lines.push(
-      `| ${param} | ${byParam.get(param) ?? 0} | ${DRIFT_EPS[param]} |`,
-    );
-  }
+  lines.push(...formatArtifactSection(arg.drift));
   lines.push('');
   return lines.join('\n');
 }
@@ -507,11 +528,11 @@ async function main(): Promise<void> {
   const verdicts = collectScalarMetrics(runs).map(classifyMetric);
   const drift = computeInitDrift(runs);
 
-  await writeAtomic(
-    join(datasetDir, 'stability.json'),
-    JSON.stringify({ verdicts, drift }, null, 2),
-  );
-  await writeAtomic(
+  await writeJsonAtomic(join(datasetDir, 'stability.json'), {
+    verdicts,
+    drift,
+  });
+  await writeTextAtomic(
     join(datasetDir, 'stability.md'),
     buildMarkdownReport({ runs, verdicts, drift }),
   );

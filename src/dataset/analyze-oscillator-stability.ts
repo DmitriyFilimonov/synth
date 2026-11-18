@@ -18,9 +18,14 @@
  * Артефакты: oscillator-stability.json и oscillator-stability.md
  * в каталоге датасета.
  */
-import { existsSync, readdirSync } from 'node:fs';
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import {
+  quantile,
+  readJsonOrNull,
+  writeJsonAtomic,
+  writeTextAtomic,
+} from './shared';
 
 /** Срез features.json, который читает этот анализ. */
 interface OscFeatures {
@@ -90,28 +95,6 @@ const VERDICT_EPS = {
   dPhaseCircular: 0.35,
   dDecayDb20: 0.3,
 } as const;
-
-/** Читает JSON-файл; при отсутствии или битом содержимом — null. */
-async function readJsonOrNull<T>(path: string): Promise<T | null> {
-  if (!existsSync(path)) {
-    return null;
-  }
-  try {
-    return JSON.parse(await readFile(path, 'utf8')) as T;
-  } catch {
-    return null;
-  }
-}
-
-/** Пишет строку атомарно: временный файл + rename. */
-async function writeAtomic(
-  path: string,
-  data: string,
-): Promise<void> {
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, data);
-  await rename(tmp, path);
-}
 
 /** Загружает features.json всех завершённых прогонов датасета. */
 async function loadRunFeatures(
@@ -221,20 +204,6 @@ function computePairDelta(arg: {
         : null,
     sameRole: a.role === b.role,
   };
-}
-
-/** Считает квантиль с линейной интерполяцией; пустой ввод — null. */
-function quantile(values: number[], q: number): number | null {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].sort((a, b) => a - b);
-  const pos = (sorted.length - 1) * q;
-  const lo = Math.floor(pos);
-  const hi = Math.min(lo + 1, sorted.length - 1);
-  const lower = sorted[lo] ?? 0;
-  const upper = sorted[hi] ?? lower;
-  return lower + (upper - lower) * (pos - lo);
 }
 
 /** Сводит разницы одного признака: медиана, p90, вердикт по порогу. */
@@ -405,11 +374,14 @@ async function main(): Promise<void> {
     }
   }
 
-  await writeAtomic(
+  await writeJsonAtomic(
     join(datasetDir, 'oscillator-stability.json'),
-    JSON.stringify({ deltas, coverage }, null, 2),
+    {
+      deltas,
+      coverage,
+    },
   );
-  await writeAtomic(
+  await writeTextAtomic(
     join(datasetDir, 'oscillator-stability.md'),
     buildMarkdownReport({ deltas, coverage }),
   );

@@ -19,19 +19,16 @@
  *   minus/osc-XX.wav      — всё без осциллятора XX
  *   index.json            — сводка: параметры и пути треков
  */
-import {
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import {
-  MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
-  SAMPLE_RATE,
-} from '../consts';
-import { createSynth, type ArgCreateSynth } from '../synth';
+import { SAMPLE_RATE } from '../consts';
+import { type ArgCreateSynth } from '../synth';
 import { writeWav } from '../write-wav';
+import {
+  readJsonOrNullSync,
+  renderSamples,
+  writeJsonAtomicSync,
+} from './shared';
 
 /** Аргументы командной строки рендерера. */
 interface CliArgs {
@@ -105,17 +102,11 @@ function parseCliArgs(argv: string[]): CliArgs {
 
 /** Читает и парсит patch.json с понятной ошибкой при неудаче. */
 function loadPatch(patchPath: string): ArgCreateSynth {
-  let raw: string;
-  try {
-    raw = readFileSync(patchPath, 'utf8');
-  } catch {
-    throw new Error(`Cannot read patch file: ${patchPath}`);
+  const patch = readJsonOrNullSync<ArgCreateSynth>(patchPath);
+  if (patch === null) {
+    throw new Error(`Cannot read or parse patch file: ${patchPath}`);
   }
-  try {
-    return JSON.parse(raw) as ArgCreateSynth;
-  } catch {
-    throw new Error(`Cannot parse patch file as JSON: ${patchPath}`);
-  }
+  return patch;
 }
 
 /**
@@ -148,23 +139,6 @@ function minusPatch(
       osc: { ...group.osc, on: i === index ? false : group.osc.on },
     })),
   };
-}
-
-/** Синтезирует патч в сэмплы Int16 заданной длительности. */
-function renderSamples(
-  patch: ArgCreateSynth,
-  seconds: number,
-): Int16Array {
-  const synth = createSynth(patch);
-  const total = Math.floor(SAMPLE_RATE * seconds);
-  const samples = new Int16Array(total);
-  for (let i = 0; i < total; i += 1) {
-    samples[i] = Math.round(
-      synth({ x: i / SAMPLE_RATE }) *
-        MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
-    );
-  }
-  return samples;
 }
 
 /** Пишет один WAV-трек в подкаталог выходной директории. */
@@ -228,18 +202,8 @@ function renderTrackSet(
     }
   });
 
-  writeIndexAtomic(args.outDir, index);
+  writeJsonAtomicSync(join(args.outDir, 'index.json'), index);
   return index.length;
-}
-
-/** Пишет index.json со сводкой: временный файл + rename. */
-function writeIndexAtomic(
-  outDir: string,
-  index: SoloIndexEntry[],
-): void {
-  const tmp = join(outDir, 'index.json.tmp');
-  writeFileSync(tmp, JSON.stringify(index, null, 2));
-  renameSync(tmp, join(outDir, 'index.json'));
 }
 
 /** Точка входа: читает патч и рендерит набор треков. */
