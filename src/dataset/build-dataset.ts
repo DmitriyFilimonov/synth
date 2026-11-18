@@ -63,6 +63,8 @@ interface RunTask {
   slug: string;
   seed: number;
   runDir: string;
+  /** Номер итерации чекпоинта, с которого поднимаемся; нет — с нуля. */
+  resumedFromIteration?: number;
 }
 
 /** Содержимое `run.json` — главный метаданный артефакт прогона. */
@@ -78,6 +80,8 @@ interface RunRecord {
   suppressionPercent: number | null;
   globalSuppressionPercent: number | null;
   error: string | null;
+  /** Итерация чекпоинта, с которой прогон подняли; null — шёл с нуля. */
+  resumedFromIteration: number | null;
   history: { iteration: number; suppressionPercent: number }[];
 }
 
@@ -346,22 +350,58 @@ function buildRunTasks(arg: {
 }
 
 /**
- * Возвращает колбэк прогресса, который печатает строку раз в
- * {@link PROGRESS_LOG_EVERY} итераций.
+ * Возвращает колбэк прогресса: печатает строку раз в
+ * {@link PROGRESS_LOG_EVERY} итераций и пишет checkpoint.json с
+ * лучшим геномом — убийство процесса стоит минуты, а не часы
+ * (T12). Запись fire-and-forget: её ошибка не роняет оптимизацию.
  */
-function createProgressLogger(arg: {
+function createProgressHandler(arg: {
   slug: string;
   seed: number;
   iterations: number;
+  runDir: string;
 }): (entry: MatchWorkerProgress) => void {
   return (entry) => {
-    if (entry.iteration % PROGRESS_LOG_EVERY === 0) {
-      console.log(
-        `PROGRESS ${arg.slug} seed=${arg.seed} ` +
-          `iter=${entry.iteration}/${arg.iterations} ` +
-          `J=${entry.suppressionPercent.toFixed(2)}%`,
-      );
+    if (entry.iteration % PROGRESS_LOG_EVERY !== 0) {
+      return;
     }
+    console.log(
+      `PROGRESS ${arg.slug} seed=${arg.seed} ` +
+        `iter=${entry.iteration}/${arg.iterations} ` +
+        `J=${entry.suppressionPercent.toFixed(2)}%`,
+    );
+    if (entry.bestVector !== undefined) {
+      const checkpoint = {
+        iteration: entry.iteration,
+        bestVector: [...entry.bestVector],
+      };
+      void writeJsonAtomic(
+        join(arg.runDir, 'checkpoint.json'),
+        checkpoint,
+      ).catch(() => {});
+    }
+  };
+}
+
+/** Читает чекпоинт прогона; при отсутствии или битом файле — null. */
+async function readCheckpoint(
+  runDir: string,
+): Promise<{ iteration: number; bestVector: number[] } | null> {
+  const data = await readJsonOrNull<{
+    iteration?: unknown;
+    bestVector?: unknown;
+  }>(join(runDir, 'checkpoint.json'));
+  if (
+    data === null ||
+    typeof data.iteration !== 'number' ||
+    !Array.isArray(data.bestVector) ||
+    data.bestVector.length === 0
+  ) {
+    return null;
+  }
+  return {
+    iteration: data.iteration,
+    bestVector: data.bestVector as number[],
   };
 }
 
@@ -387,6 +427,7 @@ function buildRunRecord(arg: {
     startedAt: arg.startedAt.toISOString(),
     finishedAt: new Date().toISOString(),
     durationSec: arg.durationSec,
+    resumedFromIteration: arg.task.resumedFromIteration ?? null,
   };
   if (arg.status === 'completed' && arg.result !== undefined) {
     return {
@@ -479,10 +520,11 @@ async function runSingleTask(
       onLog: (line) => {
         logStream.write(line + '\n');
       },
-      onProgress: createProgressLogger({
+      onProgress: createProgressHandler({
         slug: task.slug,
         seed: task.seed,
         iterations: args.iterations,
+        runDir: task.runDir,
       }),
     });
     const record = buildRunRecord({
@@ -547,13 +589,25 @@ async function runTaskPool(arg: {
         console.log(`SKIP ${task.slug} seed=${task.seed}: done`);
         continue;
       }
-      const initVector = arg.initVectors.get(task.slug);
+      const checkpoint = await readCheckpoint(task.runDir);
+      if (checkpoint !== null) {
+        console.log(
+          `RESUME ${task.slug} seed=${task.seed} ` +
+            `from iter=${checkpoint.iteration}`,
+        );
+      }
+      const initVector =
+        checkpoint?.bestVector ?? arg.initVectors.get(task.slug);
       if (initVector === undefined) {
         summary.failed += 1;
         console.log(`FAIL ${task.slug}: no init vector`);
         continue;
       }
-      const status = await runSingleTask(task, initVector, arg.args);
+      const status = await runSingleTask(
+        { ...task, resumedFromIteration: checkpoint?.iteration },
+        initVector,
+        arg.args,
+      );
       if (status === 'completed') {
         summary.completed += 1;
       } else {
