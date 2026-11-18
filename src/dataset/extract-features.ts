@@ -37,17 +37,16 @@
  *     --dataset datasets/ref-4 --out /tmp/features
  */
 import { existsSync } from 'node:fs';
-import {
-  mkdir,
-  readdir,
-  readFile,
-  rename,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdir, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { MIN } from '../envelope';
 import type { ArgCreateSynth } from '../synth';
 import { mapVectorToSynthConfigForOsc } from '../vector-to-synth-config';
+import {
+  readJsonOrNull,
+  writeJsonAtomic,
+  writeTextAtomic,
+} from './shared';
 
 /** Аргументы командной строки. */
 interface CliArgs {
@@ -390,36 +389,6 @@ function renderFeaturesCsv(rows: readonly FeaturesCsvRow[]): string {
   return lines.join('\n') + '\n';
 }
 
-/** Пишет текст атомарно: временный файл + rename. */
-async function writeTextAtomic(
-  path: string,
-  data: string,
-): Promise<void> {
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, data);
-  await rename(tmp, path);
-}
-
-/** Пишет JSON атомарно: временный файл + rename. */
-async function writeJsonAtomic(
-  path: string,
-  data: unknown,
-): Promise<void> {
-  await writeTextAtomic(path, JSON.stringify(data, null, 2));
-}
-
-/**
- * Читает и разбирает JSON-файл. При любой ошибке (нет файла,
- * битый JSON) возвращает null — вызывающий решает, что пропустить.
- */
-async function readJsonSafe(path: string): Promise<unknown> {
-  try {
-    return JSON.parse(await readFile(path, 'utf8')) as unknown;
-  } catch {
-    return null;
-  }
-}
-
 /** Проверяет, что значение — массив конечных чисел. */
 function isNumberArray(value: unknown): value is number[] {
   return (
@@ -528,7 +497,7 @@ async function readRunRecord(
   suppressionPercent: number | null;
   globalSuppressionPercent: number | null;
 } | null> {
-  const raw = await readJsonSafe(join(runDir, 'run.json'));
+  const raw = await readJsonOrNull<unknown>(join(runDir, 'run.json'));
   if (typeof raw !== 'object' || raw === null) {
     return null;
   }
@@ -549,9 +518,112 @@ async function readRunRecord(
 }
 
 /**
+ * Перечисляет каталоги таргетов в датасете: без скрытых, без
+ * выходного каталога, лексикографическая сортировка для
+ * детерминированного обхода.
+ */
+async function listSlugDirs(
+  datasetDir: string,
+  outDir: string,
+): Promise<string[]> {
+  return (await readdir(datasetDir, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter(
+      (name) =>
+        !name.startsWith('.') &&
+        resolve(join(datasetDir, name)) !== outDir,
+    )
+    .sort();
+}
+
+/**
+ * Перечисляет каталоги прогонов таргета: только `seed-<N>`,
+ * сортировка по номеру сида.
+ */
+async function listRunDirs(targetDir: string): Promise<string[]> {
+  return (await readdir(targetDir, { withFileTypes: true }))
+    .filter(
+      (entry) => entry.isDirectory() && /^seed-\d+$/.test(entry.name),
+    )
+    .map((entry) => entry.name)
+    .sort(
+      (a, b) =>
+        Number(a.slice('seed-'.length)) -
+        Number(b.slice('seed-'.length)),
+    );
+}
+
+/** Итог обработки одного прогона. */
+interface ProcessRunResult {
+  status: 'processed' | 'skipped' | 'not-completed';
+  rows: FeaturesCsvRow[];
+  oscillators: number;
+}
+
+/**
+ * Обрабатывает один прогон: читает и валидирует артефакты, строит
+ * признаки, пишет features.json, возвращает строки для сводного
+ * CSV. Битые артефакты — статус skipped с предупреждением.
+ */
+async function processRun(arg: {
+  slug: string;
+  runDirName: string;
+  runDir: string;
+  initVector: number[];
+  outDir: string;
+}): Promise<ProcessRunResult> {
+  const empty: ProcessRunResult = {
+    status: 'skipped',
+    rows: [],
+    oscillators: 0,
+  };
+  const label = `${arg.slug}/${arg.runDirName}`;
+  const fallbackSeed = Number(arg.runDirName.slice('seed-'.length));
+  const record = await readRunRecord(arg.runDir, fallbackSeed);
+  if (record === null) {
+    console.warn(`WARN ${label}: broken run.json, skipped`);
+    return empty;
+  }
+  if (record.status !== 'completed') {
+    return { ...empty, status: 'not-completed' };
+  }
+  const patch = await readJsonOrNull<unknown>(
+    join(arg.runDir, 'patch.json'),
+  );
+  if (!isValidPatch(patch)) {
+    console.warn(`WARN ${label}: broken patch.json, skipped`);
+    return empty;
+  }
+
+  const features = buildRunFeatures({
+    target: record.target === '' ? arg.slug : record.target,
+    slug: arg.slug,
+    seed: record.seed,
+    suppressionPercent: record.suppressionPercent,
+    globalSuppressionPercent: record.globalSuppressionPercent,
+    patch,
+    initVector: arg.initVector,
+  });
+  const outRunDir = join(arg.outDir, arg.slug, arg.runDirName);
+  await mkdir(outRunDir, { recursive: true });
+  await writeJsonAtomic(join(outRunDir, 'features.json'), features);
+  console.log(
+    `OK ${label}: ${features.oscillators.length} oscillators`,
+  );
+  return {
+    status: 'processed',
+    rows: features.oscillators.map((osc) =>
+      flattenFeaturesRow({ run: features, osc }),
+    ),
+    oscillators: features.oscillators.length,
+  };
+}
+
+/**
  * Точка входа: обходит дерево датасета в отсортированном порядке,
  * пишет features.json каждого completed-прогона и сводный
- * features.csv. Битые артефакты пропускает с предупреждениями.
+ * features.csv.
  */
 async function main(): Promise<void> {
   const args = parseCliArgs(process.argv.slice(2));
@@ -561,26 +633,14 @@ async function main(): Promise<void> {
     throw new Error(`Dataset directory not found: ${datasetDir}`);
   }
 
-  const slugNames = (
-    await readdir(datasetDir, { withFileTypes: true })
-  )
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .filter(
-      (name) =>
-        !name.startsWith('.') &&
-        resolve(join(datasetDir, name)) !== outDir,
-    )
-    .sort();
-
   const csvRows: FeaturesCsvRow[] = [];
   let runsProcessed = 0;
   let runsSkipped = 0;
   let oscillatorsTotal = 0;
 
-  for (const slug of slugNames) {
+  for (const slug of await listSlugDirs(datasetDir, outDir)) {
     const targetDir = join(datasetDir, slug);
-    const initVector = await readJsonSafe(
+    const initVector = await readJsonOrNull<unknown>(
       join(targetDir, 'init-vector.json'),
     );
     if (!isNumberArray(initVector)) {
@@ -591,67 +651,21 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const runDirNames = (
-      await readdir(targetDir, { withFileTypes: true })
-    )
-      .filter(
-        (entry) =>
-          entry.isDirectory() && /^seed-\d+$/.test(entry.name),
-      )
-      .map((entry) => entry.name)
-      .sort(
-        (a, b) =>
-          Number(a.slice('seed-'.length)) -
-          Number(b.slice('seed-'.length)),
-      );
-
-    for (const runDirName of runDirNames) {
-      const runDir = join(targetDir, runDirName);
-      const fallbackSeed = Number(runDirName.slice('seed-'.length));
-      const record = await readRunRecord(runDir, fallbackSeed);
-      if (record === null) {
-        console.warn(
-          `WARN ${slug}/${runDirName}: broken run.json, skipped`,
-        );
-        runsSkipped += 1;
-        continue;
-      }
-      if (record.status !== 'completed') {
-        continue;
-      }
-      const patch = await readJsonSafe(join(runDir, 'patch.json'));
-      if (!isValidPatch(patch)) {
-        console.warn(
-          `WARN ${slug}/${runDirName}: broken patch.json, skipped`,
-        );
-        runsSkipped += 1;
-        continue;
-      }
-
-      const features = buildRunFeatures({
-        target: record.target === '' ? slug : record.target,
+    for (const runDirName of await listRunDirs(targetDir)) {
+      const result = await processRun({
         slug,
-        seed: record.seed,
-        suppressionPercent: record.suppressionPercent,
-        globalSuppressionPercent: record.globalSuppressionPercent,
-        patch,
+        runDirName,
+        runDir: join(targetDir, runDirName),
         initVector,
+        outDir,
       });
-      const outRunDir = join(outDir, slug, runDirName);
-      await mkdir(outRunDir, { recursive: true });
-      await writeJsonAtomic(
-        join(outRunDir, 'features.json'),
-        features,
-      );
-      for (const osc of features.oscillators) {
-        csvRows.push(flattenFeaturesRow({ run: features, osc }));
+      if (result.status === 'processed') {
+        csvRows.push(...result.rows);
+        runsProcessed += 1;
+        oscillatorsTotal += result.oscillators;
+      } else if (result.status === 'skipped') {
+        runsSkipped += 1;
       }
-      runsProcessed += 1;
-      oscillatorsTotal += features.oscillators.length;
-      console.log(
-        `OK ${slug}/${runDirName}: ` +
-          `${features.oscillators.length} oscillators`,
-      );
     }
   }
 
