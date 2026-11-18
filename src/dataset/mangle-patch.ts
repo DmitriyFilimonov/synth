@@ -76,6 +76,7 @@ const MANGLE_PARAMS = [
   'ampStartLevel',
 ] as const;
 
+/** Параметр из таблицы {@link MANGLE_PARAMS}. */
 type MangleParam = (typeof MANGLE_PARAMS)[number];
 
 /**
@@ -83,6 +84,9 @@ type MangleParam = (typeof MANGLE_PARAMS)[number];
  * из coordinate-descent.ts: экспортировать его из оптимизатора
  * ради одной утилиты не хочется, а воспроизводимость порчи по
  * сиду нужна так же, как воспроизводимость прогона.
+ *
+ * @param seed - Сид генератора
+ * @returns Функция, дающая при каждом вызове число в [0, 1)
  */
 function createRng(seed: number): () => number {
   let a = seed >>> 0;
@@ -95,7 +99,14 @@ function createRng(seed: number): () => number {
   };
 }
 
-/** Разбирает аргументы командной строки в {@link CliArgs}. */
+/**
+ * Разбирает аргументы командной строки в {@link CliArgs}.
+ *
+ * @param argv - Аргументы без node и пути к скрипту
+ * @returns Аргументы с дефолтами random-режима
+ * @throws Error при неизвестном аргументе, пропущенном значении
+ *   или отсутствии --patch/--out
+ */
 function parseCliArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     patchPath: '',
@@ -152,7 +163,13 @@ function parseCliArgs(argv: string[]): CliArgs {
   return args;
 }
 
-/** Читает JSON обязательного файла; неудача — ошибка с путём. */
+/**
+ * Читает JSON обязательного файла; неудача — ошибка с путём.
+ *
+ * @param path - Путь к JSON-файлу
+ * @returns Распарсенное содержимое файла
+ * @throws Error если файл не читается или не парсится
+ */
 function readJsonRequired<T>(path: string): T {
   const data = readJsonOrNullSync<T>(path);
   if (data === null) {
@@ -267,6 +284,12 @@ const PARAM_DESCRIPTORS: Record<MangleParam, ParamDescriptor> = {
  * Сдвигает параметр на случайную величину: частоты, длительности и
  * уровни — мультипликативно (они логарифмичны по восприятию),
  * кривизны и фазу — аддитивно. Результат clamp'ится в нормали.
+ *
+ * @param param - Имя изменяемого параметра
+ * @param value - Текущее значение параметра
+ * @param strength - Сила порчи (доля отклонения)
+ * @param rng - ГПСЧ
+ * @returns Новое значение, clamp'нутое в диапазон параметра
  */
 function jitterParam(
   param: MangleParam,
@@ -289,6 +312,11 @@ function jitterParam(
 /**
  * Режим random: выбирает `count` случайных правок по активным
  * осцилляторам и применяет их. Возвращает протокол правок.
+ *
+ * @param patch - Патч, который портим (мутируется)
+ * @param args - Сид, сила и число правок
+ * @returns Протокол применённых правок
+ * @throws Error если в патче нет активных осцилляторов
  */
 function mangleRandom(
   patch: ArgCreateSynth,
@@ -325,6 +353,12 @@ function mangleRandom(
 /**
  * Режим targeted: применяет явный список правок из JSON-файла
  * вида [{index, param, value}]. Возвращает протокол правок.
+ *
+ * @param patch - Патч, который портим (мутируется)
+ * @param overridesPath - Путь к JSON-файлу со списком правок
+ * @returns Протокол применённых правок; неизвестные слоты и
+ *   параметры пропускаются с предупреждением
+ * @throws Error если файл правок не читается или не парсится
  */
 function mangleTargeted(
   patch: ArgCreateSynth,

@@ -13,7 +13,13 @@ import {
 } from '../consts';
 import { createSynth, type ArgCreateSynth } from '../synth';
 
-/** Читает JSON асинхронно; при отсутствии или битом файле — null. */
+/**
+ * Читает JSON-файл асинхронно; при отсутствии файла или битом
+ * JSON возвращает null вместо исключения.
+ *
+ * @param path - Путь к JSON-файлу
+ * @returns Распарсенное содержимое файла или null
+ */
 export async function readJsonOrNull<T>(
   path: string,
 ): Promise<T | null> {
@@ -27,7 +33,13 @@ export async function readJsonOrNull<T>(
   }
 }
 
-/** Читает JSON синхронно; при отсутствии или битом файле — null. */
+/**
+ * Читает JSON-файл синхронно; при отсутствии файла или битом
+ * JSON возвращает null вместо исключения.
+ *
+ * @param path - Путь к JSON-файлу
+ * @returns Распарсенное содержимое файла или null
+ */
 export function readJsonOrNullSync<T>(path: string): T | null {
   if (!existsSync(path)) {
     return null;
@@ -39,7 +51,13 @@ export function readJsonOrNullSync<T>(path: string): T | null {
   }
 }
 
-/** Пишет JSON атомарно (асинхронно): временный файл + rename. */
+/**
+ * Пишет JSON атомарно (асинхронно): сначала во временный файл,
+ * затем переименовывает его в целевой.
+ *
+ * @param path - Путь к целевому JSON-файлу
+ * @param data - Сериализуемые в JSON данные
+ */
 export async function writeJsonAtomic(
   path: string,
   data: unknown,
@@ -49,7 +67,13 @@ export async function writeJsonAtomic(
   await rename(tmp, path);
 }
 
-/** Пишет JSON атомарно (синхронно): временный файл + rename. */
+/**
+ * Пишет JSON атомарно (синхронно): сначала во временный файл,
+ * затем переименовывает его в целевой.
+ *
+ * @param path - Путь к целевому JSON-файлу
+ * @param data - Сериализуемые в JSON данные
+ */
 export function writeJsonAtomicSync(
   path: string,
   data: unknown,
@@ -59,7 +83,13 @@ export function writeJsonAtomicSync(
   renameSync(tmp, path);
 }
 
-/** Пишет текст атомарно (асинхронно): временный файл + rename. */
+/**
+ * Пишет текст атомарно (асинхронно): сначала во временный файл,
+ * затем переименовывает его в целевой.
+ *
+ * @param path - Путь к целевому файлу
+ * @param data - Текст для записи
+ */
 export async function writeTextAtomic(
   path: string,
   data: string,
@@ -69,7 +99,13 @@ export async function writeTextAtomic(
   await rename(tmp, path);
 }
 
-/** Синтезирует патч в сэмплы Int16 заданной длительности. */
+/**
+ * Синтезирует патч в сэмплы Int16 заданной длительности.
+ *
+ * @param patch - Конфигурация осцилляторов для синтеза
+ * @param seconds - Длительность рендера в секундах
+ * @returns Сэмплы 16-битного знакового PCM
+ */
 export function renderSamples(
   patch: ArgCreateSynth,
   seconds: number,
@@ -86,7 +122,14 @@ export function renderSamples(
   return samples;
 }
 
-/** Считает квантиль с линейной интерполяцией; пустой ввод — null. */
+/**
+ * Считает квантиль выборки с линейной интерполяцией между
+ * соседними отсортированными значениями.
+ *
+ * @param values - Исходная выборка (не изменяется)
+ * @param q - Уровень квантиля от 0 до 1
+ * @returns Значение квантиля или null для пустой выборки
+ */
 export function quantile(values: number[], q: number): number | null {
   if (values.length === 0) {
     return null;

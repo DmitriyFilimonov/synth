@@ -143,6 +143,10 @@ const DRIFT_PARAMS = Object.keys(DRIFT_PARAM_DESCRIPTORS);
  * Загружает один прогон: run.json, patch.json, features.json.
  * Возвращает null для незавершённых и битых прогонов (их время
  * ещё не пришло — анализ терпим к неполному датасету).
+ *
+ * @param arg - Таргет, имя каталога сида, каталог прогона и
+ *   init-вектор таргета
+ * @returns Данные прогона или null
  */
 async function loadRun(arg: {
   slug: string;
@@ -185,7 +189,12 @@ async function loadRun(arg: {
   };
 }
 
-/** Обходит каталог датасета и загружает все завершённые прогоны. */
+/**
+ * Обходит каталог датасета и загружает все завершённые прогоны.
+ *
+ * @param datasetDir - Каталог датасета
+ * @returns Загруженные прогоны в отсортированном порядке обхода
+ */
 async function loadCompletedRuns(
   datasetDir: string,
 ): Promise<LoadedRun[]> {
@@ -219,7 +228,12 @@ async function loadCompletedRuns(
   return runs;
 }
 
-/** Собирает скалярные метрики прогона из run.json и features.json. */
+/**
+ * Собирает скалярные метрики прогона из run.json и features.json.
+ *
+ * @param runs - Загруженные завершённые прогоны
+ * @returns Метрики со значениями, сгруппированными по таргетам
+ */
 function collectScalarMetrics(runs: LoadedRun[]): ScalarMetric[] {
   const metrics = new Map<string, Map<string, number[]>>();
   const add = (name: string, slug: string, value: number | null) => {
@@ -329,6 +343,9 @@ function collectScalarMetrics(runs: LoadedRun[]): ScalarMetric[] {
  * против разброса между таргетами. Порог character: средний
  * внутритаргетный разброс меньше половины межтаргетного. Порог
  * invariant: межтаргетный разброс меньше удвоенного внутритаргетного.
+ *
+ * @param metric - Метрика со значениями по таргетам
+ * @returns Разбросы и вердикт; sparse, если прогонов мало
  */
 function classifyMetric(metric: ScalarMetric): MetricVerdict {
   const perTargetMeans: number[] = [];
@@ -379,10 +396,14 @@ function classifyMetric(metric: ScalarMetric): MetricVerdict {
 }
 
 /**
- * Считает дрейф init → final по каждому параметру каждого слота.
- * Осциллятор участвует, только если он активен в финальном патче:
+ * Считает дрейф параметров между init-вектором и финальным
+ * патчем по каждому параметру каждого слота. Осциллятор
+ * участвует, только если он активен в финальном патче:
  * выключенные слоты патч хранит обнулёнными, и дрейф по ним
  * бессмыслен.
+ *
+ * @param runs - Загруженные завершённые прогоны
+ * @returns Дрейф по слотам и параметрам с вердиктом artifact
  */
 function computeInitDrift(runs: LoadedRun[]): DriftCell[] {
   const cells = new Map<string, number[]>();
@@ -429,7 +450,12 @@ function computeInitDrift(runs: LoadedRun[]): DriftCell[] {
   });
 }
 
-/** Секция отчёта: global suppression по сидам каждого таргета. */
+/**
+ * Секция отчёта: global suppression по сидам каждого таргета.
+ *
+ * @param runs - Загруженные завершённые прогоны
+ * @returns Строки markdown-секции с таблицей по таргетам
+ */
 function formatSuppressionBySeedSection(runs: LoadedRun[]): string[] {
   const bySlug = new Map<string, number[]>();
   for (const run of runs) {
@@ -454,7 +480,12 @@ function formatSuppressionBySeedSection(runs: LoadedRun[]): string[] {
   return lines;
 }
 
-/** Секция отчёта: вердикты стабильности метрик уровня прогона. */
+/**
+ * Секция отчёта: вердикты стабильности метрик уровня прогона.
+ *
+ * @param verdicts - Вердикты по всем скалярным метрикам
+ * @returns Строки markdown-секции с таблицей вердиктов
+ */
 function formatVerdictSection(verdicts: MetricVerdict[]): string[] {
   const lines = ['## Стабильность метрик уровня прогона', ''];
   lines.push(
@@ -469,7 +500,12 @@ function formatVerdictSection(verdicts: MetricVerdict[]): string[] {
   return lines;
 }
 
-/** Секция отчёта: параметры-артефакты init по типам. */
+/**
+ * Секция отчёта: параметры-артефакты init по типам.
+ *
+ * @param drift - Дрейф по слотам и параметрам
+ * @returns Строки markdown-секции с таблицей по параметрам
+ */
 function formatArtifactSection(drift: DriftCell[]): string[] {
   const artifacts = drift.filter((d) => d.artifact);
   const byParam = new Map<string, number>();
@@ -493,7 +529,12 @@ function formatArtifactSection(drift: DriftCell[]): string[] {
   return lines;
 }
 
-/** Собирает markdown-отчёт из секций. */
+/**
+ * Собирает markdown-отчёт из секций.
+ *
+ * @param arg - Прогоны, вердикты метрик и дрейф параметров
+ * @returns Текст отчёта stability.md
+ */
 function buildMarkdownReport(arg: {
   runs: LoadedRun[];
   verdicts: MetricVerdict[];
@@ -515,7 +556,11 @@ function buildMarkdownReport(arg: {
   return lines.join('\n');
 }
 
-/** Точка входа: грузит прогоны, считает анализы, пишет отчёты. */
+/**
+ * Точка входа: грузит прогоны, считает анализы, пишет отчёты.
+ *
+ * @throws Error если не передан аргумент --dataset
+ */
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const datasetIdx = argv.indexOf('--dataset');

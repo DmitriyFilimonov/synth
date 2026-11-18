@@ -33,6 +33,10 @@ const STEPS: AnalysisStep[] = [
 /**
  * Гоняет одну ступень через tsx-подпроцесс с наследованным выводом.
  * Ошибка ступени не роняет остальные: печатаем и идём дальше.
+ *
+ * @param script - Имя модуля ступени рядом с этим файлом
+ * @param datasetDir - Каталог датасета для аргумента --dataset
+ * @returns true, если ступень завершилась успешно
  */
 function runStep(script: string, datasetDir: string): boolean {
   try {

@@ -96,7 +96,12 @@ const VERDICT_EPS = {
   dDecayDb20: 0.3,
 } as const;
 
-/** Загружает features.json всех завершённых прогонов датасета. */
+/**
+ * Загружает features.json всех завершённых прогонов датасета.
+ *
+ * @param datasetDir - Каталог датасета с прогонами
+ * @returns Признаки прогонов с читаемым features.json
+ */
 async function loadRunFeatures(
   datasetDir: string,
 ): Promise<RunFeatures[]> {
@@ -128,6 +133,10 @@ async function loadRunFeatures(
  * Сопоставляет осцилляторы двух прогонов жадно: строит пары по
  * возрастанию расстояния в log-частоте, берёт каждый осциллятор
  * не более одного раза. Пары дальше порога отбрасывает.
+ *
+ * @param a - Осцилляторы первого прогона
+ * @param b - Осцилляторы второго прогона
+ * @returns Пары с расстоянием не дальше порога сопоставления
  */
 function matchOscillators(
   a: OscFeatures[],
@@ -167,13 +176,25 @@ function matchOscillators(
   return pairs;
 }
 
-/** Круговое расстояние фаз в радианах, 0..π. */
+/**
+ * Считает круговое расстояние между двумя фазами.
+ *
+ * @param a - Первая фаза в радианах
+ * @param b - Вторая фаза в радианах
+ * @returns Расстояние в диапазоне от 0 до π
+ */
 function circularPhaseDistance(a: number, b: number): number {
   const diff = Math.abs(a - b) % (2 * Math.PI);
   return diff > Math.PI ? 2 * Math.PI - diff : diff;
 }
 
-/** Считает разницы признаков для одной сопоставленной пары. */
+/**
+ * Считает разницы признаков для одной сопоставленной пары.
+ *
+ * @param arg - Таргет, сиды прогонов и сопоставленная пара
+ * @returns Разницы признаков; dDecayDb20 равен null, если спад
+ *   до −20 дБ не измерен хотя бы у одного осциллятора пары
+ */
 function computePairDelta(arg: {
   slug: string;
   seedA: number;
@@ -206,7 +227,13 @@ function computePairDelta(arg: {
   };
 }
 
-/** Сводит разницы одного признака: медиана, p90, вердикт по порогу. */
+/**
+ * Сводит разницы одного признака: медиана, p90, вердикт по порогу.
+ *
+ * @param values - Разницы признака по сопоставленным парам
+ * @param eps - Порог медианы для вердикта stable
+ * @returns Медиана, p90 и вердикт; sparse при пустой выборке
+ */
 function summarizeDelta(
   values: number[],
   eps: number,
@@ -220,7 +247,12 @@ function summarizeDelta(
   return { median, p90, verdict };
 }
 
-/** Строит строки markdown-таблицы сводки по признакам. */
+/**
+ * Строит строки markdown-таблицы сводки по признакам.
+ *
+ * @param deltas - Разницы признаков по всем сопоставленным парам
+ * @returns Строки таблицы, по одной на признак
+ */
 function buildSummaryRows(deltas: PairDelta[]): string[] {
   const rows: string[] = [];
   const fields: {
@@ -273,7 +305,12 @@ function buildSummaryRows(deltas: PairDelta[]): string[] {
   return rows;
 }
 
-/** Строит markdown-отчёт: покрытие сопоставления и сводку разниц. */
+/**
+ * Строит markdown-отчёт: покрытие сопоставления и сводку разниц.
+ *
+ * @param arg - Разницы признаков и покрытие по парам сидов
+ * @returns Текст отчёта oscillator-stability.md
+ */
 function buildMarkdownReport(arg: {
   deltas: PairDelta[];
   coverage: MatchCoverage[];
@@ -316,7 +353,11 @@ function buildMarkdownReport(arg: {
   return lines.join('\n');
 }
 
-/** Точка входа: грузит признаки, сопоставляет, пишет отчёты. */
+/**
+ * Точка входа: грузит признаки, сопоставляет, пишет отчёты.
+ *
+ * @throws Error если не передан аргумент --dataset
+ */
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const datasetIdx = argv.indexOf('--dataset');

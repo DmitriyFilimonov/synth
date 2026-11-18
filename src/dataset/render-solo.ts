@@ -52,6 +52,11 @@ interface SoloIndexEntry {
  * Разбирает аргументы командной строки в {@link CliArgs}.
  * Принимает либо `--patch <файл>`, либо `--run <каталог прогона>`
  * (тогда патч читается из `<каталог>/patch.json`).
+ *
+ * @param argv - Аргументы без node и пути к скрипту
+ * @returns Путь к патчу, выходной каталог и длительность треков
+ * @throws Error при неизвестном аргументе или когда не заданы
+ *   ни --patch, ни --run
  */
 function parseCliArgs(argv: string[]): CliArgs {
   let patchPath: string | null = null;
@@ -100,7 +105,13 @@ function parseCliArgs(argv: string[]): CliArgs {
   };
 }
 
-/** Читает и парсит patch.json с понятной ошибкой при неудаче. */
+/**
+ * Читает и парсит patch.json с понятной ошибкой при неудаче.
+ *
+ * @param patchPath - Путь к файлу патча
+ * @returns Распарсенная конфигурация синтезатора
+ * @throws Error если файл не читается или не парсится
+ */
 function loadPatch(patchPath: string): ArgCreateSynth {
   const patch = readJsonOrNullSync<ArgCreateSynth>(patchPath);
   if (patch === null) {
@@ -112,6 +123,10 @@ function loadPatch(patchPath: string): ArgCreateSynth {
 /**
  * Возвращает копию патча, где включён только осциллятор `index`
  * (если он активен в оригинале), остальные выключены.
+ *
+ * @param patch - Исходный патч (не изменяется)
+ * @param index - Индекс солирующего осциллятора
+ * @returns Новый патч с одним звучащим осциллятором
  */
 function soloPatch(
   patch: ArgCreateSynth,
@@ -128,6 +143,10 @@ function soloPatch(
 /**
  * Возвращает копию патча с выключенным осциллятором `index`;
  * состояние остальных не меняется.
+ *
+ * @param patch - Исходный патч (не изменяется)
+ * @param index - Индекс исключаемого осциллятора
+ * @returns Новый патч без одного осциллятора
  */
 function minusPatch(
   patch: ArgCreateSynth,
@@ -141,7 +160,11 @@ function minusPatch(
   };
 }
 
-/** Пишет один WAV-трек в подкаталог выходной директории. */
+/**
+ * Синтезирует патч и пишет один WAV-трек по заданному пути.
+ *
+ * @param arg - Патч для синтеза, путь к WAV-файлу и длительность
+ */
 function writeTrack(arg: {
   patch: ArgCreateSynth;
   filePath: string;
@@ -157,7 +180,10 @@ function writeTrack(arg: {
 
 /**
  * Рендерит полный набор треков и пишет index.json со сводкой.
- * Возвращает число активных осцилляторов.
+ *
+ * @param args - Выходной каталог и длительность треков
+ * @param patch - Патч с осцилляторами для соло- и минус-треков
+ * @returns Число активных осцилляторов
  */
 function renderTrackSet(
   args: CliArgs,
