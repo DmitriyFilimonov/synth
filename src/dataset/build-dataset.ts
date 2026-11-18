@@ -11,7 +11,7 @@
  * Запуск:
  *   npx tsx src/dataset/build-dataset.ts \
  *     --targets targets --out datasets/reference-4 \
- *     --iterations 400 --seeds 1,2,3,4 --oscillators 50 --parallel 2
+ *     --iterations 300 --seeds 1,2,3,4 --oscillators 50 --parallel 2
  *
  * Живой прогресс в чате:
  *   ... 2>&1 | grep --line-buffered -E 'INIT|RUN|PROGRESS|DONE|FAIL|SKIP|SUMMARY'
@@ -44,7 +44,11 @@ import { cpus, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { SAMPLE_RATE } from '../consts';
 import { dualWindowInitVector } from '../dual-window-init-vector';
-import { matchWithWorker } from '../match-worker';
+import {
+  matchWithWorker,
+  type MatchWorkerProgress,
+  type MatchWorkerResult,
+} from '../match-worker';
 import { readWav } from '../read-wav';
 
 /** Аргументы командной строки сборщика. */
@@ -95,6 +99,13 @@ interface DatasetManifest {
   codeRevision: string | null;
   platform: string;
   nodeVersion: string;
+}
+
+/** Сводка пула прогонов: сколько завершилось, упало, пропущено. */
+interface PoolSummary {
+  completed: number;
+  failed: number;
+  skipped: number;
 }
 
 /** Частота строк прогресса в логе: одна строка на столько итераций. */
@@ -169,6 +180,26 @@ function parsePositiveInt(key: string, value: string): number {
 }
 
 /**
+ * Перечисляет WAV-файлы таргетов: фильтрует по расширению и
+ * подстроке `--only`, сортирует для детерминированного обхода.
+ */
+function listTargetFiles(
+  targetsDir: string,
+  only?: string,
+): string[] {
+  const files = readdirSync(targetsDir)
+    .filter((f) => f.toLowerCase().endsWith('.wav'))
+    .filter((f) =>
+      only === undefined ? true : f.toLowerCase().includes(only),
+    )
+    .sort();
+  if (files.length === 0) {
+    throw new Error(`No WAV targets found in ${targetsDir}`);
+  }
+  return files;
+}
+
+/**
  * Переводит имена WAV-файлов в безопасные slug'и каталогов.
  * Коллизии после очистки разрешает суффиксами `-2`, `-3`, …
  */
@@ -211,6 +242,26 @@ function readCodeRevision(): string | null {
   }
 }
 
+/** Собирает манифест сборки из аргументов и списка таргетов. */
+function buildManifest(
+  args: CliArgs,
+  targetsDir: string,
+  files: string[],
+): DatasetManifest {
+  return {
+    createdAt: new Date().toISOString(),
+    finishedAt: null,
+    targetsDir,
+    targets: files,
+    seeds: args.seeds,
+    maxIterations: args.iterations,
+    numOscillators: args.oscillators,
+    codeRevision: readCodeRevision(),
+    platform: process.platform,
+    nodeVersion: process.version,
+  };
+}
+
 /**
  * Проверяет, завершён ли прогон: `run.json` существует, читается
  * и содержит `status: "completed"`. Битый или чужой файл считаем
@@ -227,6 +278,18 @@ async function isRunCompleted(runDir: string): Promise<boolean> {
     return record.status === 'completed';
   } catch {
     return false;
+  }
+}
+
+/** Читает сохранённый init-вектор; при битом файле — null. */
+async function loadSavedInitVector(
+  initPath: string,
+): Promise<number[] | null> {
+  try {
+    const raw = await readFile(initPath, 'utf8');
+    return JSON.parse(raw) as number[];
+  } catch {
+    return null;
   }
 }
 
@@ -261,9 +324,174 @@ async function computeAndSaveInitVector(arg: {
 }
 
 /**
+ * Готовит init-векторы всех таргетов: читает сохранённые, недостающие
+ * считает. Возвращает карту slug → вектор.
+ */
+async function prepareInitVectors(arg: {
+  files: string[];
+  slugs: Map<string, string>;
+  targetsDir: string;
+  outDir: string;
+  oscillators: number;
+}): Promise<Map<string, number[]>> {
+  const initVectors = new Map<string, number[]>();
+  for (const file of arg.files) {
+    const slug = arg.slugs.get(file) ?? file;
+    const targetDir = join(arg.outDir, slug);
+    mkdirSync(targetDir, { recursive: true });
+    const initPath = join(targetDir, 'init-vector.json');
+    const saved = existsSync(initPath)
+      ? await loadSavedInitVector(initPath)
+      : null;
+    if (saved !== null) {
+      initVectors.set(slug, saved);
+      console.log(`INIT ${slug}: reused saved vector`);
+      continue;
+    }
+    const vector = await computeAndSaveInitVector({
+      targetPath: join(arg.targetsDir, file),
+      targetDir,
+      slug,
+      oscillators: arg.oscillators,
+    });
+    initVectors.set(slug, vector);
+  }
+  return initVectors;
+}
+
+/** Строит список прогонов: каждый таргет с каждым сидом. */
+function buildRunTasks(arg: {
+  files: string[];
+  slugs: Map<string, string>;
+  seeds: number[];
+  targetsDir: string;
+  outDir: string;
+}): RunTask[] {
+  const tasks: RunTask[] = [];
+  for (const file of arg.files) {
+    const slug = arg.slugs.get(file) ?? file;
+    for (const seed of arg.seeds) {
+      tasks.push({
+        targetFile: file,
+        targetPath: join(arg.targetsDir, file),
+        slug,
+        seed,
+        runDir: join(arg.outDir, slug, `seed-${seed}`),
+      });
+    }
+  }
+  return tasks;
+}
+
+/**
+ * Возвращает колбэк прогресса, который печатает строку раз в
+ * {@link PROGRESS_LOG_EVERY} итераций.
+ */
+function createProgressLogger(arg: {
+  slug: string;
+  seed: number;
+  iterations: number;
+}): (entry: MatchWorkerProgress) => void {
+  return (entry) => {
+    if (entry.iteration % PROGRESS_LOG_EVERY === 0) {
+      console.log(
+        `PROGRESS ${arg.slug} seed=${arg.seed} ` +
+          `iter=${entry.iteration}/${arg.iterations} ` +
+          `J=${entry.suppressionPercent.toFixed(2)}%`,
+      );
+    }
+  };
+}
+
+/**
+ * Собирает запись `run.json`: для завершённого прогона — с метриками
+ * и историей, для упавшего — с текстом ошибки и пустой историей.
+ */
+function buildRunRecord(arg: {
+  status: 'completed' | 'failed';
+  task: RunTask;
+  args: CliArgs;
+  startedAt: Date;
+  durationSec: number;
+  result?: MatchWorkerResult;
+  error?: string;
+}): RunRecord {
+  const base = {
+    status: arg.status,
+    target: arg.task.targetFile,
+    seed: arg.task.seed,
+    maxIterations: arg.args.iterations,
+    numOscillators: arg.args.oscillators,
+    startedAt: arg.startedAt.toISOString(),
+    finishedAt: new Date().toISOString(),
+    durationSec: arg.durationSec,
+  };
+  if (arg.status === 'completed' && arg.result !== undefined) {
+    return {
+      ...base,
+      suppressionPercent: arg.result.suppressionPercent,
+      globalSuppressionPercent: arg.result.globalSuppressionPercent,
+      error: null,
+      history: arg.result.history.map((h) => ({
+        iteration: h.iteration,
+        suppressionPercent: h.suppressionPercent,
+      })),
+    };
+  }
+  return {
+    ...base,
+    suppressionPercent: null,
+    globalSuppressionPercent: null,
+    error: arg.error ?? 'unknown error',
+    history: [],
+  };
+}
+
+/**
+ * Сохраняет артефакты успешного прогона: patch.json, run.json и
+ * result.wav (переносит из временного пути), затем логирует DONE.
+ */
+async function persistSuccessArtifacts(arg: {
+  task: RunTask;
+  result: MatchWorkerResult;
+  record: RunRecord;
+  tempOutput: string;
+}): Promise<void> {
+  await writeJsonAtomic(
+    join(arg.task.runDir, 'patch.json'),
+    arg.result.synthConfig,
+  );
+  await writeJsonAtomic(
+    join(arg.task.runDir, 'run.json'),
+    arg.record,
+  );
+  await copyFile(arg.tempOutput, join(arg.task.runDir, 'result.wav'));
+  console.log(
+    `DONE ${arg.task.slug} seed=${arg.task.seed} ` +
+      `global=${(arg.result.globalSuppressionPercent ?? NaN).toFixed(2)}% ` +
+      `J=${arg.result.suppressionPercent.toFixed(2)}% ` +
+      `dur=${arg.record.durationSec.toFixed(0)}s`,
+  );
+}
+
+/** Сохраняет failed-запись упавшего прогона и логирует FAIL. */
+async function persistFailureRecord(arg: {
+  task: RunTask;
+  record: RunRecord;
+}): Promise<void> {
+  await writeJsonAtomic(
+    join(arg.task.runDir, 'run.json'),
+    arg.record,
+  );
+  console.log(
+    `FAIL ${arg.task.slug} seed=${arg.task.seed}: ${arg.record.error}`,
+  );
+}
+
+/**
  * Выполняет один прогон: оптимизация в worker-потоке с заданным
- * сидом, затем атомарная запись patch.json, run.json и result.wav.
- * Ошибка прогона не роняет сборку: пишем failed-запись и идём дальше.
+ * сидом, затем сохранение артефактов. Ошибка прогона не роняет
+ * сборку: пишем failed-запись и идём дальше.
  */
 async function runSingleTask(
   task: RunTask,
@@ -289,68 +517,37 @@ async function runSingleTask(
       onLog: (line) => {
         logStream.write(line + '\n');
       },
-      onProgress: (entry) => {
-        if (entry.iteration % PROGRESS_LOG_EVERY === 0) {
-          console.log(
-            `PROGRESS ${task.slug} seed=${task.seed} ` +
-              `iter=${entry.iteration}/${args.iterations} ` +
-              `J=${entry.suppressionPercent.toFixed(2)}%`,
-          );
-        }
-      },
+      onProgress: createProgressLogger({
+        slug: task.slug,
+        seed: task.seed,
+        iterations: args.iterations,
+      }),
     });
-
-    const durationSec = (Date.now() - startedMs) / 1000;
-    await writeJsonAtomic(
-      join(task.runDir, 'patch.json'),
-      result.synthConfig,
-    );
-    const record: RunRecord = {
+    const record = buildRunRecord({
       status: 'completed',
-      target: task.targetFile,
-      seed: task.seed,
-      maxIterations: args.iterations,
-      numOscillators: args.oscillators,
-      startedAt: startedAt.toISOString(),
-      finishedAt: new Date().toISOString(),
-      durationSec,
-      suppressionPercent: result.suppressionPercent,
-      globalSuppressionPercent: result.globalSuppressionPercent,
-      error: null,
-      history: result.history.map((h) => ({
-        iteration: h.iteration,
-        suppressionPercent: h.suppressionPercent,
-      })),
-    };
-    await writeJsonAtomic(join(task.runDir, 'run.json'), record);
-    await copyFile(tempOutput, join(task.runDir, 'result.wav'));
-    console.log(
-      `DONE ${task.slug} seed=${task.seed} ` +
-        `global=${(result.globalSuppressionPercent ?? NaN).toFixed(2)}% ` +
-        `J=${result.suppressionPercent.toFixed(2)}% ` +
-        `dur=${durationSec.toFixed(0)}s`,
-    );
+      task,
+      args,
+      startedAt,
+      durationSec: (Date.now() - startedMs) / 1000,
+      result,
+    });
+    await persistSuccessArtifacts({
+      task,
+      result,
+      record,
+      tempOutput,
+    });
     return 'completed';
   } catch (error) {
-    const durationSec = (Date.now() - startedMs) / 1000;
-    const message =
-      error instanceof Error ? error.message : String(error);
-    const record: RunRecord = {
+    const record = buildRunRecord({
       status: 'failed',
-      target: task.targetFile,
-      seed: task.seed,
-      maxIterations: args.iterations,
-      numOscillators: args.oscillators,
-      startedAt: startedAt.toISOString(),
-      finishedAt: new Date().toISOString(),
-      durationSec,
-      suppressionPercent: null,
-      globalSuppressionPercent: null,
-      error: message,
-      history: [],
-    };
-    await writeJsonAtomic(join(task.runDir, 'run.json'), record);
-    console.log(`FAIL ${task.slug} seed=${task.seed}: ${message}`);
+      task,
+      args,
+      startedAt,
+      durationSec: (Date.now() - startedMs) / 1000,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await persistFailureRecord({ task, record });
     return 'failed';
   } finally {
     logStream.end();
@@ -359,123 +556,118 @@ async function runSingleTask(
 }
 
 /**
- * Точка входа: читает таргеты, считает init-векторы, гоняет прогоны
- * пулом в `--parallel` worker'ов, пишет manifest и сводку.
+ * Гоняет прогоны пулом в `parallel` worker'ов: курсор по списку
+ * задач, завершённые пропускает (resume), считает итоги.
  */
-async function main(): Promise<void> {
-  const args = parseCliArgs(process.argv.slice(2));
-  const targetsDir = resolve(args.targets);
-  const outDir = resolve(args.out);
-
-  const files = readdirSync(targetsDir)
-    .filter((f) => f.toLowerCase().endsWith('.wav'))
-    .filter((f) =>
-      args.only === undefined
-        ? true
-        : f.toLowerCase().includes(args.only),
-    )
-    .sort();
-  if (files.length === 0) {
-    throw new Error(`No WAV targets found in ${targetsDir}`);
-  }
-
-  const slugs = slugifyTargets(files);
-  mkdirSync(outDir, { recursive: true });
-
-  const manifest: DatasetManifest = {
-    createdAt: new Date().toISOString(),
-    finishedAt: null,
-    targetsDir,
-    targets: files,
-    seeds: args.seeds,
-    maxIterations: args.iterations,
-    numOscillators: args.oscillators,
-    codeRevision: readCodeRevision(),
-    platform: process.platform,
-    nodeVersion: process.version,
+async function runTaskPool(arg: {
+  tasks: RunTask[];
+  parallel: number;
+  args: CliArgs;
+  initVectors: Map<string, number[]>;
+}): Promise<PoolSummary> {
+  const summary: PoolSummary = {
+    completed: 0,
+    failed: 0,
+    skipped: 0,
   };
-  await writeJsonAtomic(join(outDir, 'manifest.json'), manifest);
-
-  const initVectors = new Map<string, number[]>();
-  for (const file of files) {
-    const slug = slugs.get(file) ?? file;
-    const targetDir = join(outDir, slug);
-    mkdirSync(targetDir, { recursive: true });
-    const initPath = join(targetDir, 'init-vector.json');
-    if (existsSync(initPath)) {
-      const raw = await readFile(initPath, 'utf8');
-      initVectors.set(slug, JSON.parse(raw) as number[]);
-      console.log(`INIT ${slug}: reused saved vector`);
-    } else {
-      const vector = await computeAndSaveInitVector({
-        targetPath: join(targetsDir, file),
-        targetDir,
-        slug,
-        oscillators: args.oscillators,
-      });
-      initVectors.set(slug, vector);
-    }
-  }
-
-  const tasks: RunTask[] = [];
-  for (const file of files) {
-    const slug = slugs.get(file) ?? file;
-    for (const seed of args.seeds) {
-      tasks.push({
-        targetFile: file,
-        targetPath: join(targetsDir, file),
-        slug,
-        seed,
-        runDir: join(outDir, slug, `seed-${seed}`),
-      });
-    }
-  }
-
-  const wallStartMs = Date.now();
-  let completed = 0;
-  let failed = 0;
-  let skipped = 0;
   let next = 0;
 
-  const pool = Array.from({ length: args.parallel }, async () => {
+  const workers = Array.from({ length: arg.parallel }, async () => {
     for (;;) {
-      const task = tasks[next];
+      const task = arg.tasks[next];
       next += 1;
       if (task === undefined) {
         return;
       }
       mkdirSync(task.runDir, { recursive: true });
       if (await isRunCompleted(task.runDir)) {
-        skipped += 1;
+        summary.skipped += 1;
         console.log(`SKIP ${task.slug} seed=${task.seed}: done`);
         continue;
       }
-      const initVector = initVectors.get(task.slug);
+      const initVector = arg.initVectors.get(task.slug);
       if (initVector === undefined) {
-        failed += 1;
+        summary.failed += 1;
         console.log(`FAIL ${task.slug}: no init vector`);
         continue;
       }
-      const status = await runSingleTask(task, initVector, args);
+      const status = await runSingleTask(task, initVector, arg.args);
       if (status === 'completed') {
-        completed += 1;
+        summary.completed += 1;
       } else {
-        failed += 1;
+        summary.failed += 1;
       }
     }
   });
-  await Promise.all(pool);
+  await Promise.all(workers);
+  return summary;
+}
 
-  const wallMin = (Date.now() - wallStartMs) / 60000;
-  manifest.finishedAt = new Date().toISOString();
-  await writeJsonAtomic(join(outDir, 'manifest.json'), manifest);
+/**
+ * Завершает сборку: проставляет finishedAt в манифесте, печатает
+ * сводку и помечает процесс упавшим, если были failed-прогоны.
+ */
+async function finalizeBuild(arg: {
+  outDir: string;
+  manifest: DatasetManifest;
+  summary: PoolSummary;
+  wallStartMs: number;
+}): Promise<void> {
+  arg.manifest.finishedAt = new Date().toISOString();
+  await writeJsonAtomic(
+    join(arg.outDir, 'manifest.json'),
+    arg.manifest,
+  );
+  const wallMin = (Date.now() - arg.wallStartMs) / 60000;
   console.log(
-    `SUMMARY done=${completed} failed=${failed} skipped=${skipped} ` +
+    `SUMMARY done=${arg.summary.completed} ` +
+      `failed=${arg.summary.failed} skipped=${arg.summary.skipped} ` +
       `wall=${wallMin.toFixed(1)}m`,
   );
-  if (failed > 0) {
+  if (arg.summary.failed > 0) {
     process.exitCode = 1;
   }
+}
+
+/**
+ * Точка входа: читает таргеты, готовит init-векторы, гоняет прогоны
+ * пулом, пишет манифест и сводку.
+ */
+async function main(): Promise<void> {
+  const args = parseCliArgs(process.argv.slice(2));
+  const targetsDir = resolve(args.targets);
+  const outDir = resolve(args.out);
+
+  const files = listTargetFiles(targetsDir, args.only);
+  const slugs = slugifyTargets(files);
+  mkdirSync(outDir, { recursive: true });
+
+  const manifest = buildManifest(args, targetsDir, files);
+  await writeJsonAtomic(join(outDir, 'manifest.json'), manifest);
+
+  const initVectors = await prepareInitVectors({
+    files,
+    slugs,
+    targetsDir,
+    outDir,
+    oscillators: args.oscillators,
+  });
+  const tasks = buildRunTasks({
+    files,
+    slugs,
+    seeds: args.seeds,
+    targetsDir,
+    outDir,
+  });
+
+  const wallStartMs = Date.now();
+  const summary = await runTaskPool({
+    tasks,
+    parallel: args.parallel,
+    args,
+    initVectors,
+  });
+  await finalizeBuild({ outDir, manifest, summary, wallStartMs });
 }
 
 main().catch((error) => {

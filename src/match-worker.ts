@@ -4,14 +4,19 @@ import { pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 import type { ArgCreateSynth } from './synth';
 
+/** Точка истории прогресса оптимизации от worker'а. */
 export interface MatchWorkerProgress {
+  /** Номер завершённой итерации coordinate descent. */
   iteration: number;
+  /** Текущий windowed-score (surrogate J), проценты. */
   suppressionPercent: number;
+  /** Необязательная метка фазы или события спуска. */
   status?: string;
   /** Snapshot of best-so-far normalized parameter vector. */
   bestVector?: readonly number[];
 }
 
+/** Результат прогона оптимизации в worker-потоке. */
 export interface MatchWorkerResult {
   history: MatchWorkerProgress[];
   targetInfo: {
@@ -27,14 +32,23 @@ export interface MatchWorkerResult {
   synthConfig: ArgCreateSynth;
 }
 
+/** Аргументы запуска оптимизации в worker-потоке. */
 interface MatchWorkerArgs {
+  /** Путь к WAV-файлу таргета. */
   targetWavPath: string;
+  /** Путь для записи синтезированного WAV. */
   outputWavPath: string;
+  /** Стартовый вектор осцилляторов, нормализованный в [0, 1]. */
   initialVector: number[];
+  /** Частота дискретизации, Гц. */
   sampleRate: number;
+  /** Бюджет итераций coordinate descent. */
   maxIterations: number;
+  /** Множитель веса окон атаки в метрике; 1 — без усиления. */
   attackBoost?: number;
+  /** Приращение шага при серии успехов (см. coordinate-descent). */
   stepGrowthAdd?: number;
+  /** Множитель затухания шага на плато. */
   stepDecayFactor?: number;
   /** Сид ГПСЧ оптимизатора; без него прогон идёт с дефолтным сидом. */
   seed?: number;
@@ -46,6 +60,12 @@ interface MatchWorkerArgs {
   onProgress?: (entry: MatchWorkerProgress) => void;
 }
 
+/**
+ * Выбирает файл worker'а: `.ts` через tsx при запуске из
+ * исходников, иначе собранный `.js` из `dist/`.
+ *
+ * @returns Спецификатор worker'а и execArgv для tsx, если нужен
+ */
 function resolveWorkerPath(): {
   specifier: string | URL;
   execArgv?: string[];
@@ -61,6 +81,18 @@ function resolveWorkerPath(): {
   return { specifier: jsPath };
 }
 
+/**
+ * Запускает оптимизацию в отдельном worker-потоке и возвращает
+ * промис с результатом прогона.
+ *
+ * @param arg - Параметры прогона: таргет, init-вектор, сид,
+ *   колбэки логов и прогресса
+ * @returns История прогресса, метрики suppression, лучший
+ *   вектор и конфиг синтезатора
+ * @remarks Промис отклоняется при ошибке worker'а и при
+ *   ненулевом коде его выхода. Сообщения worker'а с типом `log`
+ *   уходят в `arg.onLog`, а без него — в stdout процесса.
+ */
 export function matchWithWorker(
   arg: MatchWorkerArgs,
 ): Promise<MatchWorkerResult> {
