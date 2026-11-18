@@ -160,13 +160,17 @@ async function loadRun(arg: {
   const patch = await readJsonOrNull<ArgCreateSynth>(
     join(arg.runDir, 'patch.json'),
   );
-  if (patch === null) {
-    console.log(`WARN ${label}: no patch.json, skipped`);
+  if (patch === null || !Array.isArray(patch.oscillators)) {
+    console.log(`WARN ${label}: no valid patch.json, skipped`);
     return null;
   }
-  const features = await readJsonOrNull<RunFeatures>(
+  const rawFeatures = await readJsonOrNull<RunFeatures>(
     join(arg.runDir, 'features.json'),
   );
+  const features =
+    rawFeatures !== null && Array.isArray(rawFeatures.oscillators)
+      ? rawFeatures
+      : null;
   if (features === null) {
     console.log(`WARN ${label}: no features.json, scalar limited`);
   }
