@@ -183,6 +183,7 @@ Generate → Compare → Save WAV + SVG
 | `src/visualize-envelopes.ts`     | Визуализация огибающих первого осциллятора                                                                                                                                                                                                                                                          |
 | `src/frequency-envelope-visualization/` | Независимый чистый модуль `renderFrequencyEnvelopesSvg(patch, options) → string`; принимает `ArgCreateSynth` и опциональные нулевые `oscillatorIndices`, не зависит от Express, `fs`, DOM или React, использует математику частотной огибающей из `synth.ts`; ось Y логарифмическая для различимости саб-баса. Модуль реализован в T1, HTTP API — в T2, standalone UI и интеграция с результатами мэтчинга — в T3–T4. Контракт: `docs/spec-frequency-envelope-visualization.md` |
 | `src/match.ts`                   | Оркестратор мэтчинга: read → optimize → generate → visualize                                                                                                                                                                                                                                        |
+| `src/dataset/build-dataset.ts`   | Батч-сборщик датасета стабильности: таргеты × сиды, resume по `run.json`, артефакты в `datasets/<имя>/`; датасет — версионируемый вход, переобучение на новом наборе — тот же запуск с другой директорией                                                                                              |
 | `src/match-worker.ts`            | Обёртка для запуска оптимизации в worker-потоке                                                                                                                                                                                                                                                     |
 | `src/optimizer-worker.ts`        | Реализация worker-потока: запускает optimize, генерирует WAV, визуализацию                                                                                                                                                                                                                          |
 | `src/match-preset.ts`            | Начальная конфигурация для оптимизации                                                                                                                                                                                                                                                              |
@@ -681,8 +682,8 @@ Express отдаёт статику из `web/dist/` и настроен как 
 
 ### Мусор в корне репозитория
 
-- `*.wav`, `*.asd`, `*.svg`, `jobs/` — генерируемые артефакты,
-  в `.gitignore`. Не коммить и не опирайся на их наличие.
+- `*.wav`, `*.asd`, `*.svg`, `jobs/`, `datasets/` — генерируемые
+  артефакты, в `.gitignore`. Не коммить и не опирайся на их наличие.
   Исключение: `docs/img/*.svg` — статические иллюстрации для
   README (графики чувствительности метрики), они в git.
 - `test-*.ts` и `tmp_opt_test.js` в корне — одноразовые

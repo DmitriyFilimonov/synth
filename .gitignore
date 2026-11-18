@@ -6,3 +6,4 @@ dist
 *.svg
 !docs/img/*.svg
 jobs/
+datasets/

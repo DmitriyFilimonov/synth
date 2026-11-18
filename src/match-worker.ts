@@ -38,6 +38,11 @@ interface MatchWorkerArgs {
   stepDecayFactor?: number;
   /** Сид ГПСЧ оптимизатора; без него прогон идёт с дефолтным сидом. */
   seed?: number;
+  /**
+   * Куда писать логи worker'а. По умолчанию — в stdout процесса;
+   * батч-раннеры перенаправляют в файл прогона, чтобы не шуметь.
+   */
+  onLog?: (line: string) => void;
   onProgress?: (entry: MatchWorkerProgress) => void;
 }
 
@@ -68,7 +73,12 @@ export function matchWithWorker(
 
     worker.on('message', (msg: { type: string; data: unknown }) => {
       if (msg.type === 'log') {
-        process.stdout.write((msg.data as string) + '\n');
+        const line = msg.data as string;
+        if (arg.onLog) {
+          arg.onLog(line);
+        } else {
+          process.stdout.write(line + '\n');
+        }
       } else if (msg.type === 'progress') {
         arg.onProgress?.(msg.data as MatchWorkerProgress);
       } else if (msg.type === 'done') {
