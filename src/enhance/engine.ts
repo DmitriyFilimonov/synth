@@ -88,16 +88,32 @@ const TRANSIENT_DURATION_SEC = 0.06;
  */
 const CLUSTER_MAX_LOG_DISTANCE = 0.7;
 
-/** Классифицирует осциллятор по роли из формы огибающей. */
+/**
+ * Порог частоты для роли transient, Гц: короткая огибающая у
+ * низкочастотного осциллятора — это короткий саб, а не щелчок.
+ * Роль смотрит и на огибающую, и на частоту (урок water_12:
+ * click не добавился, потому что короткий саб считался щелчком).
+ */
+const TRANSIENT_MIN_FREQ_HZ = 400;
+
+/** Классифицирует осциллятор по роли из огибающей и частоты. */
 export function classifyOscillatorRole(
   group: ArgCreateSynth['oscillators'][number],
 ): 'sustain' | 'transient' {
-  return group.ampEnv.duration <= TRANSIENT_DURATION_SEC
+  return group.ampEnv.duration <= TRANSIENT_DURATION_SEC &&
+    group.osc.freqBase >= TRANSIENT_MIN_FREQ_HZ
     ? 'transient'
     : 'sustain';
 }
 
-/** Находит ближайший кластер роли по log-частоте; дальний — null. */
+/**
+ * Находит ближайший кластер роли: осциллятор внутри вилки
+ * [p10, p90] кластера — свой (нулевое расстояние), снаружи меряем
+ * расстояние до ближайшего края вилки. Медиана используется как
+ * fallback, когда вилки нет. До этого меряли расстояние до
+ * медианы, и широкий кластер терял крайние, но свои осцилляторы
+ * (урок water_15: саб 50 Гц на самом краю p10 остался «дальним»).
+ */
 export function nearestCluster(
   priors: PriorsFile,
   role: 'sustain' | 'transient',
@@ -106,13 +122,24 @@ export function nearestCluster(
   let best: PriorCluster | null = null;
   let bestDist = CLUSTER_MAX_LOG_DISTANCE;
   for (const cluster of priors.clusters) {
-    if (cluster.role !== role || cluster.freqBaseHz.median === null) {
+    if (cluster.role !== role) {
       continue;
     }
-    const dist = Math.abs(
-      Math.log(freqBase) - Math.log(cluster.freqBaseHz.median),
-    );
-    if (dist < bestDist) {
+    const lo = cluster.freqBaseHz.p10;
+    const hi = cluster.freqBaseHz.p90;
+    const median = cluster.freqBaseHz.median;
+    let dist: number | null = null;
+    if (lo !== null && hi !== null) {
+      if (freqBase >= lo && freqBase <= hi) {
+        dist = 0;
+      } else {
+        const edge = freqBase < lo ? lo : hi;
+        dist = Math.abs(Math.log(freqBase / edge));
+      }
+    } else if (median !== null) {
+      dist = Math.abs(Math.log(freqBase) - Math.log(median));
+    }
+    if (dist !== null && dist < bestDist) {
       bestDist = dist;
       best = cluster;
     }
