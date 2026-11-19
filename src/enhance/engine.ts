@@ -55,9 +55,19 @@ export interface PriorCluster {
   seedCoverage?: number;
 }
 
+/** Слот профиля тела из приоров (контракт C2). */
+export interface BodyProfileSlot {
+  rank: number;
+  runs: number;
+  freqRatio: FeatureDist;
+  levelRatio: FeatureDist;
+  durRatio: FeatureDist;
+}
+
 /** Файл приоров (контракт C2). */
 export interface PriorsFile {
   version: number;
+  bodyProfile?: BodyProfileSlot[];
   clusters: PriorCluster[];
 }
 
@@ -343,9 +353,9 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
     }
   }
 
-  // Примитивный саб обогащаем гармониками 2f и 3f.
+  // Примитивный саб обогащаем партиалами по профилю тела приоров.
   if (strength >= 0.5) {
-    const enriched = enrichPrimitiveBody({ patch, strength });
+    const enriched = enrichPrimitiveBody({ patch, priors, strength });
     patch = enriched.patch;
     audits.push(...enriched.audits);
   }
@@ -378,11 +388,9 @@ function findWeakestInaudible(patch: ArgCreateSynth): number | null {
 }
 
 /**
- * Гармоники обогащения тела: множитель частоты, доля уровня и
- * доля длительности от фундаменталки. Частота идёт от самого
- * патча (высота — характер входа), форма — музыкальная
- * (верхние гармоники тише и короче); приоры профиль гармоник
- * пока не несут — появится с ростом датасета.
+ * Гармоники обогащения тела по умолчанию: используются, только
+ * если у приоров нет вычисленного bodyProfile. Основной источник
+ * — профиль из датасета: партиалы реальных бочек не кратны.
  */
 const ENRICH_HARMONICS: {
   ratio: number;
@@ -392,6 +400,32 @@ const ENRICH_HARMONICS: {
   { ratio: 2, level: 0.35, dur: 0.6 },
   { ratio: 3, level: 0.18, dur: 0.35 },
 ];
+
+/**
+ * Отношения для обогащения: из bodyProfile приоров (медианы),
+ * иначе из умолчания. Профиль уже несёт уровень и длительность
+ * относительно фундаменталки.
+ */
+function enrichRatios(
+  priors: PriorsFile,
+): { ratio: number; level: number; dur: number }[] {
+  const profile = priors.bodyProfile;
+  if (profile === undefined || profile.length === 0) {
+    return ENRICH_HARMONICS;
+  }
+  return profile
+    .filter(
+      (s) =>
+        s.freqRatio.median !== null &&
+        s.levelRatio.median !== null &&
+        s.durRatio.median !== null,
+    )
+    .map((s) => ({
+      ratio: s.freqRatio.median ?? 1,
+      level: s.levelRatio.median ?? 0,
+      dur: s.durRatio.median ?? 1,
+    }));
+}
 
 /**
  * Находит фундаменталку патча: активный sustain-осциллятор с
@@ -472,6 +506,7 @@ function ensureFreeSlot(arg: {
  */
 function enrichPrimitiveBody(arg: {
   patch: ArgCreateSynth;
+  priors: PriorsFile;
   strength: number;
 }): { patch: ArgCreateSynth; audits: TransformAudit[] } {
   let patch = arg.patch;
@@ -484,7 +519,7 @@ function enrichPrimitiveBody(arg: {
     return { patch, audits };
   }
 
-  for (const harmonic of ENRICH_HARMONICS) {
+  for (const harmonic of enrichRatios(arg.priors)) {
     const room = ensureFreeSlot({
       patch,
       reason: 'уступил место гармонике обогащения',

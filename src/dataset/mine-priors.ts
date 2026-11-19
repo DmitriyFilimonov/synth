@@ -73,6 +73,22 @@ interface PriorCluster {
   decayDb20Sec: FeatureDist;
 }
 
+/**
+ * Слот профиля тела: отношения частоты, уровня и длительности
+ * N-го партиала к фундаменталке, собранные по прогонам. Партиалы
+ * реальных бочек не кратны — профиль несёт это в себе.
+ */
+interface BodyProfileSlot {
+  rank: number;
+  runs: number;
+  freqRatio: FeatureDist;
+  levelRatio: FeatureDist;
+  durRatio: FeatureDist;
+}
+
+/** Уровень слышимости осциллятора при майнинге профиля тела. */
+const AUDIBLE_LEVEL = 0.03;
+
 /** Зазор в log-частоте, после которого режем новый кластер. */
 const CLUSTER_GAP_LOG = 0.35;
 
@@ -191,6 +207,75 @@ function buildPriorCluster(
   };
 }
 
+/**
+ * Считает профиль тела по прогонам: фундаменталка — самый низкий
+ * слышимый sustain, партиалы — слышимые sustain в зоне 1.5f–12f,
+ * топ-3 по уровню. Отношения собираются по рангам слотов.
+ */
+function computeBodyProfile(all: TaggedOsc[]): BodyProfileSlot[] {
+  const byRun = new Map<string, TaggedOsc[]>();
+  for (const osc of all) {
+    const key = `${osc.slug}/seed-${osc.seed}`;
+    if (!byRun.has(key)) {
+      byRun.set(key, []);
+    }
+    (byRun.get(key) ?? []).push(osc);
+  }
+
+  const slots: {
+    freqRatio: number[];
+    levelRatio: number[];
+    durRatio: number[];
+  }[] = [0, 1, 2].map(() => ({
+    freqRatio: [],
+    levelRatio: [],
+    durRatio: [],
+  }));
+
+  for (const oscs of byRun.values()) {
+    const sustain = oscs.filter(
+      (o) => o.role === 'sustain' && o.ampStartLevel >= AUDIBLE_LEVEL,
+    );
+    if (sustain.length === 0) {
+      continue;
+    }
+    const fund = sustain.reduce((a, b) =>
+      a.freqBase <= b.freqBase ? a : b,
+    );
+    const partials = sustain
+      .filter(
+        (o) =>
+          o.freqBase >= fund.freqBase * 1.5 &&
+          o.freqBase <= fund.freqBase * 12,
+      )
+      .sort((a, b) => b.ampStartLevel - a.ampStartLevel)
+      .slice(0, 3);
+    partials.forEach((p, rank) => {
+      const slot = slots[rank];
+      if (slot === undefined || fund.ampStartLevel <= 0) {
+        return;
+      }
+      slot.freqRatio.push(p.freqBase / fund.freqBase);
+      slot.levelRatio.push(p.ampStartLevel / fund.ampStartLevel);
+      if (fund.ampEnvDurationSec > 0) {
+        slot.durRatio.push(
+          p.ampEnvDurationSec / fund.ampEnvDurationSec,
+        );
+      }
+    });
+  }
+
+  return slots
+    .map((slot, rank) => ({
+      rank: rank + 1,
+      runs: slot.freqRatio.length,
+      freqRatio: distOf(slot.freqRatio),
+      levelRatio: distOf(slot.levelRatio),
+      durRatio: distOf(slot.durRatio),
+    }))
+    .filter((s) => s.runs > 0);
+}
+
 /** Читает ревизию кода из git; при недоступности git — null. */
 function readCodeRevision(): string | null {
   try {
@@ -291,6 +376,7 @@ async function main(): Promise<void> {
     }
   }
 
+  const bodyProfile = computeBodyProfile(all);
   await writeJsonAtomic(join(datasetDir, 'priors.json'), {
     version: 1,
     createdFrom: {
@@ -298,6 +384,7 @@ async function main(): Promise<void> {
       codeRevision: readCodeRevision(),
     },
     note: 'Кластеры уровня компонентов (по ролям). Семейства уровня таргетов появятся с ростом датасета.',
+    bodyProfile,
     clusters,
   });
   await writeTextAtomic(

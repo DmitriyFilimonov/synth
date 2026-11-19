@@ -275,6 +275,60 @@ test('primitive body gains 2f and 3f harmonics at full strength', () => {
   );
 });
 
+test('enrichment follows the dataset body profile when present', () => {
+  const patch = makePatch();
+  // Слышимый transient, чтобы click не занял слот; слот под партиал свободен.
+  const second = patch.oscillators[1];
+  if (second !== undefined) {
+    second.osc.on = true;
+    second.ampEnv.startLevel = 0.4;
+  }
+  patch.oscillators.push({
+    osc: {
+      on: false,
+      freqBase: 100,
+      freqStart: 100,
+      slope: 1,
+      duration: 0.1,
+      phase: 0,
+    },
+    ampEnv: {
+      duration: 0.1,
+      endLevel: 0.001,
+      slope: 1,
+      startLevel: 0.01,
+    },
+  });
+  const priors = makePriors();
+  priors.bodyProfile = [
+    {
+      rank: 1,
+      runs: 16,
+      freqRatio: { median: 1.85, p10: 1.6, p90: 2.1 },
+      levelRatio: { median: 0.7, p10: 0.5, p90: 0.9 },
+      durRatio: { median: 0.9, p10: 0.8, p90: 1.0 },
+    },
+  ];
+  // Замораживаем уровень фундаменталки, чтобы проверять формулы
+  // профиля, а не игру усиления с обогащением.
+  const map = makeMap();
+  map.params['startLevel'] = { verdict: 'anchored' };
+  const result = enhancePatch({
+    patch,
+    identifiability: map,
+    priors,
+    strength: 1,
+  });
+  const partial = result.patch.oscillators.find(
+    (g) => g.osc.on && Math.abs(g.osc.freqBase - 50 * 1.85) < 1e-9,
+  );
+  assert.ok(partial !== undefined, 'partial at 1.85x must exist');
+  assert.ok(
+    Math.abs((partial?.ampEnv.startLevel ?? 0) - 0.3 * 0.7) < 1e-9,
+    `partial level ${partial?.ampEnv.startLevel}`,
+  );
+});
+
 test('a body with audible partials is not enriched', () => {
   const patch = makePatch();
   const second = patch.oscillators[1];
