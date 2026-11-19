@@ -1,0 +1,193 @@
+/**
+ * Тесты движка улучшения (режим A): анкерные параметры не двигаются,
+ * свободные тянутся к приорам на величину силы, слой атаки
+ * достраивается только при достаточной силе.
+ */
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { type ArgCreateSynth } from '../synth';
+import {
+  enhancePatch,
+  type IdentifiabilityMap,
+  type PriorsFile,
+} from './engine';
+
+/** Собирает минимальный патч: один саб + один короткий пик. */
+function makePatch(): ArgCreateSynth {
+  return {
+    oscillators: [
+      {
+        osc: {
+          on: true,
+          freqBase: 50,
+          freqStart: 200,
+          slope: 0.8,
+          duration: 0.25,
+          phase: 1,
+        },
+        ampEnv: {
+          duration: 0.2,
+          endLevel: 0.5,
+          slope: 0.8,
+          startLevel: 0.3,
+        },
+      },
+      {
+        osc: {
+          on: false,
+          freqBase: 3000,
+          freqStart: 3000,
+          slope: 2,
+          duration: 0.04,
+          phase: 0,
+        },
+        ampEnv: {
+          duration: 0.04,
+          endLevel: 0.001,
+          slope: 2,
+          startLevel: 0.1,
+        },
+      },
+    ],
+  };
+}
+
+/** Карта идентифицируемости по мотивам BOg: частоты анкерные, огибающие свободные, endLevel залип на init. */
+function makeMap(): IdentifiabilityMap {
+  return {
+    version: 1,
+    params: {
+      freqBase: { verdict: 'anchored' },
+      freqStart: { verdict: 'anchored' },
+      ampEnvDuration: { verdict: 'free' },
+      startLevel: { verdict: 'free' },
+      endLevel: { verdict: 'prior-owned' },
+      phase: { verdict: 'free' },
+    },
+  };
+}
+
+/** Приоры с одним sustain-кластером около 50 Гц и одним transient. */
+function makePriors(): PriorsFile {
+  return {
+    version: 1,
+    clusters: [
+      {
+        id: 'sustain-00',
+        role: 'sustain',
+        freqBaseHz: { median: 50, p10: 45, p90: 60 },
+        ampEnvDurationSec: { median: 0.4, p10: 0.3, p90: 0.5 },
+        ampStartLevel: { median: 0.6, p10: 0.5, p90: 0.7 },
+        ampEndLevel: { median: 0.001, p10: 0.001, p90: 0.001 },
+      },
+      {
+        id: 'transient-00',
+        role: 'transient',
+        freqBaseHz: { median: 3000, p10: 2000, p90: 4000 },
+        ampEnvDurationSec: { median: 0.03, p10: 0.02, p90: 0.04 },
+        ampStartLevel: { median: 0.2, p10: 0.15, p90: 0.25 },
+        ampEndLevel: { median: 0.001, p10: 0.001, p90: 0.001 },
+      },
+    ],
+  };
+}
+
+test('strength 0 returns the patch untouched', () => {
+  const patch = makePatch();
+  const result = enhancePatch({
+    patch,
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 0,
+  });
+  assert.equal(result.patch, patch);
+  assert.equal(result.audits.length, 0);
+});
+
+test('anchored parameters stay put at full strength', () => {
+  const result = enhancePatch({
+    patch: makePatch(),
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 1,
+  });
+  const osc = result.patch.oscillators[0];
+  assert.equal(osc?.osc.freqBase, 50);
+  assert.equal(osc?.osc.freqStart, 200);
+});
+
+test('prior-owned endLevel moves fully to the prior at strength 1', () => {
+  const result = enhancePatch({
+    patch: makePatch(),
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 1,
+  });
+  const osc = result.patch.oscillators[0];
+  assert.ok(Math.abs((osc?.ampEnv.endLevel ?? 0) - 0.001) < 1e-9);
+});
+
+test('free envelope extends toward the prior but never shortens', () => {
+  const result = enhancePatch({
+    patch: makePatch(),
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 1,
+  });
+  const osc = result.patch.oscillators[0];
+  assert.ok(
+    Math.abs((osc?.ampEnv.duration ?? 0) - 0.4) < 1e-9,
+    `duration should reach the prior 0.4, got ${osc?.ampEnv.duration}`,
+  );
+});
+
+test('missing click layer is added only at sufficient strength', () => {
+  const weak = enhancePatch({
+    patch: makePatch(),
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 0.3,
+  });
+  assert.equal(
+    weak.patch.oscillators[1]?.osc.on,
+    false,
+    'at 0.3 the click must not appear',
+  );
+  const strong = enhancePatch({
+    patch: makePatch(),
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 1,
+  });
+  assert.equal(
+    strong.patch.oscillators[1]?.osc.on,
+    true,
+    'at 1.0 the click must appear',
+  );
+  assert.equal(strong.patch.oscillators[1]?.osc.freqBase, 3000);
+});
+
+test('anchored endLevel is not moved', () => {
+  const map = makeMap();
+  map.params['endLevel'] = { verdict: 'anchored' };
+  const result = enhancePatch({
+    patch: makePatch(),
+    identifiability: map,
+    priors: makePriors(),
+    strength: 1,
+  });
+  const osc = result.patch.oscillators[0];
+  assert.equal(osc?.ampEnv.endLevel, 0.5);
+});
+
+test('input patch is never mutated', () => {
+  const patch = makePatch();
+  const snapshot = JSON.stringify(patch);
+  enhancePatch({
+    patch,
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 1,
+  });
+  assert.equal(JSON.stringify(patch), snapshot);
+});
