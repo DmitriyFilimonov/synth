@@ -83,14 +83,15 @@ test('envelope corrections still fire while frequency is disabled', () => {
   );
 });
 
-test('over-long envelope shortens halfway at strength 0.5', () => {
+test('over-long envelope shortens, clamped by the 0.5s synth ceiling', () => {
   const result = correctPatch({
     patch: makePatch(),
     priors: makePriors(),
     strength: 0.5,
   });
   const osc = result.patch.oscillators[0];
-  assert.ok(Math.abs((osc?.ampEnv.duration ?? 0) - 0.7) < 1e-9);
+  // Половинчатый ход дал бы 0.7 с, но потолок огибающей 0.5 с.
+  assert.ok(Math.abs((osc?.ampEnv.duration ?? 0) - 0.5) < 1e-9);
 });
 
 test('values inside the range stay put', () => {
