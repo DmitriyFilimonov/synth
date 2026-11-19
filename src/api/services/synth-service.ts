@@ -418,6 +418,9 @@ async function runEnhanceJob(
     iteration: number;
     suppressionPercent: number;
   }[] = [];
+  let lastUpdateMs = 0;
+  const UPDATE_THROTTLE_MS = 1000;
+  let latestBestVector: number[] | null = null;
 
   try {
     await updateJobStatus(jobId, 'running');
@@ -437,8 +440,29 @@ async function runEnhanceJob(
       maxIterations,
       seed,
       onProgress: (entry) => {
-        const { bestVector: _bv, ...historyEntry } = entry;
+        const { bestVector: entryVector, ...historyEntry } = entry;
         history.push(historyEntry);
+        if (entryVector !== undefined) {
+          latestBestVector = [...entryVector];
+        }
+        // Промежуточный статус раз в секунду: UI показывает живой
+        // прогресс. Ошибка записи не должна ронять оптимизацию,
+        // поэтому обновление fire-and-forget.
+        const now = Date.now();
+        if (now - lastUpdateMs >= UPDATE_THROTTLE_MS) {
+          lastUpdateMs = now;
+          const update: Parameters<typeof updateJobStatus>[2] = {
+            progress: [...history],
+            suppressionPercent: entry.suppressionPercent,
+          };
+          if (latestBestVector !== null) {
+            update.bestVector = latestBestVector;
+            update.synthConfig = mapVectorToSynthConfig([
+              ...latestBestVector,
+            ]);
+          }
+          void updateJobStatus(jobId, 'running', update);
+        }
       },
     });
 
