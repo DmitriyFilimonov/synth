@@ -29,6 +29,16 @@ export interface CorrectArgs {
   strength: number;
 }
 
+/** Потолок сдвига частоты при коррекции: 15% в любую сторону. */
+const FREQ_MOVE_CAP_LOG = Math.log(1.15);
+
+/**
+ * Минимум таргетов у кластера, чтобы ему доверять коррекцию.
+ * Одноэталонный кластер может быть частностью чужого звука —
+ * он уже показал, что умеет утаскивать частоту на сотни герц.
+ */
+const MIN_CLUSTER_TARGETS = 2;
+
 /** Результат коррекции: патч и журнал трансформаций. */
 export interface CorrectResult {
   patch: ArgCreateSynth;
@@ -38,7 +48,9 @@ export interface CorrectResult {
 /**
  * Возвращает цель движения к вилке [lo, hi]: внутри вилки — само
  * значение (двигать нечего), снаружи — границу, сдвинутую на долю
- * strength от промаха.
+ * strength от промаха. Сдвиг лимитирован потолком: коррекция не
+ * таскает частоту дальше FREQ_MOVE_CAP_LOG, каким бы далёким ни
+ * был приор.
  */
 function projectIntoRange(
   value: number,
@@ -50,7 +62,12 @@ function projectIntoRange(
     return value;
   }
   const boundary = value < lo ? lo : hi;
-  return value + (boundary - value) * strength;
+  const target = value + (boundary - value) * strength;
+  const overshootLog = Math.abs(Math.log(target / value));
+  if (overshootLog > FREQ_MOVE_CAP_LOG) {
+    return value < lo ? value * 1.15 : value / 1.15;
+  }
+  return target;
 }
 
 /**
@@ -87,6 +104,10 @@ export function correctPatch(args: CorrectArgs): CorrectResult {
       group.osc.freqBase,
     );
     if (cluster === null) {
+      return;
+    }
+    // Одноэталонным кластерам коррекцию не доверяем.
+    if ((cluster.targetsPresent?.length ?? 0) < MIN_CLUSTER_TARGETS) {
       return;
     }
 

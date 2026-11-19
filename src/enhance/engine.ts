@@ -48,6 +48,10 @@ export interface PriorCluster {
   ampEnvDurationSec: FeatureDist;
   ampStartLevel: FeatureDist;
   ampEndLevel: FeatureDist;
+  /** Таргеты, где кластер представлен; режим B требует ≥ 2. */
+  targetsPresent?: string[];
+  /** Покрытие сидов в представленных таргетах, 0..1. */
+  seedCoverage?: number;
 }
 
 /** Файл приоров (контракт C2). */
@@ -125,6 +129,39 @@ function verdictOf(
 }
 
 /**
+ * Грубая оценка энергии осциллятора: квадрат уровня на длительность.
+ * Нужна, чтобы отличать «тело» патча от тембровой текстуры.
+ */
+function energyProxy(
+  group: ArgCreateSynth['oscillators'][number],
+): number {
+  return group.ampEnv.startLevel ** 2 * group.ampEnv.duration;
+}
+
+/**
+ * Индексы топ-N sustain-осцилляторов патча по энергии. Только они
+ * могут быть «слишком слабым телом»; текстуру движок не усиливает
+ * (урок провалившейся регрессии: 21 усиление подряд разровняло
+ * тембровую иерархию эталона).
+ */
+export function topSustainIndices(
+  patch: ArgCreateSynth,
+  count: number,
+): Set<number> {
+  const scored = patch.oscillators
+    .map((group, index) => ({
+      index,
+      score:
+        group.osc.on && classifyOscillatorRole(group) === 'sustain'
+          ? energyProxy(group)
+          : -1,
+    }))
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score);
+  return new Set(scored.slice(0, count).map((s) => s.index));
+}
+
+/**
  * Двигает текущее значение к целевому на долю strength в
  * мультипликативной шкале: при strength 1 результат равен цели.
  */
@@ -161,6 +198,7 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
   const hasActiveTransient = patch.oscillators.some(
     (g) => g.osc.on && classifyOscillatorRole(g) === 'transient',
   );
+  const bodyIndices = topSustainIndices(patch, 3);
 
   patch.oscillators.forEach((group, index) => {
     if (!group.osc.on) {
@@ -172,18 +210,26 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
       return;
     }
 
+    // endLevel приглушаем только у выбросов выше p90 кластера:
+    // поднимать звонкость к медиане нельзя (звенящий хвост может
+    // быть характером), а типовой хвост и так у своей медианы.
     const endLevelVerdict = verdictOf(identifiability, 'endLevel');
+    const endP90 = cluster.ampEndLevel.p90;
+    const currentEnd = group.ampEnv.endLevel ?? MIN;
     if (
       (endLevelVerdict === 'prior-owned' ||
         endLevelVerdict === 'free') &&
-      cluster.ampEndLevel.median !== null
+      endP90 !== null &&
+      currentEnd > endP90
     ) {
-      const target = moveToward(
-        group.ampEnv.endLevel ?? MIN,
-        cluster.ampEndLevel.median,
-        strength,
-      );
+      const target = moveToward(currentEnd, endP90, strength);
       apply(setEndLevel(patch, index, target));
+    }
+
+    // Продление и усиление — только телу (топ-3 sustain по энергии):
+    // текстуру оставляем, как определил match.
+    if (!bodyIndices.has(index)) {
+      return;
     }
 
     const durationVerdict = verdictOf(

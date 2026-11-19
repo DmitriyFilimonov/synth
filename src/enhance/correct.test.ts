@@ -34,7 +34,7 @@ function makePatch(): ArgCreateSynth {
 }
 
 /** Приоры: sustain-кластер 45–60 Гц с огибающей 0.3–0.5 с. */
-function makePriors(): PriorsFile {
+function makePriors(targetsPresent?: string[]): PriorsFile {
   return {
     version: 1,
     clusters: [
@@ -45,6 +45,7 @@ function makePriors(): PriorsFile {
         ampEnvDurationSec: { median: 0.4, p10: 0.3, p90: 0.5 },
         ampStartLevel: { median: 0.6, p10: 0.5, p90: 0.7 },
         ampEndLevel: { median: 0.001, p10: 0.001, p90: 0.001 },
+        targetsPresent: targetsPresent ?? ['alpha', 'beta'],
       },
     ],
   };
@@ -60,14 +61,14 @@ test('strength 0 leaves the patch untouched', () => {
   assert.equal(result.patch, patch);
 });
 
-test('out-of-range freqBase moves to the boundary at strength 1', () => {
+test('strength 1 moves toward the band but is capped at 15 percent', () => {
   const result = correctPatch({
     patch: makePatch(),
     priors: makePriors(),
     strength: 1,
   });
   const osc = result.patch.oscillators[0];
-  assert.equal(osc?.osc.freqBase, 45);
+  assert.ok(Math.abs((osc?.osc.freqBase ?? 0) - 34.5) < 1e-9);
 });
 
 test('sweep ratio survives the correction', () => {
@@ -84,14 +85,19 @@ test('sweep ratio survives the correction', () => {
   );
 });
 
-test('strength 0.5 moves halfway toward the boundary', () => {
+test('strength 0.5 moves halfway inside the cap', () => {
+  const priors = makePriors();
+  const cluster = priors.clusters[0];
+  if (cluster !== undefined) {
+    cluster.freqBaseHz = { median: 36, p10: 33, p90: 40 };
+  }
   const result = correctPatch({
     patch: makePatch(),
-    priors: makePriors(),
+    priors,
     strength: 0.5,
   });
   const osc = result.patch.oscillators[0];
-  assert.ok(Math.abs((osc?.osc.freqBase ?? 0) - 37.5) < 1e-9);
+  assert.ok(Math.abs((osc?.osc.freqBase ?? 0) - 31.5) < 1e-9);
 });
 
 test('over-long envelope shortens to the upper boundary', () => {
@@ -121,6 +127,35 @@ test('values inside the range stay put', () => {
   });
   assert.equal(result.audits.length, 0);
   assert.equal(result.patch.oscillators[0]?.osc.freqBase, 52);
+});
+
+test('one-target clusters do not drive corrections', () => {
+  const result = correctPatch({
+    patch: makePatch(),
+    priors: makePriors(['only-one']),
+    strength: 1,
+  });
+  assert.equal(result.audits.length, 0);
+  assert.equal(result.patch.oscillators[0]?.osc.freqBase, 30);
+});
+
+test('downward frequency move is capped at 15 percent', () => {
+  const patch = makePatch();
+  const first = patch.oscillators[0];
+  if (first !== undefined) {
+    first.osc.freqBase = 100;
+  }
+  const result = correctPatch({
+    patch,
+    priors: makePriors(),
+    strength: 1,
+  });
+  const osc = result.patch.oscillators[0];
+  const expected = 100 / 1.15;
+  assert.ok(
+    Math.abs((osc?.osc.freqBase ?? 0) - expected) < 1e-6,
+    `expected cap at ${expected}, got ${osc?.osc.freqBase}`,
+  );
 });
 
 test('input patch is never mutated', () => {
