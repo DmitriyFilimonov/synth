@@ -77,7 +77,7 @@ simple-init-vector). Пользователь задаёт только пара
 | `npm run prettier:check` | Проверка форматирования (без изменений)           |
 | `npm run lint`           | Проверка ESLint                                   |
 | `npm run lint:fix`       | Автофикс ESLint                                   |
-| `npm run test`           | Unit-тесты визуализации частотных огибающих через Node test runner + `tsx` |
+| `npm run test`           | Unit-тесты (визуализация частотных огибающих, трансформации патчей `src/enhance/`) через Node test runner + `tsx` |
 
 ### Веб-интерфейс (`web/`)
 
@@ -182,6 +182,7 @@ Generate → Compare → Save WAV + SVG
 | `src/visualize.ts`               | Генерация SVG-графиков                                                                                                                                                                                                                                                                              |
 | `src/visualize-envelopes.ts`     | Визуализация огибающих первого осциллятора                                                                                                                                                                                                                                                          |
 | `src/frequency-envelope-visualization/` | Независимый чистый модуль `renderFrequencyEnvelopesSvg(patch, options) → string`; принимает `ArgCreateSynth` и опциональные нулевые `oscillatorIndices`, не зависит от Express, `fs`, DOM или React, использует математику частотной огибающей из `synth.ts`; ось Y логарифмическая для различимости саб-баса. Модуль реализован в T1, HTTP API — в T2, standalone UI и интеграция с результатами мэтчинга — в T3–T4. Контракт: `docs/spec-frequency-envelope-visualization.md` |
+| `src/enhance/transforms.ts`        | Чистые трансформации патча для сервиса улучшения (основа T9): каждая принимает `ArgCreateSynth`, проверяет применимость, обрезает значения по нормалям из `synth.ts` и возвращает новый патч с записью в журнале (`TransformAudit`); при неприменимости вход возвращается нетронутым, `audit: null`, причина — в `skipReason`                                                                       |
 | `src/match.ts`                   | Оркестратор мэтчинга: read → optimize → generate → visualize                                                                                                                                                                                                                                        |
 | `src/dataset/build-dataset.ts`   | Батч-сборщик датасета стабильности: таргеты × сиды, resume по `run.json`, артефакты в `datasets/<имя>/`; датасет — версионируемый вход, переобучение на новом наборе — тот же запуск с другой директорией                                                                                              |
 | `src/dataset/render-solo.ts`     | Инструментарий ручной чистки: рендерит full + соло + минус трек на каждый активный осциллятор патча (`--run <каталог прогона>` или `--patch <файл>`), пишет `index.json` со сводкой                                                                                                                    |
@@ -721,9 +722,10 @@ setsid nohup .opencode/tools/quota-watchdog.sh <sessionID> \
 - `test-*.ts` и `tmp_opt_test.js` в корне — одноразовые
   отладочные скрипты (закоммичены, но вне `tsconfig` `include: ["src"]`).
   Это НЕ тестовый набор. Не добавляй туда новые файлы; новый код —
-  только в `src/`. Тесты визуализации расположены рядом с модулем в
-  `src/frequency-envelope-visualization/`; `npm test` запускает их
-  через Node test runner + `tsx` без новых зависимостей.
+  только в `src/`. Тесты лежат рядом с модулями
+  (`src/frequency-envelope-visualization/`, `src/enhance/`);
+  `npm test` запускает их через Node test runner + `tsx` без новых
+  зависимостей.
 - Prettier/ESLint покрывают только `src/**/*.ts` (см. scripts).
 
 ### Асимметрия маппинга
