@@ -5,6 +5,8 @@ import {
   evaluateSuppressionWindowed,
   findOptimalScale,
   computeUsefulZone,
+  createWaveForm,
+  windowSubsampling,
   WaveformCache,
   UsefulZone,
 } from './evaluate';
@@ -136,6 +138,21 @@ export interface CoordinateDescentConfig {
    * negligible gain.
    */
   relocationMinImprovement: number;
+  /**
+   * Превью-оценка первого цикла расписания (по умолчанию
+   * EXPLORATION): метрика считает каждое N-ое окно вместо всех
+   * (вариант (б) из docs/plan-optimization-acceleration.md).
+   * Итерации разведки дешевеют примерно в N раз, а временное
+   * покрытие сигнала сохраняется.
+   *
+   * 1 или отсутствие поля — все окна, поведение побитово прежнее.
+   * Подвыборка действует только в первом цикле: при переходе к
+   * следующему циклу и перед финальным прунингом метрика
+   * возвращается к полной, а опорные score (currentBest, bestScore)
+   * пересчитываются на ней, чтобы все сравнения внутри каждого
+   * цикла шли на одной метрике.
+   */
+  explorationWindowStride?: number;
 }
 
 /** Default config values (previous hardcoded constants). */
@@ -593,6 +610,11 @@ export const coordinateDescent = (
     ...config,
   };
 
+  // Подвыборка окон живёт в модульном состоянии метрики: гасим
+  // возможный остаток от прежнего прогона в том же потоке. При
+  // stride = 1 метрика работает побитово как прежде.
+  windowSubsampling.stride = 1;
+
   const rng = createRng(cfg.seed);
 
   const genomeLength = initialVector.length;
@@ -663,6 +685,42 @@ export const coordinateDescent = (
   // Температура SA живёт через все циклы: охлаждается непрерывно,
   // а не сбрасывается на каждом цикле (иначе SA перегревается).
   let temperature = cfg.saInitialTemp;
+
+  /**
+   * Пересчитывает опорные score на метрике, которая только что
+   * включилась: currentBest — из кэша текущего генома, лучший
+   * результат — полным пересинтезом bestGenome. Если текущий геном
+   * на новой метрике не хуже прежнего лучшего, лучшим становится
+   * он. Без пересчёта сравнения на стыке циклов смешивали бы
+   * превью- и полную шкалы.
+   */
+  const rescaleScoresToCurrentMetric = (): {
+    currentBest: number;
+    bestScore: number;
+    bestGenome: number[];
+  } => {
+    const current = evaluateSuppressionWindowed(
+      waveformCache.getWaveform(),
+      targetSignal,
+      sampleRate,
+      usefulZone,
+    );
+    const bestEver = evaluateSuppressionWindowed(
+      createWaveForm(bestGenome, sampleRate, targetSignal.length),
+      targetSignal,
+      sampleRate,
+      usefulZone,
+    );
+    if (current >= bestEver) {
+      return {
+        currentBest: current,
+        bestScore: current,
+        bestGenome: genome.slice(),
+      };
+    }
+    return { currentBest: current, bestScore: bestEver, bestGenome };
+  };
+
   while (cycleIndex < restartSchedule.length) {
     const cycle = restartSchedule[cycleIndex];
     if (!cycle) {
@@ -672,6 +730,33 @@ export const coordinateDescent = (
     stagnation = 0;
 
     const isLastCycle = cycleIndex === restartSchedule.length - 1;
+
+    // Превью-режим разведки: первый цикл расписания (по умолчанию
+    // EXPLORATION) оценивается по подвыборке окон, остальные — по
+    // полной метрике. При смене метрики пересчитываем опорные score,
+    // чтобы все сравнения внутри цикла шли на одной шкале.
+    const configuredStride = cfg.explorationWindowStride ?? 1;
+    const previewStride =
+      cycleIndex === 0 && Number.isFinite(configuredStride)
+        ? Math.max(1, Math.floor(configuredStride))
+        : 1;
+    if (previewStride !== windowSubsampling.stride) {
+      windowSubsampling.stride = previewStride;
+      if (previewStride > 1) {
+        console.log(
+          `[CoordDescent] Exploration preview: every ${previewStride}th window in ${cycle.label}`,
+        );
+      } else {
+        console.log(
+          `[CoordDescent] Exploration preview off: full metric from ${cycle.label}`,
+        );
+      }
+      const rescaled = rescaleScoresToCurrentMetric();
+      currentBest = rescaled.currentBest;
+      bestScore = rescaled.bestScore;
+      bestGenome = rescaled.bestGenome;
+    }
+
     const frequencyStep =
       cycleIndex === 0
         ? cfg.frequencyStepCoarse
@@ -1016,6 +1101,19 @@ export const coordinateDescent = (
   console.log(
     `[CoordDescent] Finished after ${iter} iterations (${lastCycleLabel} cycle, ${cycleIndex - 1} cycles completed)`,
   );
+
+  // Ранний выход мог случиться внутри превью-цикла: возвращаем
+  // полную метрику перед финальным прунингом и scale fitting.
+  if (windowSubsampling.stride !== 1) {
+    windowSubsampling.stride = 1;
+    console.log(
+      `[CoordDescent] Exploration preview off: full metric for final stages`,
+    );
+    const rescaled = rescaleScoresToCurrentMetric();
+    currentBest = rescaled.currentBest;
+    bestScore = rescaled.bestScore;
+    bestGenome = rescaled.bestGenome;
+  }
 
   const finalPruningScore = finalPruneOscillators(
     genome,
