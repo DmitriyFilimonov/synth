@@ -29,4 +29,12 @@ export default tseslint.config(
   {
     ignores: ['dist/**', 'node_modules/**'],
   },
+  {
+    // Тесты регистрируют кейсы вызовом test() — обещание там
+    // намеренно не дожидаются.
+    files: ['**/*.test.ts'],
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'off',
+    },
+  },
 );
