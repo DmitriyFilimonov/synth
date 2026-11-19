@@ -312,8 +312,8 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
     }
   });
 
-  // Отсутствующий слой атаки достраиваем по приору transient,
-  // если сила достаточна, чтобы добавка была слышимой.
+  // Сначала атака: click — определяющий признак бочки, ему
+  // первый слот. Обогащение низа берёт оставшиеся.
   if (!hasAudibleTransient && strength >= 0.5) {
     const transientClusters = priors.clusters.filter(
       (c) => c.role === 'transient',
@@ -323,33 +323,31 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
       const freq = cluster.freqBaseHz.median;
       const level = cluster.ampStartLevel.median;
       if (freq !== null && level !== null) {
-        let result = addTransientClick(patch, {
-          freqHz: freq,
-          level: level * strength,
+        const room = ensureFreeSlot({
+          patch,
+          reason: 'уступил место click-слою',
         });
-        if (result.audit === null) {
-          // Свободного слота нет (match занял все 50). Уступает ли
-          // место неслышный осциллятор? Слышимые не трогаем.
-          const weakest = findWeakestInaudible(patch);
-          if (weakest !== null) {
-            const removed = removeOscillator(
-              patch,
-              weakest,
-              'уступил место click-слою',
-            );
-            if (removed.audit !== null) {
-              patch = removed.patch;
-              audits.push(removed.audit);
-              result = addTransientClick(patch, {
-                freqHz: freq,
-                level: level * strength,
-              });
-            }
+        if (room !== null) {
+          patch = room.patch;
+          if (room.removed !== null) {
+            audits.push(room.removed);
           }
+          apply(
+            addTransientClick(patch, {
+              freqHz: freq,
+              level: level * strength,
+            }),
+          );
         }
-        apply(result);
       }
     }
+  }
+
+  // Примитивный саб обогащаем гармониками 2f и 3f.
+  if (strength >= 0.5) {
+    const enriched = enrichPrimitiveBody({ patch, strength });
+    patch = enriched.patch;
+    audits.push(...enriched.audits);
   }
 
   return { patch, audits };
@@ -377,4 +375,162 @@ function findWeakestInaudible(patch: ArgCreateSynth): number | null {
     }
   });
   return weakest;
+}
+
+/**
+ * Гармоники обогащения тела: множитель частоты, доля уровня и
+ * доля длительности от фундаменталки. Частота идёт от самого
+ * патча (высота — характер входа), форма — музыкальная
+ * (верхние гармоники тише и короче); приоры профиль гармоник
+ * пока не несут — появится с ростом датасета.
+ */
+const ENRICH_HARMONICS: {
+  ratio: number;
+  level: number;
+  dur: number;
+}[] = [
+  { ratio: 2, level: 0.35, dur: 0.6 },
+  { ratio: 3, level: 0.18, dur: 0.35 },
+];
+
+/**
+ * Находит фундаменталку патча: активный sustain-осциллятор с
+ * наименьшей частотой и заметным уровнем.
+ */
+function findFundamental(patch: ArgCreateSynth): {
+  index: number;
+  group: ArgCreateSynth['oscillators'][number];
+} | null {
+  let best: {
+    index: number;
+    group: ArgCreateSynth['oscillators'][number];
+  } | null = null;
+  patch.oscillators.forEach((group, index) => {
+    if (
+      !group.osc.on ||
+      classifyOscillatorRole(group) !== 'sustain' ||
+      group.ampEnv.startLevel < AUDIBLE_TRANSIENT_LEVEL
+    ) {
+      return;
+    }
+    if (
+      best === null ||
+      group.osc.freqBase < best.group.osc.freqBase
+    ) {
+      best = { index, group };
+    }
+  });
+  return best;
+}
+
+/**
+ * Проверяет примитивность саба: в зоне гармоник (1.5f–12f) нет
+ * слышимых осцилляторов. Богатый саб обогащать не надо.
+ */
+function isBodyPrimitive(
+  patch: ArgCreateSynth,
+  fundFreq: number,
+): boolean {
+  return !patch.oscillators.some(
+    (g) =>
+      g.osc.on &&
+      g.osc.freqBase >= fundFreq * 1.5 &&
+      g.osc.freqBase <= fundFreq * 12 &&
+      g.ampEnv.startLevel >= AUDIBLE_TRANSIENT_LEVEL,
+  );
+}
+
+/**
+ * Освобождает слот для добавления: свободный или за счёт самого
+ * слабого неслышного. Возвращает новый патч и аудит вытеснения
+ * (null, если слот был свободен); null — если уступать некому.
+ */
+function ensureFreeSlot(arg: {
+  patch: ArgCreateSynth;
+  reason: string;
+}): { patch: ArgCreateSynth; removed: TransformAudit | null } | null {
+  const hasFree = arg.patch.oscillators.some((g) => !g.osc.on);
+  if (hasFree) {
+    return { patch: arg.patch, removed: null };
+  }
+  const weakest = findWeakestInaudible(arg.patch);
+  if (weakest === null) {
+    return null;
+  }
+  const removed = removeOscillator(arg.patch, weakest, arg.reason);
+  if (removed.audit === null) {
+    return null;
+  }
+  return { patch: removed.patch, removed: removed.audit };
+}
+
+/**
+ * Обогащает примитивный саб гармониками 2f и 3f: уровни и
+ * длительности по форме ENRICH_HARMONICS от фундаменталки,
+ * масштабированные силой. Частотный sweep фундаменталки
+ * сохраняется в гармониках (та же относительная форма).
+ */
+function enrichPrimitiveBody(arg: {
+  patch: ArgCreateSynth;
+  strength: number;
+}): { patch: ArgCreateSynth; audits: TransformAudit[] } {
+  let patch = arg.patch;
+  const audits: TransformAudit[] = [];
+  const fundamental = findFundamental(patch);
+  if (
+    fundamental === null ||
+    !isBodyPrimitive(patch, fundamental.group.osc.freqBase)
+  ) {
+    return { patch, audits };
+  }
+
+  for (const harmonic of ENRICH_HARMONICS) {
+    const room = ensureFreeSlot({
+      patch,
+      reason: 'уступил место гармонике обогащения',
+    });
+    if (room === null) {
+      break;
+    }
+    patch = room.patch;
+    if (room.removed !== null) {
+      audits.push(room.removed);
+    }
+    const base = fundamental.group;
+    const slotIndex = patch.oscillators.findIndex((g) => !g.osc.on);
+    if (slotIndex === -1) {
+      break;
+    }
+    const newOsc = {
+      osc: {
+        on: true,
+        freqBase: base.osc.freqBase * harmonic.ratio,
+        freqStart: base.osc.freqStart * harmonic.ratio,
+        slope: base.osc.slope,
+        duration: base.osc.duration,
+        phase: 0,
+      },
+      ampEnv: {
+        duration: base.ampEnv.duration * harmonic.dur,
+        endLevel: base.ampEnv.endLevel,
+        slope: base.ampEnv.slope,
+        startLevel:
+          base.ampEnv.startLevel * harmonic.level * arg.strength,
+      },
+    };
+    patch = {
+      oscillators: patch.oscillators.map((g, i) =>
+        i === slotIndex ? newOsc : g,
+      ),
+    };
+    audits.push({
+      name: 'enrichBody',
+      oscillatorIndex: slotIndex,
+      detail:
+        `добавил гармонику ${harmonic.ratio}× ` +
+        `(${newOsc.osc.freqBase.toFixed(1)} Гц, ` +
+        `уровень ${newOsc.ampEnv.startLevel.toFixed(3)})`,
+    });
+  }
+  return { patch, audits };
 }

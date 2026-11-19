@@ -205,6 +205,95 @@ test('full patch with only audible oscillators is not displaced', () => {
   assert.ok(!names.includes('removeOscillator'));
 });
 
+test('primitive body gains 2f and 3f harmonics at full strength', () => {
+  const patch = makePatch();
+  // Второй осциллятор — слышимый transient, чтобы click не
+  // занимал слоты; осцилляторы 2 и 3 свободны для гармоник.
+  const second = patch.oscillators[1];
+  if (second !== undefined) {
+    second.osc.on = true;
+    second.ampEnv.startLevel = 0.4;
+  }
+  patch.oscillators.push(
+    {
+      osc: {
+        on: false,
+        freqBase: 100,
+        freqStart: 100,
+        slope: 1,
+        duration: 0.1,
+        phase: 0,
+      },
+      ampEnv: {
+        duration: 0.1,
+        endLevel: 0.001,
+        slope: 1,
+        startLevel: 0.01,
+      },
+    },
+    {
+      osc: {
+        on: false,
+        freqBase: 100,
+        freqStart: 100,
+        slope: 1,
+        duration: 0.1,
+        phase: 0,
+      },
+      ampEnv: {
+        duration: 0.1,
+        endLevel: 0.001,
+        slope: 1,
+        startLevel: 0.01,
+      },
+    },
+  );
+  // Усиление фундаменталки перед обогащением меняло бы уровни
+  // гармоник: для проверки формул обогащения замораживаем уровень.
+  const map = makeMap();
+  map.params['startLevel'] = { verdict: 'anchored' };
+  const result = enhancePatch({
+    patch,
+    identifiability: map,
+    priors: makePriors(),
+    strength: 1,
+  });
+  const enriched = result.patch.oscillators.filter(
+    (g) =>
+      g.osc.on &&
+      (Math.abs(g.osc.freqBase - 100) < 1e-9 ||
+        Math.abs(g.osc.freqBase - 150) < 1e-9),
+  );
+  assert.equal(enriched.length, 2);
+  assert.ok(
+    Math.abs((enriched[0]?.ampEnv.startLevel ?? 0) - 0.105) < 1e-9,
+    `2f level ${enriched[0]?.ampEnv.startLevel}`,
+  );
+  assert.ok(
+    Math.abs((enriched[1]?.ampEnv.startLevel ?? 0) - 0.054) < 1e-9,
+    `3f level ${enriched[1]?.ampEnv.startLevel}`,
+  );
+});
+
+test('a body with audible partials is not enriched', () => {
+  const patch = makePatch();
+  const second = patch.oscillators[1];
+  if (second !== undefined) {
+    second.osc.on = true;
+    second.osc.freqBase = 100;
+    second.ampEnv.startLevel = 0.4;
+    second.ampEnv.duration = 0.2;
+  }
+  const result = enhancePatch({
+    patch,
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 1,
+  });
+  const names = result.audits.map((a) => a.name);
+  assert.ok(!names.includes('enrichBody'));
+});
+
 test('anchored endLevel is not moved', () => {
   const map = makeMap();
   map.params['endLevel'] = { verdict: 'anchored' };
