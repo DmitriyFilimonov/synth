@@ -9,6 +9,8 @@ import { matchWithWorker } from '../../match-worker';
 import { dualWindowInitVector } from '../../dual-window-init-vector';
 import { mapVectorToSynthConfig } from '../../vector-to-synth-config';
 import { enhancePatch, type PriorsFile } from '../../enhance/engine';
+import { correctPatch } from '../../enhance/correct';
+import { type TransformAudit } from '../../enhance/transforms';
 import { DEFAULT_IDENTIFIABILITY } from '../../enhance/defaults';
 import { evaluateSuppressionFromWaveform } from '../../optimize/evaluate';
 import { renderSamples } from '../../dataset/shared';
@@ -445,15 +447,29 @@ async function runEnhanceJob(
       join(process.cwd(), 'datasets', 'reference-4', 'priors.json');
     const priors = await loadPriors(priorsPath);
 
-    const enhanced =
-      priors === null
-        ? { patch: result.synthConfig, audits: [] }
-        : enhancePatch({
-            patch: result.synthConfig,
-            identifiability: DEFAULT_IDENTIFIABILITY,
-            priors,
-            strength: enhancementStrength,
-          });
+    // Режим B исправляет анкерные параметры вне вилок семейства,
+    // режим A заполняет свободные — в таком порядке, чтобы коррекция
+    // не переписывала достроенное.
+    let enhanced: { patch: ArgCreateSynth; audits: TransformAudit[] };
+    if (priors === null) {
+      enhanced = { patch: result.synthConfig, audits: [] };
+    } else {
+      const corrected = correctPatch({
+        patch: result.synthConfig,
+        priors,
+        strength: enhancementStrength,
+      });
+      const filled = enhancePatch({
+        patch: corrected.patch,
+        identifiability: DEFAULT_IDENTIFIABILITY,
+        priors,
+        strength: enhancementStrength,
+      });
+      enhanced = {
+        patch: filled.patch,
+        audits: [...corrected.audits, ...filled.audits],
+      };
+    }
 
     const enhancedSamples = renderSamples(
       enhanced.patch,
