@@ -5,6 +5,7 @@ import {
 } from '@/features/patch-visualizer';
 import { GeneratorForm } from '@/features/synth-generator';
 import { MatcherForm } from '@/features/wav-matcher';
+import { EnhanceForm } from '@/features/enhance';
 import styles from './App.module.css';
 
 export function App() {
@@ -40,6 +41,11 @@ export function App() {
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>Match</h2>
         <MatcherForm onVisualize={handleVisualize} />
+      </section>
+
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Улучшение бочки</h2>
+        <EnhanceForm />
       </section>
 
       <section id="visualize" className={styles.section}>
