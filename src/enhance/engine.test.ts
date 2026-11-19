@@ -167,6 +167,44 @@ test('missing click layer is added only at sufficient strength', () => {
   assert.equal(strong.patch.oscillators[1]?.osc.freqBase, 3000);
 });
 
+test('full patch: the weakest inaudible yields its slot to the click', () => {
+  const patch = makePatch();
+  // Занимаем все слоты: включаем второй осциллятор неслышимо тихим.
+  const second = patch.oscillators[1];
+  if (second !== undefined) {
+    second.osc.on = true;
+    second.ampEnv.startLevel = 0.005;
+  }
+  const result = enhancePatch({
+    patch,
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 1,
+  });
+  const names = result.audits.map((a) => a.name);
+  assert.ok(names.includes('removeOscillator'));
+  assert.ok(names.includes('addTransientClick'));
+});
+
+test('full patch with only audible oscillators is not displaced', () => {
+  const patch = makePatch();
+  const second = patch.oscillators[1];
+  if (second !== undefined) {
+    second.osc.on = true;
+    second.osc.freqBase = 2000;
+    second.ampEnv.startLevel = 0.5;
+    second.ampEnv.duration = 0.03;
+  }
+  const result = enhancePatch({
+    patch,
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 1,
+  });
+  const names = result.audits.map((a) => a.name);
+  assert.ok(!names.includes('removeOscillator'));
+});
+
 test('anchored endLevel is not moved', () => {
   const map = makeMap();
   map.params['endLevel'] = { verdict: 'anchored' };

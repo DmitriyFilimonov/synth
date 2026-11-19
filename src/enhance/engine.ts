@@ -19,6 +19,7 @@ import {
   addTransientClick,
   boostOscillator,
   extendTail,
+  removeOscillator,
   setEndLevel,
   type TransformAudit,
 } from './transforms';
@@ -322,15 +323,58 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
       const freq = cluster.freqBaseHz.median;
       const level = cluster.ampStartLevel.median;
       if (freq !== null && level !== null) {
-        apply(
-          addTransientClick(patch, {
-            freqHz: freq,
-            level: level * strength,
-          }),
-        );
+        let result = addTransientClick(patch, {
+          freqHz: freq,
+          level: level * strength,
+        });
+        if (result.audit === null) {
+          // Свободного слота нет (match занял все 50). Уступает ли
+          // место неслышный осциллятор? Слышимые не трогаем.
+          const weakest = findWeakestInaudible(patch);
+          if (weakest !== null) {
+            const removed = removeOscillator(
+              patch,
+              weakest,
+              'уступил место click-слою',
+            );
+            if (removed.audit !== null) {
+              patch = removed.patch;
+              audits.push(removed.audit);
+              result = addTransientClick(patch, {
+                freqHz: freq,
+                level: level * strength,
+              });
+            }
+          }
+        }
+        apply(result);
       }
     }
   }
 
   return { patch, audits };
+}
+
+/**
+ * Индекс самого слабого неслышного активного осциллятора
+ * (startLevel ниже порога слышимости) или null, если таких нет.
+ * Слышимые осцилляторы место не уступают.
+ */
+function findWeakestInaudible(patch: ArgCreateSynth): number | null {
+  let weakest: number | null = null;
+  let weakestScore = Infinity;
+  patch.oscillators.forEach((group, index) => {
+    if (
+      !group.osc.on ||
+      group.ampEnv.startLevel >= AUDIBLE_TRANSIENT_LEVEL
+    ) {
+      return;
+    }
+    const score = energyProxy(group);
+    if (score < weakestScore) {
+      weakestScore = score;
+      weakest = index;
+    }
+  });
+  return weakest;
 }
