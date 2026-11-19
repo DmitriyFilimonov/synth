@@ -184,6 +184,8 @@ Generate → Compare → Save WAV + SVG
 | `src/visualize-envelopes.ts`     | Визуализация огибающих первого осциллятора                                                                                                                                                                                                                                                          |
 | `src/frequency-envelope-visualization/` | Независимый чистый модуль `renderFrequencyEnvelopesSvg(patch, options) → string`; принимает `ArgCreateSynth` и опциональные нулевые `oscillatorIndices`, не зависит от Express, `fs`, DOM или React, использует математику частотной огибающей из `synth.ts`; ось Y логарифмическая для различимости саб-баса. Модуль реализован в T1, HTTP API — в T2, standalone UI и интеграция с результатами мэтчинга — в T3–T4. Контракт: `docs/spec-frequency-envelope-visualization.md` |
 | `src/enhance/transforms.ts`        | Чистые трансформации патча для сервиса улучшения (основа T9): каждая принимает `ArgCreateSynth`, проверяет применимость, обрезает значения по нормалям из `synth.ts` и возвращает новый патч с записью в журнале (`TransformAudit`); при неприменимости вход возвращается нетронутым, `audit: null`, причина — в `skipReason`                                                                       |
+| `src/enhance/engine.ts`          | Движок улучшения режима A (контракт C4): свободные и prior-owned параметры двигает к приорам мультипликативно на долю `strength`, анкерные не трогает, недостающий click-слой достраивает при силе ≥ 0.5; v1 консервативен: хвосты только продлевает, уровни только поднимает |
+| `src/enhance/defaults.ts`        | Дефолтная карта идентифицируемости v0 по данным BOg (частоты анкерные, огибающие свободные, endLevel — prior-owned); заменится картой, собранной из датасета |
 | `src/match.ts`                   | Оркестратор мэтчинга: read → optimize → generate → visualize                                                                                                                                                                                                                                        |
 | `src/dataset/build-dataset.ts`   | Батч-сборщик датасета стабильности: таргеты × сиды, resume по `run.json`, артефакты в `datasets/<имя>/`; датасет — версионируемый вход, переобучение на новом наборе — тот же запуск с другой директорией                                                                                              |
 | `src/dataset/render-solo.ts`     | Инструментарий ручной чистки: рендерит full + соло + минус трек на каждый активный осциллятор патча (`--run <каталог прогона>` или `--patch <файл>`), пишет `index.json` со сводкой                                                                                                                    |
@@ -517,6 +519,7 @@ Express отдаёт статику из `web/dist/` и настроен как 
 | -------- | ------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `POST`   | `/api/match/job`                      | Создать job подбора (base64 WAV). Query `fileName` — название файла для отображения в UI; query `attackBoost` — вес атаки в метрике; query `seed` — сид ГПСЧ оптимизатора        |
 | `POST`   | `/api/match/job/json`                 | Создать job подбора (raw WAV binary). Body `targetFileName` — название файла для отображения; body `seed` — сид ГПСЧ   |
+| `POST`   | `/api/enhance/job`                    | Создать job улучшения (raw WAV): match → движок режима A по приорам (`ENHANCE_PRIORS_PATH`, дефолт `datasets/reference-4/priors.json`) → синтез улучшенного WAV. Query `enhancementStrength` (0..1, дефолт 0.5), `seed`, `fileName`. Job несёт `synthConfig` (улучшенный патч), `matchSynthConfig` (патч match), `enhanceAudit`, `enhanceGlobalSuppressionPercent` |
 | `GET`    | `/api/match/jobs`                     | Список всех job (с `name` в каждом: `"<fileName> DD.MM.YYYY HH:MM:SS"`)                       |
 | `GET`    | `/api/match/jobs/:id`                 | Статус конкретного job (поле `name` — человеческое имя)                                        |
 | `GET`    | `/api/match/jobs/:id/download`        | Скачать результат WAV (completed job). Имя файла: `"<job name>_matched.wav"` (RFC 5987)         |
@@ -715,7 +718,8 @@ setsid nohup .opencode/tools/quota-watchdog.sh <sessionID> \
 - **Понял, что инструмент или инструкция пригодятся в будущем, —
   пиши сразу.** Не откладывай и не жди запроса. Прецеденты:
   quota-watchdog (автовозобновление сессии), dataset-status
-  (наблюдаемость батча), чекпоинты прогонов (T12), refresh-analysis
+  (наблюдаемость батча), dataset-watch (автообновление анализа при
+  новых прогонах), чекпоинты прогонов (T12), refresh-analysis
   (переобучение одной командой).
 - Длительные вычисления — только детачнуто (setsid), с логом и
   чекпоинтами; таймаут харнесса убивает и фоновые команды.
