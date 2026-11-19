@@ -49,7 +49,7 @@ interface CliArgs {
 }
 
 /** Одна правка протокола порчи. */
-interface MangleEdit {
+export interface MangleEdit {
   index: number;
   param: string;
   from: number;
@@ -318,7 +318,7 @@ function jitterParam(
  * @returns Протокол применённых правок
  * @throws Error если в патче нет активных осцилляторов
  */
-function mangleRandom(
+export function mangleRandom(
   patch: ArgCreateSynth,
   args: CliArgs,
 ): MangleEdit[] {
@@ -360,7 +360,7 @@ function mangleRandom(
  *   параметры пропускаются с предупреждением
  * @throws Error если файл правок не читается или не парсится
  */
-function mangleTargeted(
+export function mangleTargeted(
   patch: ArgCreateSynth,
   overridesPath: string,
 ): MangleEdit[] {
@@ -434,4 +434,8 @@ function main(): void {
   }
 }
 
-main();
+// Запускаем CLI только при прямом вызове: импорт модуля (оценка
+// порчи в run-mangle-eval.ts) не должен ничего портить.
+if (require.main === module) {
+  main();
+}
