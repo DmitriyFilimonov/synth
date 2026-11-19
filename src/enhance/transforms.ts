@@ -478,3 +478,55 @@ export const retuneOscillator = (
       clampNote(newFreqBase, nextBase, baseRange),
   });
 };
+
+/**
+ * Ставит длительность амплитудной огибающей в секундах, в любую
+ * сторону (в отличие от одностороннего `extendTail`). Нужен режиму
+ * B: коррекция умеет и укорачивать раздутые хвосты.
+ *
+ * Неприменима, если осциллятор выключен, если значение не конечно
+ * или не положительно. Значение обрезается в допустимый диапазон;
+ * обрезка записывается в журнал.
+ */
+export const setAmpEnvDuration = (
+  patch: ArgCreateSynth,
+  oscillatorIndex: number,
+  seconds: number,
+): TransformResult => {
+  const found = findActiveOscillator(patch, oscillatorIndex);
+  if ('reason' in found) {
+    return notApplied(patch, 'setAmpEnvDuration', found.reason);
+  }
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return notApplied(
+      patch,
+      'setAmpEnvDuration',
+      `длительность ${formatCompact(seconds)} не положительна`,
+    );
+  }
+
+  const current = found.group.ampEnv.duration;
+  const range = ampEnvConfigNormales.duration;
+  const next = clampToRange(seconds, range);
+  if (next === current) {
+    return notApplied(
+      patch,
+      'setAmpEnvDuration',
+      `огибающая уже длится ${formatSeconds(current)}`,
+    );
+  }
+
+  const group: OscillatorGroup = {
+    osc: { ...found.group.osc },
+    ampEnv: { ...found.group.ampEnv, duration: next },
+  };
+
+  return applied(replaceOscillator(patch, oscillatorIndex, group), {
+    name: 'setAmpEnvDuration',
+    oscillatorIndex,
+    detail:
+      `поставил длительность огибающей ` +
+      `${formatSeconds(next)} (было ${formatSeconds(current)})` +
+      clampNote(seconds, next, range),
+  });
+};
