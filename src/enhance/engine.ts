@@ -458,21 +458,14 @@ function findFundamental(patch: ArgCreateSynth): {
 }
 
 /**
- * Проверяет примитивность саба: в зоне гармоник (1.5f–12f) нет
- * слышимых осцилляторов. Богатый саб обогащать не надо.
+ * Доля частоты для «свой партиал уже есть»: существующий
+ * осциллятор в пределах ±10% от целевой частоты слота считается
+ * покрытием слота и усиливается вместо добавления.
  */
-function isBodyPrimitive(
-  patch: ArgCreateSynth,
-  fundFreq: number,
-): boolean {
-  return !patch.oscillators.some(
-    (g) =>
-      g.osc.on &&
-      g.osc.freqBase >= fundFreq * 1.5 &&
-      g.osc.freqBase <= fundFreq * 12 &&
-      g.ampEnv.startLevel >= AUDIBLE_TRANSIENT_LEVEL,
-  );
-}
+const PARTIAL_MATCH_LOG = Math.log(1.1);
+
+/** Потолок усиления существующего партиала: защита иерархии. */
+const PARTIAL_BOOST_CAP = 2;
 
 /**
  * Освобождает слот для добавления: свободный или за счёт самого
@@ -499,10 +492,11 @@ function ensureFreeSlot(arg: {
 }
 
 /**
- * Обогащает примитивный саб гармониками 2f и 3f: уровни и
- * длительности по форме ENRICH_HARMONICS от фундаменталки,
- * масштабированные силой. Частотный sweep фундаменталки
- * сохраняется в гармониках (та же относительная форма).
+ * Выравнивает тело по профилю приоров: партиал, которого нет
+ * в пределах ±10% частоты слота, добавляется; слабый существующий
+ * усиливается к целевому уровню с потолком ×2 (защита иерархии);
+ * достаточно громкий не трогается. Частотный sweep фундаменталки
+ * сохраняется в добавленных партиалах (та же относительная форма).
  */
 function enrichPrimitiveBody(arg: {
   patch: ArgCreateSynth;
@@ -512,17 +506,54 @@ function enrichPrimitiveBody(arg: {
   let patch = arg.patch;
   const audits: TransformAudit[] = [];
   const fundamental = findFundamental(patch);
-  if (
-    fundamental === null ||
-    !isBodyPrimitive(patch, fundamental.group.osc.freqBase)
-  ) {
+  if (fundamental === null) {
     return { patch, audits };
   }
+  const base = fundamental.group;
 
   for (const harmonic of enrichRatios(arg.priors)) {
+    const targetFreq = base.osc.freqBase * harmonic.ratio;
+    const targetLevel =
+      base.ampEnv.startLevel * harmonic.level * arg.strength;
+
+    // Уже есть свой партиал у этой частоты?
+    let existingIndex: number | null = null;
+    patch.oscillators.forEach((g, i) => {
+      if (!g.osc.on) {
+        return;
+      }
+      if (
+        Math.abs(Math.log(g.osc.freqBase / targetFreq)) <=
+        PARTIAL_MATCH_LOG
+      ) {
+        existingIndex = i;
+      }
+    });
+
+    if (existingIndex !== null) {
+      const idx: number = existingIndex;
+      const current = patch.oscillators[idx];
+      if (current === undefined) {
+        continue;
+      }
+      const currentLevel = current.ampEnv.startLevel;
+      if (currentLevel < targetLevel) {
+        const factor = Math.min(
+          PARTIAL_BOOST_CAP,
+          targetLevel / currentLevel,
+        );
+        const boosted = boostOscillator(patch, idx, factor);
+        if (boosted.audit !== null) {
+          patch = boosted.patch;
+          audits.push(boosted.audit);
+        }
+      }
+      continue;
+    }
+
     const room = ensureFreeSlot({
       patch,
-      reason: 'уступил место гармонике обогащения',
+      reason: 'уступил место партиалу обогащения',
     });
     if (room === null) {
       break;
@@ -531,7 +562,6 @@ function enrichPrimitiveBody(arg: {
     if (room.removed !== null) {
       audits.push(room.removed);
     }
-    const base = fundamental.group;
     const slotIndex = patch.oscillators.findIndex((g) => !g.osc.on);
     if (slotIndex === -1) {
       break;
@@ -539,7 +569,7 @@ function enrichPrimitiveBody(arg: {
     const newOsc = {
       osc: {
         on: true,
-        freqBase: base.osc.freqBase * harmonic.ratio,
+        freqBase: targetFreq,
         freqStart: base.osc.freqStart * harmonic.ratio,
         slope: base.osc.slope,
         duration: base.osc.duration,
@@ -549,8 +579,7 @@ function enrichPrimitiveBody(arg: {
         duration: base.ampEnv.duration * harmonic.dur,
         endLevel: base.ampEnv.endLevel,
         slope: base.ampEnv.slope,
-        startLevel:
-          base.ampEnv.startLevel * harmonic.level * arg.strength,
+        startLevel: targetLevel,
       },
     };
     patch = {
@@ -562,7 +591,7 @@ function enrichPrimitiveBody(arg: {
       name: 'enrichBody',
       oscillatorIndex: slotIndex,
       detail:
-        `добавил гармонику ${harmonic.ratio}× ` +
+        `добавил партиал ×${harmonic.ratio.toFixed(2)} ` +
         `(${newOsc.osc.freqBase.toFixed(1)} Гц, ` +
         `уровень ${newOsc.ampEnv.startLevel.toFixed(3)})`,
     });

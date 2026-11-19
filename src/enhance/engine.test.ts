@@ -329,8 +329,10 @@ test('enrichment follows the dataset body profile when present', () => {
   );
 });
 
-test('a body with audible partials is not enriched', () => {
+test('a body with covered profile slots is not enriched', () => {
   const patch = makePatch();
+  // Тело уже покрывает оба слота умолчания (2f=100, 3f=150)
+  // громкими партиалами — обогащению нечего делать.
   const second = patch.oscillators[1];
   if (second !== undefined) {
     second.osc.on = true;
@@ -338,6 +340,22 @@ test('a body with audible partials is not enriched', () => {
     second.ampEnv.startLevel = 0.4;
     second.ampEnv.duration = 0.2;
   }
+  patch.oscillators.push({
+    osc: {
+      on: true,
+      freqBase: 150,
+      freqStart: 150,
+      slope: 1,
+      duration: 0.2,
+      phase: 0,
+    },
+    ampEnv: {
+      duration: 0.2,
+      endLevel: 0.001,
+      slope: 1,
+      startLevel: 0.4,
+    },
+  });
   const result = enhancePatch({
     patch,
     identifiability: makeMap(),
