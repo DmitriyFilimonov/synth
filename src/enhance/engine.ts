@@ -428,33 +428,66 @@ function enrichRatios(
 }
 
 /**
- * Находит фундаменталку патча: активный sustain-осциллятор с
- * наименьшей частотой и заметным уровнем.
+ * Находит фундаменталку патча: самый энергичный sustain-
+ * осциллятор в низкой зоне (до 150 Гц), при пустой зоне — самый
+ * низкий слышимый sustain. «Самый низкий по частоте» неверен:
+ * под телом может сидеть слабый спутник, и профильные уровни,
+ * посчитанные от него, выходят копеечными (замер на water_15).
  */
+const FUNDAMENTAL_MAX_FREQ_HZ = 150;
+
 function findFundamental(patch: ArgCreateSynth): {
   index: number;
   group: ArgCreateSynth['oscillators'][number];
 } | null {
+  const candidates: {
+    index: number;
+    group: ArgCreateSynth['oscillators'][number];
+  }[] = [];
+  patch.oscillators.forEach((group, index) => {
+    if (
+      group.osc.on &&
+      classifyOscillatorRole(group) === 'sustain' &&
+      group.ampEnv.startLevel >= AUDIBLE_TRANSIENT_LEVEL
+    ) {
+      candidates.push({ index, group });
+    }
+  });
+
+  let lowest: {
+    index: number;
+    group: ArgCreateSynth['oscillators'][number];
+  } | null = candidates[0] ?? null;
+  for (const c of candidates) {
+    if (
+      lowest === null ||
+      c.group.osc.freqBase < lowest.group.osc.freqBase
+    ) {
+      lowest = c;
+    }
+  }
+
   let best: {
     index: number;
     group: ArgCreateSynth['oscillators'][number];
   } | null = null;
-  patch.oscillators.forEach((group, index) => {
-    if (
-      !group.osc.on ||
-      classifyOscillatorRole(group) !== 'sustain' ||
-      group.ampEnv.startLevel < AUDIBLE_TRANSIENT_LEVEL
-    ) {
-      return;
+  for (const c of candidates) {
+    if (c.group.osc.freqBase > FUNDAMENTAL_MAX_FREQ_HZ) {
+      continue;
     }
     if (
       best === null ||
-      group.osc.freqBase < best.group.osc.freqBase
+      energyProxy(c.group) > energyProxy(best.group)
     ) {
-      best = { index, group };
+      best = c;
     }
-  });
-  return best;
+  }
+
+  const chosen = best ?? lowest;
+  if (chosen === null) {
+    return null;
+  }
+  return { index: chosen.index, group: chosen.group };
 }
 
 /**
@@ -510,28 +543,33 @@ function enrichPrimitiveBody(arg: {
     return { patch, audits };
   }
   const base = fundamental.group;
+  // Осциллятор потребляется одним слотом: без этого два соседних
+  // слота усиливали один и тот же партиал дважды (замер на
+  // water_15: 0.124 → 0.248 → 0.409).
+  const claimedIndices = new Set<number>();
 
   for (const harmonic of enrichRatios(arg.priors)) {
     const targetFreq = base.osc.freqBase * harmonic.ratio;
     const targetLevel =
       base.ampEnv.startLevel * harmonic.level * arg.strength;
 
-    // Уже есть свой партиал у этой частоты?
+    // Уже есть свой партиал у этой частоты? Берём ближайший.
     let existingIndex: number | null = null;
+    let existingDist = PARTIAL_MATCH_LOG;
     patch.oscillators.forEach((g, i) => {
-      if (!g.osc.on) {
+      if (!g.osc.on || claimedIndices.has(i)) {
         return;
       }
-      if (
-        Math.abs(Math.log(g.osc.freqBase / targetFreq)) <=
-        PARTIAL_MATCH_LOG
-      ) {
+      const dist = Math.abs(Math.log(g.osc.freqBase / targetFreq));
+      if (dist <= existingDist) {
+        existingDist = dist;
         existingIndex = i;
       }
     });
 
     if (existingIndex !== null) {
       const idx: number = existingIndex;
+      claimedIndices.add(idx);
       const current = patch.oscillators[idx];
       if (current === undefined) {
         continue;

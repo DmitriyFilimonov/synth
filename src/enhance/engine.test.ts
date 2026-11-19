@@ -329,6 +329,51 @@ test('enrichment follows the dataset body profile when present', () => {
   );
 });
 
+test('an oscillator is claimed by at most one profile slot', () => {
+  const patch = makePatch();
+  const second = patch.oscillators[1];
+  if (second !== undefined) {
+    second.osc.on = true;
+    second.osc.freqBase = 118;
+    second.ampEnv.startLevel = 0.1;
+    second.ampEnv.duration = 0.2;
+  }
+  const priors = makePriors();
+  priors.bodyProfile = [
+    {
+      rank: 1,
+      runs: 16,
+      freqRatio: { median: 2.2, p10: 2.0, p90: 2.4 },
+      levelRatio: { median: 1.0, p10: 0.8, p90: 1.2 },
+      durRatio: { median: 0.9, p10: 0.8, p90: 1.0 },
+    },
+    {
+      rank: 2,
+      runs: 16,
+      freqRatio: { median: 2.4, p10: 2.2, p90: 2.6 },
+      levelRatio: { median: 1.0, p10: 0.8, p90: 1.2 },
+      durRatio: { median: 0.9, p10: 0.8, p90: 1.0 },
+    },
+  ];
+  const map = makeMap();
+  map.params['startLevel'] = { verdict: 'anchored' };
+  const result = enhancePatch({
+    patch,
+    identifiability: map,
+    priors,
+    strength: 1,
+  });
+  const boosts = result.audits.filter(
+    (a) => a.name === 'boostOscillator',
+  );
+  assert.equal(boosts.length, 1, 'one boost, not two');
+  const second2 = result.patch.oscillators[1];
+  assert.ok(
+    Math.abs((second2?.ampEnv.startLevel ?? 0) - 0.2) < 1e-9,
+    `single capped boost to 0.2, got ${second2?.ampEnv.startLevel}`,
+  );
+});
+
 test('a body with covered profile slots is not enriched', () => {
   const patch = makePatch();
   // Тело уже покрывает оба слота умолчания (2f=100, 3f=150)
