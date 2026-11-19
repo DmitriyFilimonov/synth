@@ -172,9 +172,10 @@ Generate → Compare → Save WAV + SVG
 | `src/signal-analysis.ts`         | Анализ сигналов: автокорреляция (фундаментальная частота), amplitude envelope (RMS-окна), freqOverTime (zero-crossing)                                                                                                                                                                              |
 | `src/spectrogram.ts`             | STFT-анализ: Hanning window, FFT, peak detection, кластеризация гармоник в траектории, fit osc envelopes                                                                                                                                                                                            |
 | `src/fft.ts`                     | Cooley-Tukey radix-2 FFT, extraction доминантных гармоник с bias к фундаментальным                                                                                                                                                                                                                  |
+| `src/audio-inspect.ts`           | «Уши» проекта: CLI-разбор WAV без прослушивания — уровни, пики, центроид и плоскость по окнам, сравнение двух файлов по полосам. Аудио-MCP не подключаем: своего стека достаточно (решение сессии 2026-11-19) |
 | `src/dual-window-init-vector.ts` | **Основной init** (используется в `match.ts` и API `synth-service.ts`). Двухоконный Goertzel-анализ: (1) sustain-скан всего сигнала 20–5000 Гц с разрешением 2 Гц — детектит длящиеся гармоники, получают `ampDur = effectiveDuration` (по 5%-хвосту RMS), `slope=0.8`; (2) transient-скан первых ~20 мс 200–15000 Гц с разрешением 50 Гц — детектит attack-транзиент, получают `ampDur = 40ms`, `slope=2.0` (быстрое затухание). Бюджет 60/40 sustain/transient, слоты мигрируют. Peak-фильтрация по разделению (sustain 8 Гц, transient 100 Гц) и порогу шума (2% от макс. амплитуды). Amplitude calibration через глобальный scale: суммарный RMS осцилляторов ≈ RMS таргета. Init-only global suppression 3–5% (положительный на всех реальных таргетах — vs simple/fft, которые дают −0.5..−27%)|
 | `src/simple-init-vector.ts`      | Legacy init: Goertzel + STFT-гармоники. Beats-ветка не доверяет «пикам» тихой четверти (RMS < max(8 int16, 2% громкой четверти) → fallback на пики другой четверти без chirp); диапазон поиска 20–1860 Гц; амплитуды по энергии таргета (без завышения); ampEnv duration — по эффективной длительности сигнала (огибающая < 5% пика), а не на весь буфер. Заменён `dualWindowInitVector` в основном пайплайне |
-| `src/fft-init-vector.ts`         | Legacy init: FFT на коротком окне (~23ms). Проблема: детектит транзиентную broadband-энергию как «доминантные» частоты (16 кГц), тогда как в полном сигнале там 0.001% энергии — init-only global suppression **−5..−27%** (хуже тишины). Заменён `dualWindowInitVector` |
+| `src/fft-init-vector.ts`         | Legacy init: FFT на коротком окне (~23ms). Проблема: детектит транзиентную broadband-энергию как «доминантные» частоты (16 кГц), тогда как в полном сигнале там 0.001% энергии — init-only global suppression **−5..−27%** (хуже тишины). Заменён `dualWindowInitVector`. Первопричиной мусорных пиков был сломанный FFT в `fft.ts` (перестановка-identity + неверный угол твiddle-фактора): починен 2026-11-19 и покрыт `src/fft.test.ts`; поведение fft-init после починки не переоценивали |
 | `src/stft-init-vector.ts`        | STFT-инициализация с траекториями (autocorr fundamental + STFT clustering)                                                                                                                                                                                                                          |
 | `src/adaptive-init-vector.ts`    | Адаптивная иницализация: детекция биений через amplitude modulation, разбиение фундаментального на два близких тона                                                                                                                                                                                 |
 | `src/cancellation-assessment.ts` | Оценка качества подавления (RMS-based)                                                                                                                                                                                                                                                              |
@@ -702,6 +703,21 @@ setsid nohup .opencode/tools/quota-watchdog.sh <sessionID> \
 4. **Всегда читай fallback при повреждении.** Если файл пустой,
    содержит невалидный JSON, отсутствует — создавай дефолтный record,
    а не падай с `SyntaxError` или `ENOENT`.
+
+### Параллельная работа и самоинструментарий
+
+- **Параллелим по умолчанию, а не по запросу.** Независимые задачи
+  — фоновым субагентам; независимые ветки кода — git worktree.
+  Worktree создаётся инструментом харнесса, затем
+  `ln -s /opt/synth/node_modules <worktree>/node_modules` — без
+  symlink'а сборка в нём не работает.
+- **Понял, что инструмент или инструкция пригодятся в будущем, —
+  пиши сразу.** Не откладывай и не жди запроса. Прецеденты:
+  quota-watchdog (автовозобновление сессии), dataset-status
+  (наблюдаемость батча), чекпоинты прогонов (T12), refresh-analysis
+  (переобучение одной командой).
+- Длительные вычисления — только детачнуто (setsid), с логом и
+  чекпоинтами; таймаут харнесса убивает и фоновые команды.
 
 ### Prettier (`.prettierrc`)
 

@@ -12,7 +12,6 @@ const fft = (signal: Float64Array): ComplexVal[] => {
     return [[signal[0] ?? 0, 0]];
   }
 
-  const omega = (-2.0 * Math.PI) / n;
   const result: ComplexVal[] = Array.from({ length: n });
 
   // Bit-reversal permutation
@@ -35,7 +34,11 @@ const fft = (signal: Float64Array): ComplexVal[] => {
 
   for (let i = 0; i < n; i++) {
     const ri = jReverse(i);
-    const sample = signal[ri] ?? 0;
+    // Читаем последовательный вход, пишем в бит-реверсированную
+    // позицию. Раньше читалось signal[ri] — перестановка была
+    // тождественной отображением, и FFT работал на непереставленном
+    // сигнале (весь спектр скремблировался).
+    const sample = signal[i] ?? 0;
     result[ri] = [sample, 0];
   }
 
@@ -43,7 +46,10 @@ const fft = (signal: Float64Array): ComplexVal[] => {
   let len = 2;
   while (len <= n) {
     const half = len >> 1;
-    const wAngle = omega * half;
+    // Твiddle-фактор ступени: exp(-2πi / len). Раньше угол брался
+    // как omega * half = -π·len/n — верно лишь при len² = 2n, и
+    // спектр скремблировался на всех остальных ступенях.
+    const wAngle = (-2.0 * Math.PI) / len;
     const wReal = Math.cos(wAngle);
     const wImag = Math.sin(wAngle);
 
@@ -167,4 +173,35 @@ export const fftExtractHarmonics = (
     });
   }
   return result;
+};
+
+/**
+ * Возвращает амплитудный спектр положительных частот: сигнал
+ * дополняется нулями до степени двойки (потолок 65536 точек),
+ * magnitudes нормированы на fftSize. Нужен инструментам анализа;
+ * в рантайм-синтезе и метриках оптимизатора не участвует.
+ */
+export const fftMagnitudeSpectrum = (
+  signal: Float64Array,
+): { magnitudes: number[]; fftSize: number } => {
+  const n = signal.length;
+  let fftSize = 1;
+  while (fftSize < n) {
+    fftSize <<= 1;
+  }
+  fftSize = Math.min(fftSize, 65536);
+
+  const padded = new Float64Array(fftSize);
+  for (let i = 0; i < Math.min(n, fftSize); i++) {
+    padded[i] = signal[i] ?? 0;
+  }
+
+  const spectrum = fft(padded);
+  const numBins = fftSize >> 1;
+  const magnitudes = new Array<number>(numBins);
+  for (let k = 0; k < numBins; k++) {
+    const [r, i] = spectrum[k] ?? [0, 0];
+    magnitudes[k] = Math.sqrt(r * r + i * i) / fftSize;
+  }
+  return { magnitudes, fftSize };
 };
