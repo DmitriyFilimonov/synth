@@ -88,6 +88,9 @@ const TRANSIENT_DURATION_SEC = 0.06;
  */
 const CLUSTER_MAX_LOG_DISTANCE = 0.7;
 
+/** Уровень старта огибающей, с которого щелчок слышно в миксе. */
+const AUDIBLE_TRANSIENT_LEVEL = 0.03;
+
 /**
  * Порог частоты для роли transient, Гц: короткая огибающая у
  * низкочастотного осциллятора — это короткий саб, а не щелчок.
@@ -222,8 +225,14 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
     }
   };
 
-  const hasActiveTransient = patch.oscillators.some(
-    (g) => g.osc.on && classifyOscillatorRole(g) === 'transient',
+  // «Слышимая атака» — не просто transient-осциллятор в патче,
+  // а заметный: у water_12 такой сидел с уровнем ~0.01 и глушил
+  // добавление настоящего click.
+  const hasAudibleTransient = patch.oscillators.some(
+    (g) =>
+      g.osc.on &&
+      classifyOscillatorRole(g) === 'transient' &&
+      g.ampEnv.startLevel >= AUDIBLE_TRANSIENT_LEVEL,
   );
   const bodyIndices = topSustainIndices(patch, 3);
 
@@ -304,7 +313,7 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
 
   // Отсутствующий слой атаки достраиваем по приору transient,
   // если сила достаточна, чтобы добавка была слышимой.
-  if (!hasActiveTransient && strength >= 0.5) {
+  if (!hasAudibleTransient && strength >= 0.5) {
     const transientClusters = priors.clusters.filter(
       (c) => c.role === 'transient',
     );

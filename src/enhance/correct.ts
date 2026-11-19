@@ -29,6 +29,18 @@ export interface CorrectArgs {
   strength: number;
 }
 
+/**
+ * Частотная коррекция выключена. Замер на water_12: перестройка
+ * фундаменталки саба 42 → 45.85 Гц (притянула к краю вилки
+ * [49.7…383], куда легальная настройка просто не попала) уронила
+ * suppression с 86% до −22%. При узких приорах легальные высоты
+ * выпадают за края семейных вилок, и коррекция частоты опаснее
+ * дефектов. Механика сохранена: вернуть true, когда приоры
+ * покроют диапазоны плотно. Правки огибающих безопасны и
+ * остаются включёнными.
+ */
+const FREQ_CORRECTION_ENABLED = false;
+
 /** Потолок сдвига частоты при коррекции: 15% в любую сторону. */
 const FREQ_MOVE_CAP_LOG = Math.log(1.15);
 
@@ -48,9 +60,8 @@ export interface CorrectResult {
 /**
  * Возвращает цель движения к вилке [lo, hi]: внутри вилки — само
  * значение (двигать нечего), снаружи — границу, сдвинутую на долю
- * strength от промаха. Сдвиг лимитирован потолком: коррекция не
- * таскает частоту дальше FREQ_MOVE_CAP_LOG, каким бы далёким ни
- * был приор.
+ * strength от промаха. Потолок сдвига применяется только к
+ * частоте (см. вызов ниже), не к огибающим.
  */
 function projectIntoRange(
   value: number,
@@ -62,12 +73,15 @@ function projectIntoRange(
     return value;
   }
   const boundary = value < lo ? lo : hi;
-  const target = value + (boundary - value) * strength;
-  const overshootLog = Math.abs(Math.log(target / value));
-  if (overshootLog > FREQ_MOVE_CAP_LOG) {
-    return value < lo ? value * 1.15 : value / 1.15;
+  return value + (boundary - value) * strength;
+}
+
+/** Клампит сдвиг частоты потолком FREQ_MOVE_CAP_LOG. */
+function capFreqMove(from: number, to: number): number {
+  if (Math.abs(Math.log(to / from)) > FREQ_MOVE_CAP_LOG) {
+    return to > from ? from * 1.15 : from / 1.15;
   }
-  return target;
+  return to;
 }
 
 /**
@@ -112,12 +126,19 @@ export function correctPatch(args: CorrectArgs): CorrectResult {
     }
 
     const freqDist = cluster.freqBaseHz;
-    if (freqDist.p10 !== null && freqDist.p90 !== null) {
-      const target = projectIntoRange(
+    if (
+      FREQ_CORRECTION_ENABLED &&
+      freqDist.p10 !== null &&
+      freqDist.p90 !== null
+    ) {
+      const target = capFreqMove(
         group.osc.freqBase,
-        freqDist.p10,
-        freqDist.p90,
-        strength,
+        projectIntoRange(
+          group.osc.freqBase,
+          freqDist.p10,
+          freqDist.p90,
+          strength,
+        ),
       );
       if (target !== group.osc.freqBase) {
         apply(retuneOscillator(patch, index, target, true));
