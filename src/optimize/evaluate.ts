@@ -44,6 +44,29 @@ export const attackWeighting = {
 };
 
 /**
+ * Подвыборка окон метрики (превью-режим разведки в coordinate descent).
+ *
+ * `stride = 1` — оцениваются все окна (поведение по умолчанию, побитово
+ * прежнее). При `stride > 1` на каждом масштабе оцениваются только окна
+ * с индексом, кратным stride: оценка дешевеет примерно в stride раз,
+ * а временное покрытие сигнала сохраняется, в отличие от обрезки
+ * сигнала по длительности. Взвешенное усреднение само нормируется на
+ * сумму весов взвешенных окон, поэтому шкала score не съезжает; пик
+ * target RMS для ringing penalty при этом берётся по подвыборке.
+ *
+ * Состояние модульное, как у `attackWeighting`: coordinate descent
+ * включает подвыборку на первом цикле расписания (по умолчанию
+ * EXPLORATION, конфиг `explorationWindowStride`) и выключает на
+ * остальных циклах и перед финальным прунингом. Каждый job поднимает
+ * свой worker-поток, поэтому параллельные прогоны состоянием не
+ * пересекаются.
+ */
+export const windowSubsampling = {
+  /** Оценивать каждое stride-ое окно; 1 — все окна. */
+  stride: 1,
+};
+
+/**
  * RMS threshold (int16 units) below which a 1ms probe window is considered
  * silence when detecting useful-signal boundaries. Set as a fraction of the
  * peak 1ms RMS in the target: everything below 1% of peak counts as silence.
@@ -336,6 +359,14 @@ const evaluateMultiScaleWindowed = (
     return 0;
   }
 
+  // Превью-режим: оцениваем каждое stride-ое окно. При stride = 1
+  // отсечение ниже не срабатывает никогда и путь вычисления прежний.
+  const configuredStride = windowSubsampling.stride;
+  const stride =
+    Number.isFinite(configuredStride) && configuredStride > 1
+      ? Math.floor(configuredStride)
+      : 1;
+
   let peakTargetRms = 0;
   const attackBoostEnd =
     usefulZone.start +
@@ -353,6 +384,9 @@ const evaluateMultiScaleWindowed = (
     let totalWeight = 0;
 
     for (let w = 0; w < fullWindows; w++) {
+      if (w % stride !== 0) {
+        continue;
+      }
       const s = usefulZone.start + w * windowSize;
       const tgtRms = rangeRMS(targetSignal, s, windowSize);
       if (tgtRms > peakTargetRms) {
@@ -374,7 +408,10 @@ const evaluateMultiScaleWindowed = (
       sumScoreWeighted += score * weight;
       totalWeight += weight;
     }
-    if (tailLength > 0) {
+    // Хвост считаем окном с индексом fullWindows: при stride = 1
+    // условие истинно всегда, при stride > 1 хвост попадает в ту же
+    // решётку подвыборки.
+    if (tailLength > 0 && fullWindows % stride === 0) {
       const s = usefulZone.start + fullWindows * windowSize;
       const tgtRms = rangeRMS(targetSignal, s, tailLength);
       if (tgtRms > peakTargetRms) {
