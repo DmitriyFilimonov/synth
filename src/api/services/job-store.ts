@@ -36,6 +36,8 @@ export interface JobRecord {
     attackBoost?: number;
     /** Сид ГПСЧ оптимизатора; без него прогон идёт с дефолтным сидом. */
     seed?: number;
+    /** Сила улучшения для enhance-job'ов: 0 — не менять, 1 — приоры. */
+    enhancementStrength?: number;
     stageDurationMultiplier?: number;
     hpoTrials?: number;
     hpo?: boolean;
@@ -57,6 +59,12 @@ export interface JobRecord {
   } | null;
   bestVector: number[] | null;
   synthConfig: ArgCreateSynth | null;
+  /** Патч стартового match до улучшения (только enhance-job'ы). */
+  matchSynthConfig?: ArgCreateSynth | null;
+  /** Журнал трансформаций улучшения (только enhance-job'ы). */
+  enhanceAudit?: unknown[] | null;
+  /** Честный global suppression улучшенного WAV к исходному (enhance). */
+  enhanceGlobalSuppressionPercent?: number | null;
 }
 
 const JOBS_DIR = join(process.cwd(), 'jobs');
@@ -132,6 +140,8 @@ export async function createJob(
     attackBoost?: number;
     /** Сид ГПСЧ оптимизатора; без него прогон идёт с дефолтным сидом. */
     seed?: number;
+    /** Сила улучшения для enhance-job'ов: 0 — не менять, 1 — приоры. */
+    enhancementStrength?: number;
     stageDurationMultiplier?: number;
     hpoTrials?: number;
     hpo?: boolean;
@@ -179,6 +189,9 @@ export async function updateJobStatus(
       | 'errorMessage'
       | 'bestVector'
       | 'synthConfig'
+      | 'matchSynthConfig'
+      | 'enhanceAudit'
+      | 'enhanceGlobalSuppressionPercent'
     >
   >,
 ): Promise<JobRecord> {
@@ -212,6 +225,16 @@ export async function updateJobStatus(
     }
     if (partial.synthConfig !== undefined) {
       record.synthConfig = partial.synthConfig;
+    }
+    if (partial.matchSynthConfig !== undefined) {
+      record.matchSynthConfig = partial.matchSynthConfig;
+    }
+    if (partial.enhanceAudit !== undefined) {
+      record.enhanceAudit = partial.enhanceAudit;
+    }
+    if (partial.enhanceGlobalSuppressionPercent !== undefined) {
+      record.enhanceGlobalSuppressionPercent =
+        partial.enhanceGlobalSuppressionPercent;
     }
   }
   try {

@@ -5,6 +5,7 @@ import {
   matchBinaryHandler,
   createMatchJobHandler,
   createMatchJobJsonHandler,
+  createEnhanceJobHandler,
   getJobStatusHandler,
   getJobsListHandler,
   downloadJobResultHandler,
@@ -21,6 +22,7 @@ router.post('/match/binary', matchBinaryHandler);
 
 router.post('/match/job', createMatchJobHandler);
 router.post('/match/job/json', createMatchJobJsonHandler);
+router.post('/enhance/job', createEnhanceJobHandler);
 router.get('/match/jobs', getJobsListHandler);
 router.get('/match/jobs/:id', getJobStatusHandler);
 router.get('/match/jobs/:id/download', downloadJobResultHandler);

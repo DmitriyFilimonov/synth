@@ -9,6 +9,7 @@ import {
   generateWav,
   matchWav,
   matchWavWithJob,
+  enhanceWavWithJob,
 } from '../services/synth-service';
 import {
   getJob,
@@ -283,6 +284,54 @@ export const createMatchJobJsonHandler = async (
   }
 };
 
+export const createEnhanceJobHandler = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: 'WAV binary data required' });
+      return;
+    }
+
+    const queryParams = req.query as Record<
+      string,
+      string | undefined
+    >;
+    const numOscillators = parseInt(
+      queryParams.numOscillators ?? String(MATCH_DEFAULT_OSCILLATORS),
+      10,
+    );
+    const maxIterations = parseInt(
+      queryParams.maxIterations ?? String(MATCH_DEFAULT_ITERATIONS),
+      10,
+    );
+    const strengthFloat = parseFloat(
+      queryParams.enhancementStrength ?? '0.5',
+    );
+    const enhancementStrength = Number.isNaN(strengthFloat)
+      ? 0.5
+      : Math.min(1, Math.max(0, strengthFloat));
+    const seedInt = parseInt(queryParams.seed ?? '', 10);
+    const seed = Number.isNaN(seedInt) ? undefined : seedInt;
+
+    const jobId = await enhanceWavWithJob(
+      req.body,
+      numOscillators,
+      maxIterations,
+      enhancementStrength,
+      queryParams.fileName,
+      seed,
+    );
+
+    res.status(202).json({ id: jobId });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+};
+
 export const getJobStatusHandler = async (
   req: Request,
   res: Response,
@@ -311,6 +360,10 @@ export const getJobStatusHandler = async (
       targetInfo: job.targetInfo,
       bestVector: job.bestVector,
       synthConfig: job.synthConfig,
+      matchSynthConfig: job.matchSynthConfig ?? null,
+      enhanceAudit: job.enhanceAudit ?? null,
+      enhanceGlobalSuppressionPercent:
+        job.enhanceGlobalSuppressionPercent ?? null,
     });
   } catch {
     res.status(404).json({ error: 'Job not found' });

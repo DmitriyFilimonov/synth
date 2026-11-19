@@ -8,6 +8,10 @@ import {
 import { matchWithWorker } from '../../match-worker';
 import { dualWindowInitVector } from '../../dual-window-init-vector';
 import { mapVectorToSynthConfig } from '../../vector-to-synth-config';
+import { enhancePatch, type PriorsFile } from '../../enhance/engine';
+import { DEFAULT_IDENTIFIABILITY } from '../../enhance/defaults';
+import { evaluateSuppressionFromWaveform } from '../../optimize/evaluate';
+import { renderSamples } from '../../dataset/shared';
 import { readWav } from '../../read-wav';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -308,6 +312,184 @@ async function runMatchJob(
       targetInfo: result.targetInfo,
       bestVector: result.bestVector,
       synthConfig: result.synthConfig,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown error';
+    try {
+      await updateJobStatus(jobId, 'failed', {
+        errorMessage: message,
+      });
+    } catch (reportError) {
+      console.error(
+        `Failed to report error for job ${jobId}:`,
+        reportError,
+      );
+    }
+  } finally {
+    await unlink(tempOutput).catch(() => {});
+  }
+}
+
+/**
+ * Создаёт job улучшения бочки: match + улучшение патча приорами +
+ * синтез улучшенного WAV. Стадии и контракт — по
+ * `docs/spec-kick-enhancement.md` (C4, C5).
+ */
+export async function enhanceWavWithJob(
+  wavBuffer: Buffer,
+  numOscillators: number,
+  maxIterations: number,
+  enhancementStrength: number,
+  targetFileName?: string,
+  seed?: number,
+): Promise<string> {
+  const jobId = randomUUID();
+  const inputFileName = `${jobId}_input.wav`;
+  const jobName = generateJobName(targetFileName);
+
+  await createJob(
+    jobId,
+    {
+      numOscillators,
+      maxIterations,
+      enhancementStrength,
+      seed,
+    },
+    inputFileName,
+    jobName,
+  );
+
+  const inputPath = getInputFilePath(jobId);
+  await writeFile(inputPath, wavBuffer);
+
+  setImmediate(() => {
+    runEnhanceJob(
+      jobId,
+      numOscillators,
+      maxIterations,
+      inputPath,
+      enhancementStrength,
+      seed,
+    ).catch((err) => {
+      const message =
+        err instanceof Error ? err.message : 'Unknown error';
+      updateJobStatus(jobId, 'failed', {
+        errorMessage: message,
+      }).catch(() => {});
+    });
+  });
+
+  return jobId;
+}
+
+/** Читает приоры из файла; отсутствие — null (улучшение пройдёт пустым). */
+async function loadPriors(
+  priorsPath: string,
+): Promise<PriorsFile | null> {
+  if (!existsSync(priorsPath)) {
+    return null;
+  }
+  try {
+    const raw = await readFile(priorsPath, 'utf8');
+    return JSON.parse(raw) as PriorsFile;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Гоняет job улучшения: match таргета, затем движок режима A,
+ * затем синтез улучшенного патча в result WAV. Артефакты match
+ * (патч и suppression) сохраняются в полях job'а.
+ */
+async function runEnhanceJob(
+  jobId: string,
+  numOscillators: number,
+  maxIterations: number,
+  inputPath: string,
+  enhancementStrength: number,
+  seed?: number,
+): Promise<void> {
+  const tempOutput = join(tmpdir(), `${randomUUID()}_enhance.wav`);
+  const history: {
+    iteration: number;
+    suppressionPercent: number;
+  }[] = [];
+
+  try {
+    await updateJobStatus(jobId, 'running');
+
+    const targetWavData = readWav(inputPath);
+    const initialVector = dualWindowInitVector(
+      targetWavData.samples,
+      SAMPLE_RATE,
+      numOscillators,
+    );
+
+    const result = await matchWithWorker({
+      targetWavPath: inputPath,
+      outputWavPath: tempOutput,
+      initialVector,
+      sampleRate: SAMPLE_RATE,
+      maxIterations,
+      seed,
+      onProgress: (entry) => {
+        const { bestVector: _bv, ...historyEntry } = entry;
+        history.push(historyEntry);
+      },
+    });
+
+    const priorsPath =
+      process.env.ENHANCE_PRIORS_PATH ??
+      join(process.cwd(), 'datasets', 'reference-4', 'priors.json');
+    const priors = await loadPriors(priorsPath);
+
+    const enhanced =
+      priors === null
+        ? { patch: result.synthConfig, audits: [] }
+        : enhancePatch({
+            patch: result.synthConfig,
+            identifiability: DEFAULT_IDENTIFIABILITY,
+            priors,
+            strength: enhancementStrength,
+          });
+
+    const enhancedSamples = renderSamples(
+      enhanced.patch,
+      targetWavData.samples.length / SAMPLE_RATE,
+    );
+    const resultPath = getResultFilePath(jobId);
+    writeWav({
+      samples: enhancedSamples,
+      sampleRate: SAMPLE_RATE,
+      filePath: resultPath,
+    });
+
+    let enhanceGlobal: number | null = null;
+    try {
+      enhanceGlobal = evaluateSuppressionFromWaveform(
+        [...enhancedSamples],
+        [...targetWavData.samples],
+      );
+    } catch {
+      enhanceGlobal = null;
+    }
+
+    await updateJobStatus(jobId, 'completed', {
+      progress: history,
+      suppressionPercent:
+        history.length > 0
+          ? (history[history.length - 1]?.suppressionPercent ?? 0)
+          : 0,
+      globalSuppressionPercent:
+        result.globalSuppressionPercent ?? null,
+      targetInfo: result.targetInfo,
+      bestVector: result.bestVector,
+      synthConfig: enhanced.patch,
+      matchSynthConfig: result.synthConfig,
+      enhanceAudit: enhanced.audits,
+      enhanceGlobalSuppressionPercent: enhanceGlobal,
     });
   } catch (error) {
     const message =

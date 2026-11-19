@@ -76,6 +76,17 @@ export interface CreateMatchJobRequest {
   targetFileName?: string;
 }
 
+export interface CreateEnhanceJobRequest {
+  numOscillators?: number;
+  maxIterations?: number;
+  /** Сила улучшения: 0 — патч не меняется, 1 — полностью приоры. */
+  enhancementStrength?: number;
+  /** Сид ГПСЧ оптимизатора. */
+  seed?: number;
+  wavBase64?: string;
+  targetFileName?: string;
+}
+
 export interface MatchParams {
   numOscillators: number;
   maxIterations: number;
@@ -128,6 +139,12 @@ export interface JobStatusResponse {
       };
     }[];
   } | null;
+  /** Патч стартового match до улучшения (только enhance-job'ы). */
+  matchSynthConfig?: ArgCreateSynth | null;
+  /** Журнал трансформаций улучшения (только enhance-job'ы). */
+  enhanceAudit?: unknown[] | null;
+  /** Честный global suppression улучшенного WAV к исходному (enhance). */
+  enhanceGlobalSuppressionPercent?: number | null;
 }
 
 export interface JobListItem {
