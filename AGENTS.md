@@ -451,6 +451,7 @@ web/src/
 | `shared/api/`               | `fetchApi<T>` (JSON), `fetchBlob` (binary)                                    |
 | `features/synth-generator/` | Форма генерации: выбор пресета, настройка осцилляторов                        |
 | `features/wav-matcher/`     | Форма подбора: загрузка WAV, создание job, отслеживание прогресса, скачивание; completed job с `synthConfig` передаёт сохранённый patch и имя job через `onVisualize` |
+| `features/enhance/`         | Форма улучшения бочки: загрузка WAV, сила улучшения 0..1, список enhance-job'ов (фильтр общего списка по `params.enhancementStrength`), Match global против Enhance global, журнал аудита, прослушивание результата |
 | `features/patch-visualizer/` | Загрузка и валидация JSON-патча, выбор активных осцилляторов с исходными индексами, предпросмотр через `<img>` и скачивание того же SVG Blob; публичный `PatchVisualizer` принимает опциональный `source?: { name, patch }` для внешнего патча. Standalone UI реализован в T3, подключение completed job — в T4 через композицию в `App.tsx`, без импорта между features |
 | `app/`                      | Точка входа, корневой компонент                                               |
 

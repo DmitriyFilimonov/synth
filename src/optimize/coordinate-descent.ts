@@ -736,9 +736,12 @@ export const coordinateDescent = (
     // полной метрике. При смене метрики пересчитываем опорные score,
     // чтобы все сравнения внутри цикла шли на одной шкале.
     const configuredStride = cfg.explorationWindowStride ?? 1;
+    // Потолок stride: на грубом масштабе (200 мс ≈ 2 окна)
+    // подвыборка вырождается в одно окно; 8 — компромисс между
+    // ускорением и покрытием (замечание ревизии d2cfa45).
     const previewStride =
       cycleIndex === 0 && Number.isFinite(configuredStride)
-        ? Math.max(1, Math.floor(configuredStride))
+        ? Math.min(8, Math.max(1, Math.floor(configuredStride)))
         : 1;
     if (previewStride !== windowSubsampling.stride) {
       windowSubsampling.stride = previewStride;

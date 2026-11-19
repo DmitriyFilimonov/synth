@@ -7,3 +7,4 @@ dist
 !docs/img/*.svg
 jobs/
 datasets/
+tsconfig.tsbuildinfo
