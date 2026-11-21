@@ -18,6 +18,8 @@ import { calculateRMS } from '../rms';
 import { renderSamples } from '../dataset/shared';
 import {
   type ArgCreateSynth,
+  type PhaseModel,
+  type SynthOptions,
   ampEnvConfigNormales,
   oscConfigNormales,
 } from '../synth';
@@ -115,6 +117,8 @@ export interface EnhanceArgs {
    * сервис его выключает до проверки закона (T17 в плане).
    */
   enrichBody?: boolean;
+  /** Модель фазы для замеров громкости и пика; без неё — legacy. */
+  phaseModel?: PhaseModel;
 }
 
 /** Результат улучшения: патч и журнал трансформаций. */
@@ -257,6 +261,7 @@ function moveToward(
  */
 export function enhancePatch(args: EnhanceArgs): EnhanceResult {
   const { identifiability, priors, strength } = args;
+  const synthOptions: SynthOptions = { phaseModel: args.phaseModel };
   let patch = args.patch;
   const audits: TransformAudit[] = [];
   if (strength <= 0) {
@@ -407,11 +412,11 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
   if (median !== null && median !== undefined && strength > 0) {
     const p90 = loudness?.p90 ?? median;
     const norm = median * Math.exp(Math.log(p90 / median) * strength);
-    const samples = renderSamples(patch, 0.5);
+    const samples = renderSamples(patch, 0.5, synthOptions);
     const current = calculateRMS([...samples].map((s) => s / 32768));
     if (current > 1e-9) {
       const wanted = Math.exp(Math.log(norm / current) * strength);
-      const factor = headroomFactor(patch, wanted);
+      const factor = headroomFactor(patch, wanted, synthOptions);
       const scaled = scaleLevels(patch, factor);
       if (scaled.audit !== null) {
         patch = scaled.patch;
@@ -430,9 +435,12 @@ const HEADROOM_PEAK = 0.98;
 const HEADROOM_STEPS = 16;
 
 /** Пик синтеза патча в долях полной шкалы по окну 0.5 с. */
-function synthPeak(patch: ArgCreateSynth): number {
+function synthPeak(
+  patch: ArgCreateSynth,
+  options: SynthOptions = {},
+): number {
   let peak = 0;
-  for (const s of renderSamples(patch, 0.5)) {
+  for (const s of renderSamples(patch, 0.5, options)) {
     const v = Math.abs(s) / 32768;
     if (v > peak) {
       peak = v;
@@ -451,9 +459,10 @@ function synthPeak(patch: ArgCreateSynth): number {
 function headroomFactor(
   patch: ArgCreateSynth,
   wanted: number,
+  options: SynthOptions = {},
 ): number {
   const fits = (k: number): boolean =>
-    synthPeak(scaleLevels(patch, k).patch) <= HEADROOM_PEAK;
+    synthPeak(scaleLevels(patch, k).patch, options) <= HEADROOM_PEAK;
   if (fits(wanted)) {
     return wanted;
   }
@@ -474,8 +483,11 @@ function headroomFactor(
  * Ограничивает пик патча потолком, не поднимая громкость. Нужна
  * там, где патч пересобран после масштабирования (доводка).
  */
-export function limitPeak(patch: ArgCreateSynth): ArgCreateSynth {
-  return scaleLevels(patch, headroomFactor(patch, 1)).patch;
+export function limitPeak(
+  patch: ArgCreateSynth,
+  options: SynthOptions = {},
+): ArgCreateSynth {
+  return scaleLevels(patch, headroomFactor(patch, 1, options)).patch;
 }
 
 /**

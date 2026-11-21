@@ -1,5 +1,10 @@
 /* eslint-disable no-console */
-import { createSynth, ArgCreateSynth } from '../../synth';
+import {
+  ArgCreateSynth,
+  createSynth,
+  type PhaseModel,
+  type SynthOptions,
+} from '../../synth';
 import { writeWav } from '../../write-wav';
 import {
   MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
@@ -80,9 +85,10 @@ export async function generateWav(
   synthConfig: ArgCreateSynth,
   duration: number,
   sampleRate: number,
+  options: SynthOptions = {},
 ): Promise<GeneratedFile> {
   const totalSamples = Math.floor(sampleRate * duration);
-  const synth = createSynth(synthConfig);
+  const synth = createSynth(synthConfig, options);
   const samples = new Int16Array(totalSamples);
 
   for (let i = 0; i < totalSamples; i++) {
@@ -181,6 +187,7 @@ export async function matchWavWithJob(
   targetFileName?: string,
   attackBoost?: number,
   seed?: number,
+  phaseModel?: PhaseModel,
 ): Promise<string> {
   const jobId = randomUUID();
   const inputFileName = `${jobId}_input.wav`;
@@ -195,6 +202,7 @@ export async function matchWavWithJob(
       stepDecayFactor,
       attackBoost,
       seed,
+      phaseModel,
     },
     inputFileName,
     jobName,
@@ -213,6 +221,7 @@ export async function matchWavWithJob(
       stepDecayFactor,
       attackBoost,
       seed,
+      phaseModel,
     ).catch((err) => {
       const message =
         err instanceof Error ? err.message : 'Unknown error';
@@ -234,6 +243,7 @@ async function runMatchJob(
   stepDecayFactor?: number,
   attackBoost?: number,
   seed?: number,
+  phaseModel?: PhaseModel,
 ): Promise<void> {
   const tempOutput = join(tmpdir(), `${randomUUID()}_output.wav`);
   const history: {
@@ -267,6 +277,7 @@ async function runMatchJob(
       stepGrowthAdd,
       stepDecayFactor,
       seed,
+      phaseModel,
       onProgress: (entry) => {
         // Strip bestVector from history entries — it bloats the
         // job.json file and duplicates data we persist separately.
@@ -350,6 +361,7 @@ export async function enhanceWavWithJob(
   targetFileName?: string,
   seed?: number,
   refineIterations?: number,
+  phaseModel?: PhaseModel,
 ): Promise<string> {
   const jobId = randomUUID();
   const inputFileName = `${jobId}_input.wav`;
@@ -363,6 +375,7 @@ export async function enhanceWavWithJob(
       enhancementStrength,
       seed,
       refineIterations,
+      phaseModel,
     },
     inputFileName,
     jobName,
@@ -380,6 +393,7 @@ export async function enhanceWavWithJob(
       enhancementStrength,
       seed,
       refineIterations ?? 0,
+      phaseModel,
     ).catch((err) => {
       const message =
         err instanceof Error ? err.message : 'Unknown error';
@@ -420,6 +434,7 @@ async function runEnhanceJob(
   enhancementStrength: number,
   seed?: number,
   refineIterations = 0,
+  phaseModel?: PhaseModel,
 ): Promise<void> {
   const tempOutput = join(tmpdir(), `${randomUUID()}_enhance.wav`);
   const history: {
@@ -447,6 +462,7 @@ async function runEnhanceJob(
       sampleRate: SAMPLE_RATE,
       maxIterations,
       seed,
+      phaseModel,
       onProgress: (entry) => {
         const { bestVector: entryVector, ...historyEntry } = entry;
         history.push(historyEntry);
@@ -496,6 +512,7 @@ async function runEnhanceJob(
         identifiability: DEFAULT_IDENTIFIABILITY,
         priors,
         strength: enhancementStrength,
+        phaseModel,
         // Перенос тела выключен: последовательность множителей,
         // привязанная к фундаментальной, законом не доказана (T17).
         enrichBody: false,
@@ -509,6 +526,7 @@ async function runEnhanceJob(
     const enhancedSamples = renderSamples(
       enhanced.patch,
       targetWavData.samples.length / SAMPLE_RATE,
+      { phaseModel },
     );
 
     // Доводка: консолидируем улучшенную структуру коротким вторым
@@ -539,6 +557,7 @@ async function runEnhanceJob(
           sampleRate: SAMPLE_RATE,
           maxIterations: refineIterations,
           seed,
+          phaseModel,
           onProgress: (entry) => {
             history.push({
               iteration: maxIterations + entry.iteration,
@@ -554,10 +573,11 @@ async function runEnhanceJob(
             }
           },
         });
-        finalPatch = limitPeak(refined.synthConfig);
+        finalPatch = limitPeak(refined.synthConfig, { phaseModel });
         finalSamples = renderSamples(
           finalPatch,
           targetWavData.samples.length / SAMPLE_RATE,
+          { phaseModel },
         );
       } finally {
         await unlink(tempEnhanced).catch(() => {});

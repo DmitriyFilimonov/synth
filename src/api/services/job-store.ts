@@ -9,7 +9,7 @@ import {
   rename,
 } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import type { ArgCreateSynth } from '../../synth';
+import type { ArgCreateSynth, PhaseModel } from '../../synth';
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
@@ -38,6 +38,8 @@ export interface JobRecord {
     seed?: number;
     /** Сила улучшения для enhance-job'ов: 0 — не менять, 1 — приоры. */
     enhancementStrength?: number;
+    /** Модель фазы синтеза; по умолчанию legacy. */
+    phaseModel?: PhaseModel;
     /** Бюджет доводки улучшенного сигнала вторым match (0 — выкл). */
     refineIterations?: number;
     stageDurationMultiplier?: number;
@@ -149,6 +151,8 @@ export async function createJob(
     seed?: number;
     /** Сила улучшения для enhance-job'ов: 0 — не менять, 1 — приоры. */
     enhancementStrength?: number;
+    /** Модель фазы синтеза; по умолчанию legacy. */
+    phaseModel?: PhaseModel;
     /** Бюджет доводки улучшенного сигнала вторым match (0 — выкл). */
     refineIterations?: number;
     stageDurationMultiplier?: number;
