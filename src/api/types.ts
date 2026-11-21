@@ -81,6 +81,8 @@ export interface CreateEnhanceJobRequest {
   maxIterations?: number;
   /** Сила улучшения: 0 — патч не меняется, 1 — полностью приоры. */
   enhancementStrength?: number;
+  /** Бюджет доводки улучшенного сигнала вторым match (0 — выкл). */
+  refineIterations?: number;
   /** Сид ГПСЧ оптимизатора. */
   seed?: number;
   wavBase64?: string;

@@ -345,6 +345,7 @@ export async function enhanceWavWithJob(
   enhancementStrength: number,
   targetFileName?: string,
   seed?: number,
+  refineIterations?: number,
 ): Promise<string> {
   const jobId = randomUUID();
   const inputFileName = `${jobId}_input.wav`;
@@ -357,6 +358,7 @@ export async function enhanceWavWithJob(
       maxIterations,
       enhancementStrength,
       seed,
+      refineIterations,
     },
     inputFileName,
     jobName,
@@ -373,6 +375,7 @@ export async function enhanceWavWithJob(
       inputPath,
       enhancementStrength,
       seed,
+      refineIterations ?? 0,
     ).catch((err) => {
       const message =
         err instanceof Error ? err.message : 'Unknown error';
@@ -412,6 +415,7 @@ async function runEnhanceJob(
   inputPath: string,
   enhancementStrength: number,
   seed?: number,
+  refineIterations = 0,
 ): Promise<void> {
   const tempOutput = join(tmpdir(), `${randomUUID()}_enhance.wav`);
   const history: {
@@ -499,9 +503,61 @@ async function runEnhanceJob(
       enhanced.patch,
       targetWavData.samples.length / SAMPLE_RATE,
     );
+
+    // Доводка: консолидируем улучшенную структуру коротким вторым
+    // match по улучшенному сигналу — фазы и уровни добавленного
+    // встают на место. Мишень доводки — улучшенный сигнал, а не
+    // оригинал: мы сознательно улучшаем, а не возвращаемся.
+    let finalPatch = enhanced.patch;
+    let finalSamples: Int16Array = enhancedSamples;
+    if (refineIterations > 0) {
+      const tempEnhanced = join(tmpdir(), `${randomUUID()}_enh.wav`);
+      const tempRefined = join(tmpdir(), `${randomUUID()}_ref.wav`);
+      try {
+        writeWav({
+          samples: enhancedSamples,
+          sampleRate: SAMPLE_RATE,
+          filePath: tempEnhanced,
+        });
+        const enhancedWav = readWav(tempEnhanced);
+        const refineInit = dualWindowInitVector(
+          enhancedWav.samples,
+          SAMPLE_RATE,
+          numOscillators,
+        );
+        const refined = await matchWithWorker({
+          targetWavPath: tempEnhanced,
+          outputWavPath: tempRefined,
+          initialVector: refineInit,
+          sampleRate: SAMPLE_RATE,
+          maxIterations: refineIterations,
+          seed,
+          onProgress: (entry) => {
+            history.push({
+              iteration: maxIterations + entry.iteration,
+              suppressionPercent: entry.suppressionPercent,
+            });
+            const now = Date.now();
+            if (now - lastUpdateMs >= UPDATE_THROTTLE_MS) {
+              lastUpdateMs = now;
+              void updateJobStatus(jobId, 'running', {
+                progress: [...history],
+                suppressionPercent: entry.suppressionPercent,
+              }).catch(() => {});
+            }
+          },
+        });
+        finalPatch = refined.synthConfig;
+        finalSamples = readWav(tempRefined).samples;
+      } finally {
+        await unlink(tempEnhanced).catch(() => {});
+        await unlink(tempRefined).catch(() => {});
+      }
+    }
+
     const resultPath = getResultFilePath(jobId);
     writeWav({
-      samples: enhancedSamples,
+      samples: finalSamples,
       sampleRate: SAMPLE_RATE,
       filePath: resultPath,
     });
@@ -509,7 +565,7 @@ async function runEnhanceJob(
     let enhanceGlobal: number | null = null;
     try {
       enhanceGlobal = evaluateSuppressionFromWaveform(
-        [...enhancedSamples],
+        [...finalSamples],
         [...targetWavData.samples],
       );
     } catch {
@@ -526,7 +582,7 @@ async function runEnhanceJob(
         result.globalSuppressionPercent ?? null,
       targetInfo: result.targetInfo,
       bestVector: result.bestVector,
-      synthConfig: enhanced.patch,
+      synthConfig: finalPatch,
       matchSynthConfig: result.synthConfig,
       enhanceAudit: enhanced.audits,
       enhanceGlobalSuppressionPercent: enhanceGlobal,

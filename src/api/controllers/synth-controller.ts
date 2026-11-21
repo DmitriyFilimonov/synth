@@ -314,6 +314,13 @@ export const createEnhanceJobHandler = async (
       : Math.min(1, Math.max(0, strengthFloat));
     const seedInt = parseInt(queryParams.seed ?? '', 10);
     const seed = Number.isNaN(seedInt) ? undefined : seedInt;
+    const refineInt = parseInt(
+      queryParams.refineIterations ?? '',
+      10,
+    );
+    const refineIterations = Number.isNaN(refineInt)
+      ? undefined
+      : refineInt;
 
     const jobId = await enhanceWavWithJob(
       req.body,
@@ -322,6 +329,7 @@ export const createEnhanceJobHandler = async (
       enhancementStrength,
       queryParams.fileName,
       seed,
+      refineIterations,
     );
 
     res.status(202).json({ id: jobId });

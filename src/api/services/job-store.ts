@@ -38,6 +38,8 @@ export interface JobRecord {
     seed?: number;
     /** Сила улучшения для enhance-job'ов: 0 — не менять, 1 — приоры. */
     enhancementStrength?: number;
+    /** Бюджет доводки улучшенного сигнала вторым match (0 — выкл). */
+    refineIterations?: number;
     stageDurationMultiplier?: number;
     hpoTrials?: number;
     hpo?: boolean;
@@ -142,6 +144,8 @@ export async function createJob(
     seed?: number;
     /** Сила улучшения для enhance-job'ов: 0 — не менять, 1 — приоры. */
     enhancementStrength?: number;
+    /** Бюджет доводки улучшенного сигнала вторым match (0 — выкл). */
+    refineIterations?: number;
     stageDurationMultiplier?: number;
     hpoTrials?: number;
     hpo?: boolean;
