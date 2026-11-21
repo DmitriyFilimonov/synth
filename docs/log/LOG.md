@@ -204,3 +204,9 @@
 - Legacy, 200 итераций, сид 1: J=66.89%, global=62.91%, 90.5 мин.
 - Integral на 175-й итерации: J=74.86% — выше legacy на всех 200 итерациях. Жду его global и время.
 - `src/dataset/check-laws.ts` в репозитории: проверка закона leave-one-out. На reference-4: bodySweepDown 6/6, upperSweepFlat 6/6, nonHarmonic 5/6, energyHierarchy 4/6, bodyClusters 1/6 (Г2 отвергнуто).
+
+## 2026-11-21: закон проверяется на отложенных таргетах
+
+- Добавлен `src/dataset/check-laws.ts`: метрики по прогонам, пороги leave-one-out, отчёт law-report.json/md. Это заменяет разведочные скрипты из /tmp.
+- Результат на reference-4: bodySweepDown 6/6, upperSweepFlat 6/6, nonHarmonic 5/6, energyHierarchy 4/6, bodyClusters 1/6 (Г2 отвергнуто).
+- 76 тестов зелёные. A/B по фазе: legacy 200 итераций J=66.89% (global 62.91%), integral на 175-й J=74.86% — исправленная модель подгоняет лучше.
