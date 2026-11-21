@@ -43,6 +43,7 @@ import {
   type MatchWorkerResult,
 } from '../match-worker';
 import { readWav } from '../read-wav';
+import type { PhaseModel } from '../synth';
 import { readJsonOrNull, writeJsonAtomic } from './shared';
 
 /** Аргументы командной строки сборщика. */
@@ -53,6 +54,8 @@ interface CliArgs {
   seeds: number[];
   oscillators: number;
   parallel: number;
+  /** Модель фазы синтеза; по умолчанию legacy, как у прежних сборок. */
+  phase: PhaseModel;
   only?: string;
 }
 
@@ -94,6 +97,8 @@ interface DatasetManifest {
   seeds: number[];
   maxIterations: number;
   numOscillators: number;
+  /** Модель фазы, на которой собран датасет: смешивать нельзя. */
+  phaseModel: PhaseModel;
   codeRevision: string | null;
   platform: string;
   nodeVersion: string;
@@ -121,6 +126,7 @@ function parseCliArgs(argv: string[]): CliArgs {
     seeds: [1, 2, 3, 4],
     oscillators: 50,
     parallel: Math.max(1, cpus().length),
+    phase: 'legacy',
   };
 
   for (let i = 0; i < argv.length; i += 2) {
@@ -146,6 +152,12 @@ function parseCliArgs(argv: string[]): CliArgs {
         break;
       case '--oscillators':
         args.oscillators = parsePositiveInt(key, value);
+        break;
+      case '--phase':
+        if (value !== 'legacy' && value !== 'integral') {
+          throw new Error('--phase must be legacy or integral');
+        }
+        args.phase = value;
         break;
       case '--parallel':
         args.parallel = parsePositiveInt(key, value);
@@ -244,6 +256,7 @@ function buildManifest(
     seeds: args.seeds,
     maxIterations: args.iterations,
     numOscillators: args.oscillators,
+    phaseModel: args.phase,
     codeRevision: readCodeRevision(),
     platform: process.platform,
     nodeVersion: process.version,
@@ -517,6 +530,7 @@ async function runSingleTask(
       sampleRate: SAMPLE_RATE,
       maxIterations: args.iterations,
       seed: task.seed,
+      phaseModel: args.phase,
       onLog: (line) => {
         logStream.write(line + '\n');
       },
