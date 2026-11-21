@@ -7,7 +7,11 @@ import {
   evaluateSuppressionFromWaveform,
 } from './optimize';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
-import { createSynth, ArgCreateSynth } from './synth';
+import {
+  createSynth,
+  ArgCreateSynth,
+  type PhaseModel,
+} from './synth';
 import { writeWav } from './write-wav';
 import { MAX_AMPLITUDE_16_BIT_WAV_ENCODED } from './consts';
 import { matchVisualize } from './match-visualize';
@@ -42,6 +46,7 @@ export interface GenerateOutputArgs {
   sampleRate: number;
   outputWavPath: string;
   history: { iteration: number; suppressionPercent: number }[];
+  phaseModel?: PhaseModel;
 }
 
 export interface GenerateOutputResult {
@@ -54,7 +59,9 @@ export const generateOutput = (
 ): GenerateOutputResult => {
   const optimizedConfig = mapVectorToSynthConfig([...arg.vector]);
 
-  const synth = createSynth(optimizedConfig);
+  const synth = createSynth(optimizedConfig, {
+    phaseModel: arg.phaseModel,
+  });
   const samples = new Int16Array(arg.numSamples);
 
   for (let i = 0; i < arg.numSamples; i++) {

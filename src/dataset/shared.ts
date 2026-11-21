@@ -11,7 +11,11 @@ import {
   MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
   SAMPLE_RATE,
 } from '../consts';
-import { createSynth, type ArgCreateSynth } from '../synth';
+import {
+  createSynth,
+  type ArgCreateSynth,
+  type SynthOptions,
+} from '../synth';
 
 /**
  * Читает JSON-файл асинхронно; при отсутствии файла или битом
@@ -109,8 +113,9 @@ export async function writeTextAtomic(
 export function renderSamples(
   patch: ArgCreateSynth,
   seconds: number,
+  options: SynthOptions = {},
 ): Int16Array {
-  const synth = createSynth(patch);
+  const synth = createSynth(patch, options);
   const total = Math.floor(SAMPLE_RATE * seconds);
   const samples = new Int16Array(total);
   for (let i = 0; i < total; i += 1) {

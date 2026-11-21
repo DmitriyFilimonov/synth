@@ -16,6 +16,7 @@ import type {
   ProgressCallback,
   ArgOptimize,
 } from './types';
+import type { PhaseModel } from '../synth';
 
 const IDX_FREQ_BASE = 1;
 const IDX_FREQ_START = 2;
@@ -63,6 +64,11 @@ export interface CoordinateDescentConfig {
    * независимую выборку (мультистарт, оценка дисперсии).
    */
   seed: number;
+  /**
+   * Модель фазы осциллятора. `legacy` — поведение прежних прогонов;
+   * `integral` — звучащая частота совпадает с огибающей частоты.
+   */
+  phaseModel: PhaseModel;
   /**
    * Окно (в итерациях), на котором проверяется, продолжает ли цикл
    * приносить прогресс. Цикл, исчерпавший свою долю бюджета, но всё
@@ -172,6 +178,7 @@ export const DEFAULT_COORD_DESCENT_CONFIG: CoordinateDescentConfig = {
     { startStep: 0.0025, minStep: 0.0001, label: 'PRECISION' },
   ],
   seed: 1,
+  phaseModel: 'legacy',
   cycleProgressWindow: 30,
   cycleProgressEpsilon: 0.5,
   cycleProgressMisses: 2,
@@ -637,6 +644,7 @@ export const coordinateDescent = (
     genome,
     sampleRate,
     targetSignal.length,
+    cfg.phaseModel,
   );
   let currentBest = evaluateSuppressionWindowed(
     waveformCache.getWaveform(),
@@ -706,7 +714,9 @@ export const coordinateDescent = (
       usefulZone,
     );
     const bestEver = evaluateSuppressionWindowed(
-      createWaveForm(bestGenome, sampleRate, targetSignal.length),
+      createWaveForm(bestGenome, sampleRate, targetSignal.length, {
+        phaseModel: cfg.phaseModel,
+      }),
       targetSignal,
       sampleRate,
       usefulZone,
@@ -1172,6 +1182,7 @@ export const coordinateDescent = (
       scaledGenome,
       sampleRate,
       targetSignal.length,
+      cfg.phaseModel,
     );
     const scaledScore = evaluateSuppressionWindowed(
       scaledCache.getWaveform(),

@@ -4,6 +4,8 @@ import {
   createSynth,
   createOscillatorGroup,
   OSC_PARAMS_PER_OSCILLATOR,
+  type PhaseModel,
+  type SynthOptions,
 } from '../synth';
 import {
   mapVectorToSynthConfig,
@@ -190,9 +192,11 @@ export const createWaveForm = (
   vectorValues: readonly number[],
   sampleRate: number,
   numSamples: number,
+  options: SynthOptions = {},
 ): number[] => {
   const synth = createSynth(
     mapVectorToSynthConfig([...vectorValues]),
+    options,
   );
   const samples: number[] = [];
   for (let i = 0; i < numSamples; i++) {
@@ -219,11 +223,13 @@ export const evaluateSuppression = (
   vectorValues: readonly number[],
   targetSignal: readonly number[],
   sampleRate: number,
+  options: SynthOptions = {},
 ): number => {
   const generated = createWaveForm(
     vectorValues,
     sampleRate,
     targetSignal.length,
+    options,
   );
   return evaluateSuppressionFromWaveform(generated, targetSignal);
 };
@@ -548,13 +554,16 @@ export class WaveformCache {
   private readonly contributions: Float64Array[];
   private readonly enabled: boolean[];
   private readonly sum: Float64Array;
+  private readonly phaseModel: PhaseModel;
 
   constructor(
     initialGenome: readonly number[],
     sampleRate: number,
     numSamples: number,
+    phaseModel: PhaseModel = 'legacy',
   ) {
     this.sampleRate = sampleRate;
+    this.phaseModel = phaseModel;
     this.numSamples = numSamples;
     this.numOsc = Math.floor(
       initialGenome.length / OSC_PARAMS_PER_OSCILLATOR,
@@ -582,7 +591,9 @@ export class WaveformCache {
 
   private synthesizeOsc(osc: number): Float64Array {
     const config = mapVectorToSynthConfigForOsc(this.genome, osc);
-    const synth = createOscillatorGroup(config);
+    const synth = createOscillatorGroup(config, {
+      phaseModel: this.phaseModel,
+    });
     const out = new Float64Array(this.numSamples);
     for (let i = 0; i < this.numSamples; i++) {
       out[i] = synth({ x: i / this.sampleRate });

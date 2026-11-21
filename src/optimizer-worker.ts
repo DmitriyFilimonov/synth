@@ -8,6 +8,7 @@ import { generateOutput } from './match';
 import { attackWeighting } from './optimize/evaluate';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 import { readWav } from './read-wav';
+import type { PhaseModel } from './synth';
 
 if (!parentPort) {
   throw new Error('Must run as worker thread');
@@ -76,6 +77,8 @@ interface WorkerMessage {
    * `DEFAULT_COORD_DESCENT_CONFIG` — поведение по умолчанию не меняется.
    */
   seed?: number;
+  /** Модель фазы; без неё — legacy, поведение прежних прогонов. */
+  phaseModel?: PhaseModel;
 }
 
 parentPort.on('message', (msg: WorkerMessage) => {
@@ -103,7 +106,12 @@ parentPort.on('message', (msg: WorkerMessage) => {
       stepDecayFactor: msg.stepDecayFactor,
       // Собираем config условно: spread `...DEFAULT, ...config`
       // в coordinateDescent затирал бы дефолт значением undefined.
-      config: typeof msg.seed === 'number' ? { seed: msg.seed } : {},
+      config: {
+        ...(typeof msg.seed === 'number' ? { seed: msg.seed } : {}),
+        ...(msg.phaseModel !== undefined
+          ? { phaseModel: msg.phaseModel }
+          : {}),
+      },
       onProgress: (entry) => {
         const now = Date.now();
         if (now - lastProgressMs >= PROGRESS_THROTTLE_MS) {
@@ -128,6 +136,7 @@ parentPort.on('message', (msg: WorkerMessage) => {
       sampleRate: msg.sampleRate,
       outputWavPath: msg.outputWavPath,
       history,
+      phaseModel: msg.phaseModel,
     });
 
     const optimizedConfig = mapVectorToSynthConfig(vector);

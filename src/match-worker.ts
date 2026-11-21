@@ -2,7 +2,7 @@ import { Worker } from 'worker_threads';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
-import type { ArgCreateSynth } from './synth';
+import type { ArgCreateSynth, PhaseModel } from './synth';
 
 /** Точка истории прогресса оптимизации от worker'а. */
 export interface MatchWorkerProgress {
@@ -52,6 +52,8 @@ interface MatchWorkerArgs {
   stepDecayFactor?: number;
   /** Сид ГПСЧ оптимизатора; без него прогон идёт с дефолтным сидом. */
   seed?: number;
+  /** Модель фазы; без неё — legacy. */
+  phaseModel?: PhaseModel;
   /**
    * Куда писать логи worker'а. По умолчанию — в stdout процесса;
    * батч-раннеры перенаправляют в файл прогона, чтобы не шуметь.
@@ -140,6 +142,7 @@ export function matchWithWorker(
       stepGrowthAdd: arg.stepGrowthAdd,
       stepDecayFactor: arg.stepDecayFactor,
       seed: arg.seed,
+      phaseModel: arg.phaseModel,
     });
   });
 }
