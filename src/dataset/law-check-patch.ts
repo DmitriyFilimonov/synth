@@ -94,6 +94,14 @@ async function referenceMetrics(
       nearIntFraction: pick((m) => m.nearIntFraction),
       top3Share: pick((m) => m.top3Share),
       top3MaxFreq: pick((m) => m.top3MaxFreq),
+      lowBandTop1Share: pick((m) => m.lowBandTop1Share),
+      lowBandEffectiveCount: pick((m) => m.lowBandEffectiveCount),
+      lowBandTop1Share: pick((m) => m.lowBandTop1Share),
+      lowBandEffectiveCount: pick((m) => m.lowBandEffectiveCount),
+      lowBandTop1Share: pick((m) => m.lowBandTop1Share),
+      lowBandEffectiveCount: pick((m) => m.lowBandEffectiveCount),
+      lowBandTop1Share: pick((m) => m.lowBandTop1Share),
+      lowBandEffectiveCount: pick((m) => m.lowBandEffectiveCount),
       sustainCount: Math.round(pick((m) => m.sustainCount) ?? 0),
     });
   }
@@ -131,6 +139,13 @@ function violations(patch: LawMetrics, refs: LawMetrics[]): string[] {
   if (share !== null && share < shareMin) {
     bad.push(
       `иерархия низа слабее: доля top3 ${share.toFixed(2)} ниже эталонной ${shareMin.toFixed(2)}`,
+    );
+  }
+  const top1 = patch.lowBandTop1Share;
+  const top1Max = Math.max(...values((m) => m.lowBandTop1Share));
+  if (top1 !== null && top1 > top1Max + 0.02) {
+    bad.push(
+      `низ концентрируется в одном компоненте: доля top1 ${top1.toFixed(2)} выше эталонной ${top1Max.toFixed(2)}`,
     );
   }
   const maxFreq = patch.top3MaxFreq;
