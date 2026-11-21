@@ -45,11 +45,20 @@ export function EnhanceJobCard({
   const [audioError, setAudioError] = useState('');
 
   const progress = detail?.progress ?? [];
-  const maxIterations = Math.max(job.params.maxIterations, 1);
+  // Доводка продолжает историю за чертой maxIterations: общий
+  // бюджет — match плюс доводка.
+  const totalIterations = Math.max(
+    job.params.maxIterations + (job.params.refineIterations ?? 0),
+    1,
+  );
+  const lastIteration =
+    progress.length > 0
+      ? (progress[progress.length - 1]?.iteration ?? progress.length)
+      : 0;
   const progressPercent =
     job.status === 'completed'
       ? 100
-      : Math.min(100, (progress.length / maxIterations) * 100);
+      : Math.min(100, (lastIteration / totalIterations) * 100);
   const currentSuppression =
     progress.length > 0
       ? (progress[progress.length - 1]?.suppressionPercent ??
@@ -104,7 +113,7 @@ export function EnhanceJobCard({
             />
           </div>
           <span className={styles.progressText}>
-            {progress.length}/{job.params.maxIterations} ·{' '}
+            {lastIteration}/{totalIterations} ·{' '}
             {currentSuppression.toFixed(2)}%
           </span>
         </div>

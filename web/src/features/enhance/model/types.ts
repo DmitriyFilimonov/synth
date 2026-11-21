@@ -24,6 +24,8 @@ export interface EnhanceJobParams {
   /** Сила улучшения 0..1; присутствует только у enhance-заданий. */
   enhancementStrength?: number;
   seed?: number;
+  /** Бюджет доводки вторым match; 0 или отсутствие — без доводки. */
+  refineIterations?: number;
 }
 
 /** Элемент списка заданий (GET /api/match/jobs). */
