@@ -82,3 +82,8 @@
 - Match job с `phaseModel=integral`: завершён, global 42.74%, модель сохранена в params.
 - Enhance job с `phaseModel=integral`: завершён, 56 правок, match global 42.74%, enhance global 39.68%, ошибок нет.
 - 70 тестов зелёные после исправлений по ревизору (границы таблицы фазы, HTTP 400 на неверный phaseModel).
+
+## 2026-11-21: воспроизводимость проверена на чистом клоне
+
+- `git clone` в пустой каталог, `npm ci`, `npm test` (70/70), `npm run build` — всё проходит. Node на хосте v18.19.1, в Docker зафиксирован 20.20.2; предупреждения EBADENGINE не мешают.
+- A/B по фазе идёт: legacy 125/200 (J=60.71%), integral 100/200 (J=64.24%). После него цепочка соберёт `datasets/reference-integral`.
