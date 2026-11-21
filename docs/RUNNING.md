@@ -50,6 +50,15 @@ npm ci && npm test && npm run build
 
 Датасет собирайте с явным `--phase`, чтобы не смешивать модели в одном каталоге.
 
+Джобы API принимают `phaseModel=legacy|integral` в query:
+
+```bash
+curl -X POST "http://localhost:3000/api/enhance/job?maxIterations=200&numOscillators=50&enhancementStrength=1&seed=1&phaseModel=integral&fileName=kick.wav" \
+  --data-binary @raw/kick.wav -H "Content-Type: audio/wav"
+```
+
+Модель сохраняется в `params` джобы; матч, движок, доводка и рендеры используют одну модель.
+
 ## Важные оговорки
 
 - **Реверс-синтез и улучшение — разные задачи.** Первая меряется suppression к оригиналу, вторая судится законом качества и слухом. Критерии Q1–Q5 в `AGENTS.md`.
