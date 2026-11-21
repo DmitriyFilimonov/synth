@@ -11,7 +11,7 @@
     "serve:dev": "tsx src/server.ts",
     "dev": "tsx src/index.ts",
     "viz": "tsx src/visualize-envelopes.ts",
-    "test": "tsx --test src/frequency-envelope-visualization/*.test.ts src/enhance/*.test.ts src/fft.test.ts src/synth-phase.test.ts",
+    "test": "tsx --test src/frequency-envelope-visualization/*.test.ts src/enhance/*.test.ts src/fft.test.ts src/synth-phase.test.ts src/dataset/ground-truth.test.ts",
     "prettier": "prettier --write \"src/**/*.ts\"",
     "prettier:check": "prettier --check \"src/**/*.ts\"",
     "lint": "eslint \"src/**/*.ts\"",
