@@ -236,11 +236,7 @@ export const createMatchJobHandler = async (
       : attackBoostFloat;
     const seedInt = parseInt(queryParams.seed ?? '', 10);
     const seed = isNaN(seedInt) ? undefined : seedInt;
-    const phaseParam = queryParams.phaseModel;
-    const phaseModel =
-      phaseParam === 'integral' || phaseParam === 'legacy'
-        ? phaseParam
-        : undefined;
+    const phaseModel = parsePhaseModel(queryParams.phaseModel);
 
     const jobId = await matchWavWithJob(
       req.body,
@@ -260,7 +256,9 @@ export const createMatchJobHandler = async (
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    // Неверная модель фазы — ошибка клиента, а не сервера.
+    const status = message.startsWith('phaseModel') ? 400 : 500;
+    res.status(status).json({ error: message });
   }
 };
 
@@ -300,7 +298,8 @@ export const createMatchJobJsonHandler = async (
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    const status = message.startsWith('phaseModel') ? 400 : 500;
+    res.status(status).json({ error: message });
   }
 };
 
@@ -334,11 +333,7 @@ export const createEnhanceJobHandler = async (
       : Math.min(1, Math.max(0, strengthFloat));
     const seedInt = parseInt(queryParams.seed ?? '', 10);
     const seed = Number.isNaN(seedInt) ? undefined : seedInt;
-    const phaseParam = queryParams.phaseModel;
-    const phaseModel =
-      phaseParam === 'integral' || phaseParam === 'legacy'
-        ? phaseParam
-        : undefined;
+    const phaseModel = parsePhaseModel(queryParams.phaseModel);
     const refineInt = parseInt(
       queryParams.refineIterations ?? '',
       10,
@@ -362,7 +357,9 @@ export const createEnhanceJobHandler = async (
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    // Неверная модель фазы — ошибка клиента, а не сервера.
+    const status = message.startsWith('phaseModel') ? 400 : 500;
+    res.status(status).json({ error: message });
   }
 };
 
@@ -426,7 +423,8 @@ export const getJobsListHandler = async (
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Unknown error';
-    res.status(500).json({ error: message });
+    const status = message.startsWith('phaseModel') ? 400 : 500;
+    res.status(status).json({ error: message });
   }
 };
 
