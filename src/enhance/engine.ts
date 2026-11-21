@@ -382,10 +382,15 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
   }
 
   // Нормализация громкости к семейной норме приоров — последний
-  // шаг, чтобы учесть и добавленные компоненты. Потолок по пику:
-  // не загоняем результат в клип.
-  const norm = priors.loudness?.rms?.median;
-  if (norm !== null && norm !== undefined && strength > 0) {
+  // шаг, чтобы учесть и добавленные компоненты. Цель растёт с
+  // силой от медианы к p90: богатые бочки семейства громче
+  // медианы, а недостаточность улучшения — в первую очередь про
+  // вес низа. Потолок по пику: не загоняем результат в клип.
+  const loudness = priors.loudness?.rms;
+  const median = loudness?.median;
+  if (median !== null && median !== undefined && strength > 0) {
+    const p90 = loudness?.p90 ?? median;
+    const norm = median * Math.exp(Math.log(p90 / median) * strength);
     const samples = renderSamples(patch, 0.5);
     const current = calculateRMS([...samples].map((s) => s / 32768));
     if (current > 1e-9) {
@@ -601,8 +606,16 @@ function findFundamental(patch: ArgCreateSynth): {
  */
 const PARTIAL_MATCH_LOG = Math.log(1.1);
 
-/** Потолок усиления существующего партиала: защита иерархии. */
-const PARTIAL_BOOST_CAP = 2;
+/**
+ * Потолок усиления существующего партиала, растёт с силой: при
+ * малых — консервативный ×2 (защита иерархии), к strength=1 — ×8.
+ * Жёсткий ×2 отдавал лишь 35–70% целевого уровня архетипа (замер
+ * на water_12: цели требовали ×2.9–×5.7), отсюда «недостаточность»
+ * улучшения при полностью найденных слотах.
+ */
+function partialBoostCap(strength: number): number {
+  return 2 + 6 * strength;
+}
 
 /**
  * Освобождает слот для добавления: свободный или за счёт самого
@@ -642,6 +655,7 @@ function enrichPrimitiveBody(arg: {
 }): { patch: ArgCreateSynth; audits: TransformAudit[] } {
   let patch = arg.patch;
   const audits: TransformAudit[] = [];
+  const boostCap = partialBoostCap(arg.strength);
   const fundamental = findFundamental(patch);
   if (fundamental === null) {
     return { patch, audits };
@@ -683,10 +697,7 @@ function enrichPrimitiveBody(arg: {
       }
       const currentLevel = current.ampEnv.startLevel;
       if (currentLevel < targetLevel) {
-        const factor = Math.min(
-          PARTIAL_BOOST_CAP,
-          targetLevel / currentLevel,
-        );
+        const factor = Math.min(boostCap, targetLevel / currentLevel);
         const boosted = boostOscillator(patch, idx, factor);
         if (boosted.audit !== null) {
           patch = boosted.patch;

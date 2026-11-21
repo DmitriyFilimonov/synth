@@ -369,8 +369,8 @@ test('an oscillator is claimed by at most one profile slot', () => {
   assert.equal(boosts.length, 1, 'one boost, not two');
   const second2 = result.patch.oscillators[1];
   assert.ok(
-    Math.abs((second2?.ampEnv.startLevel ?? 0) - 0.2) < 1e-9,
-    `single capped boost to 0.2, got ${second2?.ampEnv.startLevel}`,
+    Math.abs((second2?.ampEnv.startLevel ?? 0) - 0.3) < 1e-9,
+    `single boost reaches the target 0.3, got ${second2?.ampEnv.startLevel}`,
   );
 });
 
