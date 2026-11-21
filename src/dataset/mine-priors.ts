@@ -86,6 +86,8 @@ interface BodyProfileSlot {
   freqRatio: FeatureDist;
   levelRatio: FeatureDist;
   durRatio: FeatureDist;
+  /** Абсолютный свип партиала (freqStart/freqBase) — у партиалов эталонов своя атака высоты. */
+  sweepRatio: FeatureDist;
 }
 
 /** Уровень слышимости осциллятора при майнинге профиля тела. */
@@ -231,10 +233,12 @@ function computeBodyProfile(all: TaggedOsc[]): BodyProfileSlot[] {
     freqRatio: number[];
     levelRatio: number[];
     durRatio: number[];
-  }[] = [0, 1, 2].map(() => ({
+    sweepRatio: number[];
+  }[] = [0, 1, 2, 3, 4].map(() => ({
     freqRatio: [],
     levelRatio: [],
     durRatio: [],
+    sweepRatio: [],
   }));
 
   for (const oscs of byRun.values()) {
@@ -255,11 +259,11 @@ function computeBodyProfile(all: TaggedOsc[]): BodyProfileSlot[] {
     const partials = sustain
       .filter(
         (o) =>
-          o.freqBase >= fund.freqBase * 1.5 &&
+          o.freqBase >= fund.freqBase * 1.15 &&
           o.freqBase <= fund.freqBase * 12,
       )
       .sort((a, b) => b.ampStartLevel - a.ampStartLevel)
-      .slice(0, 3);
+      .slice(0, 5);
     partials.forEach((p, rank) => {
       const slot = slots[rank];
       if (slot === undefined || fund.ampStartLevel <= 0) {
@@ -267,6 +271,7 @@ function computeBodyProfile(all: TaggedOsc[]): BodyProfileSlot[] {
       }
       slot.freqRatio.push(p.freqBase / fund.freqBase);
       slot.levelRatio.push(p.ampStartLevel / fund.ampStartLevel);
+      slot.sweepRatio.push(p.freqStartToBase);
       if (fund.ampEnvDurationSec > 0) {
         slot.durRatio.push(
           p.ampEnvDurationSec / fund.ampEnvDurationSec,
@@ -282,6 +287,7 @@ function computeBodyProfile(all: TaggedOsc[]): BodyProfileSlot[] {
       freqRatio: distOf(slot.freqRatio),
       levelRatio: distOf(slot.levelRatio),
       durRatio: distOf(slot.durRatio),
+      sweepRatio: distOf(slot.sweepRatio),
     }))
     .filter((s) => s.runs > 0);
 }

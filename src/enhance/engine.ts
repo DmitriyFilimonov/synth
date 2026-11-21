@@ -65,6 +65,8 @@ export interface BodyProfileSlot {
   freqRatio: FeatureDist;
   levelRatio: FeatureDist;
   durRatio: FeatureDist;
+  /** Абсолютный свип партиала (freqStart/freqBase), из датасета. */
+  sweepRatio?: FeatureDist;
 }
 
 /** Файл приоров (контракт C2). */
@@ -440,10 +442,15 @@ const ENRICH_HARMONICS: {
  */
 function enrichRatios(
   priors: PriorsFile,
-): { ratio: number; level: number; dur: number }[] {
+): {
+  ratio: number;
+  level: number;
+  dur: number;
+  sweep: number | null;
+}[] {
   const profile = priors.bodyProfile;
   if (profile === undefined || profile.length === 0) {
-    return ENRICH_HARMONICS;
+    return ENRICH_HARMONICS.map((h) => ({ ...h, sweep: null }));
   }
   return profile
     .filter(
@@ -456,6 +463,7 @@ function enrichRatios(
       ratio: s.freqRatio.median ?? 1,
       level: s.levelRatio.median ?? 0,
       dur: s.durRatio.median ?? 1,
+      sweep: s.sweepRatio?.median ?? null,
     }));
 }
 
@@ -640,7 +648,12 @@ function enrichPrimitiveBody(arg: {
       osc: {
         on: true,
         freqBase: targetFreq,
-        freqStart: base.osc.freqStart * harmonic.ratio,
+        // У партиала — свой свип из профиля эталонов; без профиля
+        // делим форму атаки с фундаменталкой.
+        freqStart:
+          harmonic.sweep !== null
+            ? targetFreq * harmonic.sweep
+            : base.osc.freqStart * harmonic.ratio,
         slope: base.osc.slope,
         duration: base.osc.duration,
         phase: 0,
