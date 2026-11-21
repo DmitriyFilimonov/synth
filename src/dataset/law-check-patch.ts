@@ -13,6 +13,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   computeLawMetrics,
+  medianLawMetrics,
   type LawMetrics,
   type LawOsc,
 } from './law-metrics';
@@ -48,17 +49,15 @@ function toLawOsc(o: FeatureOsc): LawOsc {
   };
 }
 
-function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const s = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  if (s.length % 2 === 1) return s[mid] ?? null;
-  const a = s[mid - 1];
-  const b = s[mid];
-  return a !== undefined && b !== undefined ? (a + b) / 2 : null;
-}
-
-/** Медианы метрик по сидам каждого таргета датасета. */
+/**
+ * Агрегирует признаки датасета в медианы метрик по сидам таргета.
+ *
+ * @param datasetDir - Каталог датасета с прогонами по сидам
+ * @returns По одному набору медианных метрик на непустой таргет
+ * @remarks Значения null не участвуют в медианах. Доля сильнейшего
+ *   sustain-компонента 35–200 Гц и экспонента энтропии энергетических
+ *   долей агрегируются независимо по сидам, как остальные метрики.
+ */
 async function referenceMetrics(
   datasetDir: string,
 ): Promise<LawMetrics[]> {
@@ -66,14 +65,20 @@ async function referenceMetrics(
   for (const entry of readdirSync(datasetDir, {
     withFileTypes: true,
   })) {
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory()) {
+      continue;
+    }
     const runs: LawMetrics[] = [];
     const slugDir = join(datasetDir, entry.name);
     for (const seedDir of readdirSync(slugDir, {
       withFileTypes: true,
     })) {
-      if (!seedDir.isDirectory() || !seedDir.name.startsWith('seed-'))
+      if (
+        !seedDir.isDirectory() ||
+        !seedDir.name.startsWith('seed-')
+      ) {
         continue;
+      }
       const features = await readJsonOrNull<RunFeatures>(
         join(slugDir, seedDir.name, 'features.json'),
       );
@@ -83,27 +88,10 @@ async function referenceMetrics(
         );
       }
     }
-    if (runs.length === 0) continue;
-    const pick = (
-      get: (m: LawMetrics) => number | null,
-    ): number | null =>
-      median(runs.map(get).filter((v): v is number => v !== null));
-    out.push({
-      bodySweepMedian: pick((m) => m.bodySweepMedian),
-      upperSweepMedian: pick((m) => m.upperSweepMedian),
-      nearIntFraction: pick((m) => m.nearIntFraction),
-      top3Share: pick((m) => m.top3Share),
-      top3MaxFreq: pick((m) => m.top3MaxFreq),
-      lowBandTop1Share: pick((m) => m.lowBandTop1Share),
-      lowBandEffectiveCount: pick((m) => m.lowBandEffectiveCount),
-      lowBandTop1Share: pick((m) => m.lowBandTop1Share),
-      lowBandEffectiveCount: pick((m) => m.lowBandEffectiveCount),
-      lowBandTop1Share: pick((m) => m.lowBandTop1Share),
-      lowBandEffectiveCount: pick((m) => m.lowBandEffectiveCount),
-      lowBandTop1Share: pick((m) => m.lowBandTop1Share),
-      lowBandEffectiveCount: pick((m) => m.lowBandEffectiveCount),
-      sustainCount: Math.round(pick((m) => m.sustainCount) ?? 0),
-    });
+    if (runs.length === 0) {
+      continue;
+    }
+    out.push(medianLawMetrics(runs));
   }
   return out;
 }
@@ -175,7 +163,9 @@ function patchToLawOscs(
   }
   const out: LawOsc[] = [];
   patch.oscillators.forEach((group, index) => {
-    if (!group.osc.on) return;
+    if (!group.osc.on) {
+      return;
+    }
     const role =
       init !== null
         ? classifyOscillatorRole(init, index)
@@ -183,7 +173,9 @@ function patchToLawOscs(
           ? 'transient'
           : 'sustain';
     const f = extractOscillatorFeatures({ group, index, role });
-    if (f === null) return;
+    if (f === null) {
+      return;
+    }
     out.push({
       role,
       freqBase: f.freqBase,

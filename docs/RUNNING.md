@@ -11,7 +11,7 @@
 git clone <url-репозитория> synth
 cd synth
 npm ci
-npm test          # 62 теста, включая регрессии фазы
+npm test          # 83 теста: синтез, фаза, закон и трансформации
 npm run build     # TypeScript в dist/
 npm run lint      # 0 ошибок
 ```
@@ -22,7 +22,7 @@ npm run lint      # 0 ошибок
 
 ```bash
 git tag -n99 | less
-git checkout v1.3.0
+git checkout v1.4.0
 npm ci && npm test && npm run build
 ```
 
@@ -38,6 +38,8 @@ npm ci && npm test && npm run build
 | `cd web && npm ci && npm run dev` | Веб-интерфейс на 5173 |
 | `npx tsx src/audio-inspect.ts a.wav --compare b.wav` | Разбор WAV: уровни, пики, полосы |
 | `npx tsx src/dataset/build-dataset.ts --targets targets --out datasets/run-1 --iterations 300 --seeds 1,2,3,4 --oscillators 50 --parallel 2 --phase integral` | Датасет эталонов: 4 сида на таргет, чекпоинты и resume |
+| `npx tsx src/dataset/check-laws.ts --dataset datasets/reference-4` | Проверяет кандидаты в закон на отложенных таргетах и пишет `law-report.*` |
+| `npx tsx src/dataset/law-check-patch.ts --dataset datasets/reference-4 --patch patch.json --wav input.wav` | Сравнивает метрики одного патча с диапазонами эталонов |
 
 Входные WAV не хранятся в git: положите свои эталоны в `targets/`, а несовершенные бочки — в `raw/`.
 

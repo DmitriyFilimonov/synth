@@ -91,7 +91,7 @@ simple-init-vector). Пользователь задаёт только пара
 | `npm run prettier:check` | Проверка форматирования (без изменений)           |
 | `npm run lint`           | Проверка ESLint                                   |
 | `npm run lint:fix`       | Автофикс ESLint                                   |
-| `npm run test`           | Unit-тесты (визуализация частотных огибающих, трансформации патчей `src/enhance/`) через Node test runner + `tsx` |
+| `npm run test`           | Unit-тесты синтеза, фазы, визуализации, трансформаций патчей и кандидатов в закон качества через Node test runner + `tsx` |
 
 ### Веб-интерфейс (`web/`)
 

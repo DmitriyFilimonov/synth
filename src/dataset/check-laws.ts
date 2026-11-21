@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path';
 import {
   computeLawMetrics,
   evaluateHoldoutRules,
+  medianLawMetrics,
   pooledBodyClusters,
   type LawMetrics,
   type LawOsc,
@@ -56,23 +57,6 @@ function toLawOsc(o: FeatureOsc): LawOsc {
     ampStartLevel: o.ampStartLevel,
     decayDb20Sec: o.decaySecToDb?.db20 ?? null,
   };
-}
-
-function medianOf(values: number[]): number | null {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)] ?? null;
-}
-
-function medianField(
-  runs: LawMetrics[],
-  pick: (m: LawMetrics) => number | null,
-): number | null {
-  return medianOf(
-    runs.map(pick).filter((v): v is number => v !== null),
-  );
 }
 
 function buildMarkdown(
@@ -153,25 +137,7 @@ async function main(): Promise<void> {
     targets.push({
       slug: entry.name,
       seeds: runMetrics.length,
-      metrics: {
-        bodySweepMedian: medianField(
-          runMetrics,
-          (m) => m.bodySweepMedian,
-        ),
-        upperSweepMedian: medianField(
-          runMetrics,
-          (m) => m.upperSweepMedian,
-        ),
-        nearIntFraction: medianField(
-          runMetrics,
-          (m) => m.nearIntFraction,
-        ),
-        top3Share: medianField(runMetrics, (m) => m.top3Share),
-        top3MaxFreq: medianField(runMetrics, (m) => m.top3MaxFreq),
-        sustainCount: Math.round(
-          medianField(runMetrics, (m) => m.sustainCount) ?? 0,
-        ),
-      },
+      metrics: medianLawMetrics(runMetrics),
       bodyClusters: pooled.count,
       bodyClusterSpread: pooled.maxSpread,
     });

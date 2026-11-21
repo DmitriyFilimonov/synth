@@ -68,6 +68,8 @@ function target(
       nearIntFraction: 0.2,
       top3Share: 0.8,
       top3MaxFreq: 80,
+      lowBandTop1Share: 0.4,
+      lowBandEffectiveCount: 4,
       sustainCount: 10,
       ...over,
     },
@@ -86,6 +88,8 @@ test('held-out target is judged by thresholds from the others', () => {
       nearIntFraction: 0.9,
       top3Share: 0.2,
       top3MaxFreq: 500,
+      lowBandTop1Share: 0.95,
+      lowBandEffectiveCount: 1.1,
     }),
   ]);
   for (const r of results) {

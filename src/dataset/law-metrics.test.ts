@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   computeLawMetrics,
+  medianLawMetrics,
   pooledBodyClusters,
   type LawOsc,
 } from './law-metrics';
@@ -59,11 +60,50 @@ test('top-3 energy share and its frequency ceiling', () => {
   assert.equal(m.top3MaxFreq, 70);
 });
 
+test('low-band concentration uses energy shares and entropy', () => {
+  const single = computeLawMetrics([
+    osc({ freqBase: 50, ampStartLevel: 0.5 }),
+    osc({ freqBase: 400, ampStartLevel: 0.9 }),
+  ]);
+  assert.equal(single.lowBandTop1Share, 1);
+  assert.ok(
+    single.lowBandEffectiveCount !== null &&
+      Math.abs(single.lowBandEffectiveCount - 1) < 1e-9,
+  );
+
+  const split = computeLawMetrics([
+    osc({ freqBase: 50, ampStartLevel: 0.5 }),
+    osc({ freqBase: 80, ampStartLevel: 0.5 }),
+    osc({ freqBase: 400, ampStartLevel: 0.9 }),
+  ]);
+  assert.equal(split.lowBandTop1Share, 0.5);
+  assert.ok(
+    split.lowBandEffectiveCount !== null &&
+      Math.abs(split.lowBandEffectiveCount - 2) < 1e-9,
+  );
+});
+
+test('median aggregation averages middle values and ignores nulls', () => {
+  const runs = [1, 2, 3, 4].map((sweep) =>
+    computeLawMetrics([osc({ freqStartToBase: sweep })]),
+  );
+  const aggregated = medianLawMetrics([
+    ...runs,
+    computeLawMetrics([]),
+  ]);
+  assert.equal(aggregated.bodySweepMedian, 2.5);
+  assert.equal(aggregated.upperSweepMedian, null);
+  assert.equal(aggregated.lowBandTop1Share, 1);
+  assert.equal(aggregated.sustainCount, 1);
+});
+
 test('empty input yields nulls, not NaN', () => {
   const m = computeLawMetrics([]);
   assert.equal(m.bodySweepMedian, null);
   assert.equal(m.nearIntFraction, null);
   assert.equal(m.top3Share, null);
+  assert.equal(m.lowBandTop1Share, null);
+  assert.equal(m.lowBandEffectiveCount, null);
   assert.equal(m.sustainCount, 0);
 });
 

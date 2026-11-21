@@ -30,6 +30,16 @@ export interface LawMetrics {
   top3Share: number | null;
   /** Максимальная частота среди этих трёх, Гц. */
   top3MaxFreq: number | null;
+  /**
+   * Доля энергии самого сильного компонента низа (35–200 Гц).
+   * Высокая доля означает «низ — одно колебание», а не структуру.
+   */
+  lowBandTop1Share: number | null;
+  /**
+   * Эффективное число компонентов низа: экспонента энтропии их
+   * энергетических долей. 1 — вся энергия в одном компоненте.
+   */
+  lowBandEffectiveCount: number | null;
   /** Число sustain-осцилляторов, на которых считали. */
   sustainCount: number;
 }
@@ -48,7 +58,100 @@ function median(values: number[]): number | null {
   return a === undefined || b === undefined ? null : (a + b) / 2;
 }
 
-/** Считает метрики прогона по его осцилляторам. */
+/**
+ * Сводит метрики прогонов одного таргета в медианы по сидам.
+ *
+ * @param runs - Метрики отдельных прогонов одного таргета
+ * @returns Метрики таргета с медианами доступных значений
+ * @remarks Значения null не участвуют в медиане; при чётном числе
+ *   значений усредняются два средних. `sustainCount` округляется до
+ *   целого. Для пустого входа остальные метрики равны null, а
+ *   `sustainCount` — нулю.
+ */
+export function medianLawMetrics(runs: LawMetrics[]): LawMetrics {
+  const pick = (
+    get: (metrics: LawMetrics) => number | null,
+  ): number | null =>
+    median(
+      runs
+        .map(get)
+        .filter((value): value is number => value !== null),
+    );
+  return {
+    bodySweepMedian: pick((metrics) => metrics.bodySweepMedian),
+    upperSweepMedian: pick((metrics) => metrics.upperSweepMedian),
+    nearIntFraction: pick((metrics) => metrics.nearIntFraction),
+    top3Share: pick((metrics) => metrics.top3Share),
+    top3MaxFreq: pick((metrics) => metrics.top3MaxFreq),
+    lowBandTop1Share: pick((metrics) => metrics.lowBandTop1Share),
+    lowBandEffectiveCount: pick(
+      (metrics) => metrics.lowBandEffectiveCount,
+    ),
+    sustainCount: Math.round(
+      pick((metrics) => metrics.sustainCount) ?? 0,
+    ),
+  };
+}
+
+interface EnergyFeature {
+  energy: number;
+  freq: number;
+}
+
+/**
+ * Считает концентрацию и эффективное число компонентов низа.
+ *
+ * @param energies - Энергии sustain-компонентов по убыванию энергии
+ * @returns Доля сильнейшего в энергии низа и эффективное число
+ *   компонентов
+ * @remarks Учитываются только компоненты 35–200 Гц с положительной
+ *   энергией. Эффективное число — экспонента энтропии их
+ *   энергетических долей. Без положительной энергии обе метрики
+ *   равны null.
+ */
+function computeLowBandMetrics(
+  energies: EnergyFeature[],
+): Pick<LawMetrics, 'lowBandTop1Share' | 'lowBandEffectiveCount'> {
+  const lowEnergies = energies
+    .filter(
+      (feature) =>
+        feature.freq >= 35 &&
+        feature.freq <= 200 &&
+        feature.energy > 0,
+    )
+    .map((feature) => feature.energy);
+  const lowTotal = lowEnergies.reduce(
+    (sum, energy) => sum + energy,
+    0,
+  );
+  if (lowTotal <= 0) {
+    return { lowBandTop1Share: null, lowBandEffectiveCount: null };
+  }
+  const shares = lowEnergies.map((energy) => energy / lowTotal);
+  return {
+    lowBandTop1Share: shares[0] ?? null,
+    lowBandEffectiveCount: Math.exp(
+      -shares.reduce(
+        (entropy, share) =>
+          entropy + (share > 0 ? share * Math.log(share) : 0),
+        0,
+      ),
+    ),
+  };
+}
+
+/**
+ * Считает метрики прогона по признакам его осцилляторов.
+ *
+ * @param oscs - Признаки осцилляторов одного прогона
+ * @returns Метрики прогона; отсутствующие значения равны null
+ * @remarks Во всех энергетических метриках энергия компонента равна
+ *   `ampStartLevel ** 2 * decayDb20Sec`. Для низа учитываются только
+ *   sustain-компоненты 35–200 Гц с положительной энергией:
+ *   `lowBandTop1Share` — доля сильнейшего из них, а
+ *   `lowBandEffectiveCount` — экспонента энтропии энергетических
+ *   долей. Если такой энергии нет, обе метрики равны null.
+ */
 export function computeLawMetrics(oscs: LawOsc[]): LawMetrics {
   const sustain = oscs.filter((o) => o.role === 'sustain');
   const body = sustain.filter((o) => o.freqBase < 100);
@@ -78,6 +181,8 @@ export function computeLawMetrics(oscs: LawOsc[]): LawMetrics {
   const total = energies.reduce((acc, e) => acc + e.energy, 0);
   const top3 = energies.slice(0, 3);
 
+  const lowBand = computeLowBandMetrics(energies);
+
   return {
     bodySweepMedian: median(body.map((o) => o.freqStartToBase)),
     upperSweepMedian: median(upper.map((o) => o.freqStartToBase)),
@@ -88,6 +193,7 @@ export function computeLawMetrics(oscs: LawOsc[]): LawMetrics {
         : null,
     top3MaxFreq:
       top3.length > 0 ? Math.max(...top3.map((e) => e.freq)) : null,
+    ...lowBand,
     sustainCount: sustain.length,
   };
 }
@@ -153,13 +259,8 @@ export interface HoldoutRuleResult {
   details: string[];
 }
 
-/**
- * Проверяет правила leave-one-out: порог каждого правила считается по
- * таргетам без проверяемого. Правило, которое не обобщается, здесь
- * видно сразу — например, кластеры тела (Г2) держатся не на всех.
- */
 /** Человеческие формулировки правил для отчёта. */
-const RULE_DESCRIPTIONS: Record<string, string> = {
+const RULE_DESCRIPTIONS = {
   bodySweepDown: 'тело свипует вниз: медиана freqStart/freqBase ≥ 1',
   upperSweepFlat:
     'верх и клик без свипа: медиана ≤ max(остальные)·1.05',
@@ -167,89 +268,277 @@ const RULE_DESCRIPTIONS: Record<string, string> = {
     'спектр негармоничен: доля кратных ≤ max(остальные)+0.02',
   energyHierarchy:
     'топ-3 по энергии: доля ≥ min(остальные), частота ≤ max(остальные)',
+  lowEndNotSingle:
+    'низ не сведён к одному компоненту: доля top1 ≤ max(остальные)+0.02',
   bodyClusters:
     'под-кластеры тела: 2–4 кластера шириной ≤ 20 % (правило Г2)',
-};
+} as const;
 
-export function evaluateHoldoutRules(
+type RuleName = keyof typeof RULE_DESCRIPTIONS;
+
+const RULE_NAMES: RuleName[] = [
+  'bodySweepDown',
+  'upperSweepFlat',
+  'nonHarmonic',
+  'energyHierarchy',
+  'lowEndNotSingle',
+  'bodyClusters',
+];
+
+interface RuleEvaluation {
+  passed: boolean;
+  detail: string;
+}
+
+/**
+ * Собирает непустые значения метрики на обучающих таргетах.
+ *
+ * @param targets - Обучающие таргеты без отложенного
+ * @param pick - Выбор нужной метрики из таргета
+ * @returns Значения выбранной метрики без null
+ */
+function referenceValues(
   targets: HoldoutTarget[],
-): HoldoutRuleResult[] {
-  const results: HoldoutRuleResult[] = [
-    'bodySweepDown',
-    'upperSweepFlat',
-    'nonHarmonic',
-    'energyHierarchy',
-    'bodyClusters',
-  ].map((name) => ({
-    name,
-    description: RULE_DESCRIPTIONS[name] ?? name,
-    heldOutPassed: 0,
-    targets: targets.length,
-    details: [],
-  }));
-  const [body, upper, nonHarmonic, energy, clusters] = results;
+  pick: (metrics: LawMetrics) => number | null,
+): number[] {
+  return targets
+    .map((target) => pick(target.metrics))
+    .filter((value): value is number => value !== null);
+}
 
-  for (const heldOut of targets) {
-    const others = targets.filter((t) => t.slug !== heldOut.slug);
-    const values = (
-      pick: (m: LawMetrics) => number | null,
-    ): number[] =>
-      others
-        .map((t) => pick(t.metrics))
-        .filter((v): v is number => v !== null);
+/**
+ * Проверяет направление свипа тела по порогу `bodySweepMedian >= 1`.
+ *
+ * @param target - Отложенный таргет
+ * @returns Признак прохождения и строка со значением для отчёта
+ * @remarks Значение null не проходит проверку.
+ */
+function evaluateBodySweep(target: HoldoutTarget): RuleEvaluation {
+  const value = target.metrics.bodySweepMedian;
+  return {
+    passed: value !== null && value >= 1,
+    detail: `${target.slug}: ${value?.toFixed(3) ?? '—'}`,
+  };
+}
 
-    const bodyValue = heldOut.metrics.bodySweepMedian;
-    if (bodyValue !== null && bodyValue >= 1) {
-      body!.heldOutPassed += 1;
-    }
-    body!.details.push(
-      `${heldOut.slug}: ${bodyValue?.toFixed(3) ?? '—'}`,
-    );
+/**
+ * Проверяет, что верх не свипует сильнее обучающих таргетов.
+ *
+ * @param target - Отложенный таргет
+ * @param others - Обучающие таргеты без отложенного
+ * @returns Признак прохождения и строка с порогом для отчёта
+ * @remarks Медиана свипа может превышать максимум остальных таргетов
+ *   не более чем в 1,05 раза; null не проходит проверку.
+ */
+function evaluateUpperSweep(
+  target: HoldoutTarget,
+  others: HoldoutTarget[],
+): RuleEvaluation {
+  const value = target.metrics.upperSweepMedian;
+  const threshold = Math.max(
+    ...referenceValues(others, (metrics) => metrics.upperSweepMedian),
+  );
+  return {
+    passed: value !== null && value <= threshold * 1.05,
+    detail: `${target.slug}: ${value?.toFixed(3) ?? '—'} порог ${threshold.toFixed(3)}`,
+  };
+}
 
-    const upperValue = heldOut.metrics.upperSweepMedian;
-    const upperMax = Math.max(...values((m) => m.upperSweepMedian));
-    if (upperValue !== null && upperValue <= upperMax * 1.05) {
-      upper!.heldOutPassed += 1;
-    }
-    upper!.details.push(
-      `${heldOut.slug}: ${upperValue?.toFixed(3) ?? '—'} порог ${upperMax.toFixed(3)}`,
-    );
+/**
+ * Проверяет верхнюю границу доли почти гармонических частот.
+ *
+ * @param target - Отложенный таргет
+ * @param others - Обучающие таргеты без отложенного
+ * @returns Признак прохождения и строка с порогом для отчёта
+ * @remarks Доля может превышать максимум остальных таргетов не более
+ *   чем на 0,02; null не проходит проверку.
+ */
+function evaluateNonHarmonicity(
+  target: HoldoutTarget,
+  others: HoldoutTarget[],
+): RuleEvaluation {
+  const value = target.metrics.nearIntFraction;
+  const threshold = Math.max(
+    ...referenceValues(others, (metrics) => metrics.nearIntFraction),
+  );
+  return {
+    passed: value !== null && value <= threshold + 0.02,
+    detail: `${target.slug}: ${value?.toFixed(3) ?? '—'} порог ${threshold.toFixed(3)}`,
+  };
+}
 
-    const near = heldOut.metrics.nearIntFraction;
-    const nearMax = Math.max(...values((m) => m.nearIntFraction));
-    if (near !== null && near <= nearMax + 0.02) {
-      nonHarmonic!.heldOutPassed += 1;
-    }
-    nonHarmonic!.details.push(
-      `${heldOut.slug}: ${near?.toFixed(3) ?? '—'} порог ${nearMax.toFixed(3)}`,
-    );
-
-    const share = heldOut.metrics.top3Share;
-    const maxFreq = heldOut.metrics.top3MaxFreq;
-    const shareMin = Math.min(...values((m) => m.top3Share));
-    const freqMax = Math.max(...values((m) => m.top3MaxFreq));
-    if (
+/**
+ * Проверяет иерархию трёх главных sustain-компонентов по энергии.
+ *
+ * @param target - Отложенный таргет
+ * @param others - Обучающие таргеты без отложенного
+ * @returns Признак прохождения и строка с порогом доли для отчёта
+ * @remarks Доля энергии должна быть не ниже минимума остальных
+ *   таргетов, а максимальная частота — не выше их максимума. Если
+ *   одна из метрик равна null, правило не проходит.
+ */
+function evaluateEnergyHierarchy(
+  target: HoldoutTarget,
+  others: HoldoutTarget[],
+): RuleEvaluation {
+  const share = target.metrics.top3Share;
+  const maxFreq = target.metrics.top3MaxFreq;
+  const shareMin = Math.min(
+    ...referenceValues(others, (metrics) => metrics.top3Share),
+  );
+  const freqMax = Math.max(
+    ...referenceValues(others, (metrics) => metrics.top3MaxFreq),
+  );
+  return {
+    passed:
       share !== null &&
       maxFreq !== null &&
       share >= shareMin &&
-      maxFreq <= freqMax
-    ) {
-      energy!.heldOutPassed += 1;
-    }
-    energy!.details.push(
-      `${heldOut.slug}: доля ${share?.toFixed(3) ?? '—'} порог ${shareMin.toFixed(3)}`,
-    );
+      maxFreq <= freqMax,
+    detail: `${target.slug}: доля ${share?.toFixed(3) ?? '—'} порог ${shareMin.toFixed(3)}`,
+  };
+}
 
-    if (
-      heldOut.bodyClusters >= 2 &&
-      heldOut.bodyClusters <= 4 &&
-      (heldOut.bodyClusterSpread ?? 1) <= 0.2
-    ) {
-      clusters!.heldOutPassed += 1;
-    }
-    clusters!.details.push(
-      `${heldOut.slug}: ${heldOut.bodyClusters} кластеров`,
+/**
+ * Проверяет кандидата `lowEndNotSingle` по концентрации низа.
+ *
+ * @param target - Отложенный таргет
+ * @param others - Обучающие таргеты без отложенного
+ * @returns Признак прохождения и строка с порогом для отчёта
+ * @remarks Доля сильнейшего sustain-компонента 35–200 Гц может
+ *   превышать максимум остальных таргетов не более чем на 0,02;
+ *   null не проходит проверку. Это кандидат, а не доказанный закон.
+ */
+function evaluateLowEndConcentration(
+  target: HoldoutTarget,
+  others: HoldoutTarget[],
+): RuleEvaluation {
+  const value = target.metrics.lowBandTop1Share;
+  const threshold = Math.max(
+    ...referenceValues(others, (metrics) => metrics.lowBandTop1Share),
+  );
+  return {
+    passed: value !== null && value <= threshold + 0.02,
+    detail: `${target.slug}: ${value?.toFixed(3) ?? '—'} порог ${threshold.toFixed(3)}`,
+  };
+}
+
+/**
+ * Проверяет число и ширину воспроизводимых кластеров тела.
+ *
+ * @param target - Отложенный таргет с пулом кластеров по сидам
+ * @returns Признак прохождения и строка с числом кластеров
+ * @remarks Правило проходит при 2–4 кластерах шириной не более 20%.
+ *   Неизвестная ширина не проходит проверку.
+ */
+function evaluateBodyClusters(target: HoldoutTarget): RuleEvaluation {
+  return {
+    passed:
+      target.bodyClusters >= 2 &&
+      target.bodyClusters <= 4 &&
+      (target.bodyClusterSpread ?? 1) <= 0.2,
+    detail: `${target.slug}: ${target.bodyClusters} кластеров`,
+  };
+}
+
+/**
+ * Создаёт пустой счётчик одного правила.
+ *
+ * @param name - Имя правила и ключ его описания
+ * @param targetCount - Общее число отложенных таргетов
+ * @returns Счётчик без прошедших таргетов и с пустым списком деталей
+ */
+function createRuleResult(
+  name: RuleName,
+  targetCount: number,
+): HoldoutRuleResult {
+  return {
+    name,
+    description: RULE_DESCRIPTIONS[name],
+    heldOutPassed: 0,
+    targets: targetCount,
+    details: [],
+  };
+}
+
+/**
+ * Записывает результат проверки одного таргета в счётчик правила.
+ *
+ * @param result - Изменяемый счётчик правила
+ * @param evaluation - Итог проверки и строка для отчёта
+ * @returns Ничего; изменяет счётчик на месте
+ * @remarks Увеличивает `heldOutPassed` только при успешной проверке
+ *   и всегда добавляет строку в `details`.
+ */
+function recordEvaluation(
+  result: HoldoutRuleResult,
+  evaluation: RuleEvaluation,
+): void {
+  if (evaluation.passed) {
+    result.heldOutPassed += 1;
+  }
+  result.details.push(evaluation.detail);
+}
+
+/**
+ * Проверяет правила на отложенных таргетах по схеме leave-one-out.
+ *
+ * @param targets - Метрики таргетов и сведения о кластерах тела
+ * @returns Число прошедших таргетов и детали для каждого правила
+ * @remarks Порог каждого правила считается без проверяемого
+ *   таргета. `lowEndNotSingle` проверяет только долю сильнейшего
+ *   sustain-компонента 35–200 Гц и остаётся кандидатом, а не
+ *   доказанным законом. `lowBandEffectiveCount` здесь не используется.
+ */
+export function evaluateHoldoutRules(
+  targets: HoldoutTarget[],
+): HoldoutRuleResult[] {
+  const results: Record<RuleName, HoldoutRuleResult> = {
+    bodySweepDown: createRuleResult('bodySweepDown', targets.length),
+    upperSweepFlat: createRuleResult(
+      'upperSweepFlat',
+      targets.length,
+    ),
+    nonHarmonic: createRuleResult('nonHarmonic', targets.length),
+    energyHierarchy: createRuleResult(
+      'energyHierarchy',
+      targets.length,
+    ),
+    lowEndNotSingle: createRuleResult(
+      'lowEndNotSingle',
+      targets.length,
+    ),
+    bodyClusters: createRuleResult('bodyClusters', targets.length),
+  };
+
+  for (const heldOut of targets) {
+    const others = targets.filter(
+      (target) => target.slug !== heldOut.slug,
+    );
+    recordEvaluation(
+      results.bodySweepDown,
+      evaluateBodySweep(heldOut),
+    );
+    recordEvaluation(
+      results.upperSweepFlat,
+      evaluateUpperSweep(heldOut, others),
+    );
+    recordEvaluation(
+      results.nonHarmonic,
+      evaluateNonHarmonicity(heldOut, others),
+    );
+    recordEvaluation(
+      results.energyHierarchy,
+      evaluateEnergyHierarchy(heldOut, others),
+    );
+    recordEvaluation(
+      results.lowEndNotSingle,
+      evaluateLowEndConcentration(heldOut, others),
+    );
+    recordEvaluation(
+      results.bodyClusters,
+      evaluateBodyClusters(heldOut),
     );
   }
-  return results;
+  return RULE_NAMES.map((name) => results[name]);
 }
