@@ -44,12 +44,20 @@ export function EnhanceForm() {
   const refreshDetails = useCallback(
     async (list: EnhanceJobListEntry[]) => {
       // Активные задания опрашиваем каждый цикл ради прогресса,
-      // завершённые и упавшие — пока не попадут в кеш.
+      // завершённые и упавшие — пока не попадут в кеш. Кеш снятый
+      // с работающего задания обновляем при смене статуса: аудит
+      // и финальные числа пишутся в самом конце, иначе карточка
+      // навсегда показывала бы пустой журнал со словами
+      // «трансформации не применились».
       const targets = list.filter((job) => {
         if (job.status === 'running' || job.status === 'queued') {
           return true;
         }
-        return detailsRef.current[job.id] === undefined;
+        const cached = detailsRef.current[job.id];
+        if (cached === undefined) {
+          return true;
+        }
+        return cached.status !== job.status;
       });
       if (targets.length === 0) return;
 
