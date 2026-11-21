@@ -10,8 +10,8 @@ import {
   computeRunMetrics,
   deriveThresholds,
   leaveOneOut,
-  type LawOsc,
 } from './check-laws';
+import type { LawOsc } from './law-metrics';
 
 function osc(partial: Partial<LawOsc>): LawOsc {
   return {
@@ -104,7 +104,7 @@ test('a target inside the family passes leave-one-out', () => {
     ]),
   );
   const rows: { slug: string; violations: string[] }[] = leaveOneOut(targets);
-  for (const row: { slug: string; violations: string[] } of rows) {
+  for (const row of rows) {
     assert.deepEqual(row.violations, []);
   }
 });
