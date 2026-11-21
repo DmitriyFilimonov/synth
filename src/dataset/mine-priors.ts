@@ -34,8 +34,11 @@ interface OscFeatures {
   role: 'sustain' | 'transient';
   freqBase: number;
   freqStartToBase: number;
+  freqEnvSlope: number;
+  freqEnvDurationSec: number;
   ampStartLevel: number;
   ampEndLevel: number;
+  ampEnvSlope: number;
   ampEnvDurationSec: number;
   decaySecToDb: { db20: number | null };
 }
@@ -103,6 +106,12 @@ interface BodySignature {
     level: number | null;
     dur: number | null;
     sweep: number | null;
+    /** Крутизна частотной огибающей партиала (форма спада свипа). */
+    freqSlope: number | null;
+    /** Протяжённость свипа партиала относительно фундаменталки. */
+    freqDurRatio: number | null;
+    /** Крутизна амплитудной огибающей партиала. */
+    ampSlope: number | null;
   }[];
 }
 
@@ -319,6 +328,9 @@ function signatureOfRun(oscs: TaggedOsc[]): {
     level: number;
     dur: number;
     sweep: number;
+    freqSlope: number;
+    freqDurRatio: number;
+    ampSlope: number;
   }[];
 } | null {
   const sustain = oscs.filter(
@@ -351,6 +363,12 @@ function signatureOfRun(oscs: TaggedOsc[]): {
           ? p.ampEnvDurationSec / fund.ampEnvDurationSec
           : 1,
       sweep: p.freqStartToBase,
+      freqSlope: p.freqEnvSlope,
+      freqDurRatio:
+        fund.freqEnvDurationSec > 0
+          ? p.freqEnvDurationSec / fund.freqEnvDurationSec
+          : 1,
+      ampSlope: p.ampEnvSlope,
     }));
   return { fundHz: fund.freqBase, partials };
 }
@@ -414,6 +432,18 @@ function computeBodySignatures(all: TaggedOsc[]): BodySignature[] {
         ),
         sweep: quantile(
           holders.map((h) => h.sweep),
+          0.5,
+        ),
+        freqSlope: quantile(
+          holders.map((h) => h.freqSlope),
+          0.5,
+        ),
+        freqDurRatio: quantile(
+          holders.map((h) => h.freqDurRatio),
+          0.5,
+        ),
+        ampSlope: quantile(
+          holders.map((h) => h.ampSlope),
           0.5,
         ),
       });

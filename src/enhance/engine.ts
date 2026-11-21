@@ -16,7 +16,11 @@
 import { MIN } from '../envelope';
 import { calculateRMS } from '../rms';
 import { renderSamples } from '../dataset/shared';
-import { type ArgCreateSynth } from '../synth';
+import {
+  type ArgCreateSynth,
+  ampEnvConfigNormales,
+  oscConfigNormales,
+} from '../synth';
 import {
   addTransientClick,
   boostOscillator,
@@ -78,6 +82,12 @@ export interface BodySignature {
     level: number | null;
     dur: number | null;
     sweep: number | null;
+    /** Крутизна частотной огибающей партиала. */
+    freqSlope?: number | null;
+    /** Протяжённость свипа партиала относительно фундаменталки. */
+    freqDurRatio?: number | null;
+    /** Крутизна амплитудной огибающей партиала. */
+    ampSlope?: number | null;
   }[];
 }
 
@@ -455,6 +465,22 @@ const ENRICH_HARMONICS: {
 ];
 
 /**
+ * Слот обогащения: кортеж партиала. Сверх отношений частоты,
+ * уровня и затухания несёт динамику огибающих (крутизну свипа,
+ * его протяжённость, крутизну амплитуды) — у партиалов эталонов
+ * своя атака высоты, и она часть сигнатуры.
+ */
+interface EnrichSlot {
+  ratio: number;
+  level: number;
+  dur: number;
+  sweep: number | null;
+  freqSlope?: number | null;
+  freqDurRatio?: number | null;
+  ampSlope?: number | null;
+}
+
+/**
  * Слоты обогащения для патча: при наличии сигнатур тел — кортежи
  * ближайшего по фундаменталке архетипа (переносим взаимосвязь
  * целиком), иначе послотовые медианы bodyProfile, иначе умолчание
@@ -463,12 +489,7 @@ const ENRICH_HARMONICS: {
 function enrichSlots(
   priors: PriorsFile,
   fundHz: number,
-): {
-  ratio: number;
-  level: number;
-  dur: number;
-  sweep: number | null;
-}[] {
+): EnrichSlot[] {
   const sigs = priors.bodySignatures;
   if (sigs !== undefined && sigs.length > 0) {
     let best: BodySignature | null = null;
@@ -488,11 +509,10 @@ function enrichSlots(
         .filter(
           (
             p,
-          ): p is {
+          ): p is typeof p & {
             ratio: number;
             level: number;
             dur: number;
-            sweep: number | null;
           } => p.ratio !== null && p.level !== null && p.dur !== null,
         )
         .map((p) => ({
@@ -500,6 +520,9 @@ function enrichSlots(
           level: p.level,
           dur: p.dur,
           sweep: p.sweep,
+          freqSlope: p.freqSlope ?? null,
+          freqDurRatio: p.freqDurRatio ?? null,
+          ampSlope: p.ampSlope ?? null,
         }));
     }
   }
@@ -509,14 +532,9 @@ function enrichSlots(
 /**
  * Отношения для обогащения: из bodyProfile приоров (медианы),
  * иначе из умолчания. Профиль уже несёт уровень и длительность
- * относительно фундаменталки.
+ * относительно фундаменталки; динамики огибающих в нём нет.
  */
-function enrichRatios(priors: PriorsFile): {
-  ratio: number;
-  level: number;
-  dur: number;
-  sweep: number | null;
-}[] {
+function enrichRatios(priors: PriorsFile): EnrichSlot[] {
   const profile = priors.bodyProfile;
   if (profile === undefined || profile.length === 0) {
     return ENRICH_HARMONICS.map((h) => ({ ...h, sweep: null }));
@@ -722,6 +740,8 @@ function enrichPrimitiveBody(arg: {
     if (slotIndex === -1) {
       break;
     }
+    const clampNum = (v: number, lo: number, hi: number): number =>
+      Math.min(hi, Math.max(lo, v));
     const newOsc = {
       osc: {
         on: true,
@@ -732,14 +752,28 @@ function enrichPrimitiveBody(arg: {
           harmonic.sweep !== null
             ? targetFreq * harmonic.sweep
             : base.osc.freqStart * harmonic.ratio,
-        slope: base.osc.slope,
-        duration: base.osc.duration,
+        // Динамика свипа — тоже из сигнатуры: крутизна и
+        // протяжённость (относительно свипа фундаменталки).
+        slope: clampNum(
+          harmonic.freqSlope ?? base.osc.slope,
+          oscConfigNormales.slope.min,
+          oscConfigNormales.slope.max,
+        ),
+        duration: clampNum(
+          base.osc.duration * (harmonic.freqDurRatio ?? 1),
+          oscConfigNormales.duration.min,
+          oscConfigNormales.duration.max,
+        ),
         phase: 0,
       },
       ampEnv: {
         duration: base.ampEnv.duration * harmonic.dur,
         endLevel: base.ampEnv.endLevel,
-        slope: base.ampEnv.slope,
+        slope: clampNum(
+          harmonic.ampSlope ?? base.ampEnv.slope,
+          ampEnvConfigNormales.slope.min,
+          ampEnvConfigNormales.slope.max,
+        ),
         startLevel: targetLevel,
       },
     };
