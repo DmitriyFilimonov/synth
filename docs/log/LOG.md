@@ -152,3 +152,9 @@
 - `src/dataset/check-laws.ts` + `law-metrics.ts`: метрики по прогонам, пороги leave-one-out, отчёт law-report.json/md. Это заменяет разведочные скрипты из /tmp.
 - Результат на reference-4: bodySweepDown 6/6, upperSweepFlat 6/6, nonHarmonic 5/6 (Daft Punk чуть выше порога), energyHierarchy 4/6 (SpaceR и techno_1 на границе), bodyClusters 1/6 — правило Г2 не подтвердилось и снимается.
 - 76 тестов зелёные. Тег v1.3.1 запушен с описанием версии.
+
+## 2026-11-21: A/B по фазе — integral заметно сильнее на BOg
+
+- Legacy, 200 итераций, 90.5 мин: J=66.89%, global=62.91%.
+- Integral на 175-й итерации: J=74.86% — выше legacy на всех 200 итерациях. Жду его global и время.
+- Инструмент `check-laws.ts` в репозитории: закон проверяется leave-one-out, а не на той же выборке. Это закрывает инфраструктурную часть T16; сами пороги будут пересчитаны на датасете integral.
