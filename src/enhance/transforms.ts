@@ -530,3 +530,61 @@ export const setAmpEnvDuration = (
       clampNote(seconds, next, range),
   });
 };
+
+/**
+ * Масштабирует стартовые уровни всех включённых осцилляторов на
+ * один множитель (общая громкость патча). Каждый уровень
+ * обрезается в допустимый диапазон; обрезка записывается в
+ * журнал. Неприменима, если множитель не конечен, не положителен
+ * или равен единице.
+ */
+export const scaleLevels = (
+  patch: ArgCreateSynth,
+  factor: number,
+): TransformResult => {
+  if (!Number.isFinite(factor) || factor <= 0 || factor === 1) {
+    return notApplied(
+      patch,
+      'scaleLevels',
+      `множитель ${formatCompact(factor)} не меняет громкость`,
+    );
+  }
+  const active = patch.oscillators.filter((g) => g.osc.on);
+  if (active.length === 0) {
+    return notApplied(
+      patch,
+      'scaleLevels',
+      'в патче нет включённых осцилляторов',
+    );
+  }
+
+  const range = ampEnvConfigNormales.startLevel;
+  let clampedCount = 0;
+  const next: ArgCreateSynth = {
+    oscillators: patch.oscillators.map((group) => {
+      if (!group.osc.on) {
+        return group;
+      }
+      const raw = group.ampEnv.startLevel * factor;
+      const clamped = clampToRange(raw, range);
+      if (clamped !== raw) {
+        clampedCount += 1;
+      }
+      return {
+        osc: { ...group.osc },
+        ampEnv: { ...group.ampEnv, startLevel: clamped },
+      };
+    }),
+  };
+
+  return applied(next, {
+    name: 'scaleLevels',
+    detail:
+      `масштабировал общий уровень в ${factor.toFixed(3)} раза ` +
+      `(${active.length} осцилляторов` +
+      (clampedCount > 0
+        ? `, у ${clampedCount} обрезал по диапазону`
+        : '') +
+      ')',
+  });
+};

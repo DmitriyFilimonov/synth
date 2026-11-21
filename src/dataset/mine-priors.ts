@@ -25,6 +25,8 @@ import {
   writeJsonAtomic,
   writeTextAtomic,
 } from './shared';
+import { readWav } from '../read-wav';
+import { calculateRMS } from '../rms';
 
 /** Срез признаков осциллятора, который читает майнер. */
 interface OscFeatures {
@@ -276,6 +278,38 @@ function computeBodyProfile(all: TaggedOsc[]): BodyProfileSlot[] {
     .filter((s) => s.runs > 0);
 }
 
+/**
+ * Считает семейную норму громкости: RMS таргетов датасета по
+ * манифесту. Бочка с неверной громкостью — тоже дефект, и
+ * нормализация идёт к этой норме.
+ */
+async function computeLoudnessNorm(
+  datasetDir: string,
+): Promise<FeatureDist | null> {
+  const manifest = await readJsonOrNull<{
+    targetsDir?: string;
+    targets?: string[];
+  }>(join(datasetDir, 'manifest.json'));
+  if (
+    manifest?.targetsDir === undefined ||
+    manifest.targets === undefined
+  ) {
+    return null;
+  }
+  const values: number[] = [];
+  for (const target of manifest.targets) {
+    try {
+      const wav = readWav(join(manifest.targetsDir, target));
+      values.push(
+        calculateRMS([...wav.samples].map((s) => s / 32768)),
+      );
+    } catch {
+      continue;
+    }
+  }
+  return values.length === 0 ? null : distOf(values);
+}
+
 /** Читает ревизию кода из git; при недоступности git — null. */
 function readCodeRevision(): string | null {
   try {
@@ -377,6 +411,7 @@ async function main(): Promise<void> {
   }
 
   const bodyProfile = computeBodyProfile(all);
+  const loudness = await computeLoudnessNorm(datasetDir);
   await writeJsonAtomic(join(datasetDir, 'priors.json'), {
     version: 1,
     createdFrom: {
@@ -385,6 +420,7 @@ async function main(): Promise<void> {
     },
     note: 'Кластеры уровня компонентов (по ролям). Семейства уровня таргетов появятся с ростом датасета.',
     bodyProfile,
+    loudness: loudness === null ? undefined : { rms: loudness },
     clusters,
   });
   await writeTextAtomic(

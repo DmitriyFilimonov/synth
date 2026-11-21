@@ -374,6 +374,27 @@ test('an oscillator is claimed by at most one profile slot', () => {
   );
 });
 
+test('quiet patch is pulled toward the family loudness norm', () => {
+  const patch = makePatch();
+  const priors = makePriors();
+  priors.loudness = { rms: { median: 0.25, p10: 0.2, p90: 0.3 } };
+  const map = makeMap();
+  map.params['startLevel'] = { verdict: 'anchored' };
+  const result = enhancePatch({
+    patch,
+    identifiability: map,
+    priors,
+    strength: 1,
+  });
+  const names = result.audits.map((a) => a.name);
+  assert.ok(names.includes('scaleLevels'), 'loudness must scale');
+  const osc = result.patch.oscillators[0];
+  assert.ok(
+    (osc?.ampEnv.startLevel ?? 0) > 0.3,
+    `level should rise above 0.3, got ${osc?.ampEnv.startLevel}`,
+  );
+});
+
 test('a body with covered profile slots is not enriched', () => {
   const patch = makePatch();
   // Тело уже покрывает оба слота умолчания (2f=100, 3f=150)

@@ -14,12 +14,15 @@
  * Модуль чистый: никакого I/O, файлы читает вызывающий.
  */
 import { MIN } from '../envelope';
+import { calculateRMS } from '../rms';
+import { renderSamples } from '../dataset/shared';
 import { type ArgCreateSynth } from '../synth';
 import {
   addTransientClick,
   boostOscillator,
   extendTail,
   removeOscillator,
+  scaleLevels,
   setEndLevel,
   type TransformAudit,
 } from './transforms';
@@ -68,6 +71,8 @@ export interface BodyProfileSlot {
 export interface PriorsFile {
   version: number;
   bodyProfile?: BodyProfileSlot[];
+  /** Семейная норма громкости: распределение RMS эталонов. */
+  loudness?: { rms: FeatureDist };
   clusters: PriorCluster[];
 }
 
@@ -358,6 +363,33 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
     const enriched = enrichPrimitiveBody({ patch, priors, strength });
     patch = enriched.patch;
     audits.push(...enriched.audits);
+  }
+
+  // Нормализация громкости к семейной норме приоров — последний
+  // шаг, чтобы учесть и добавленные компоненты. Потолок по пику:
+  // не загоняем результат в клип.
+  const norm = priors.loudness?.rms?.median;
+  if (norm !== null && norm !== undefined && strength > 0) {
+    const samples = renderSamples(patch, 0.5);
+    const current = calculateRMS([...samples].map((s) => s / 32768));
+    if (current > 1e-9) {
+      let peak = 0;
+      for (const s of samples) {
+        const v = Math.abs(s / 32768);
+        if (v > peak) {
+          peak = v;
+        }
+      }
+      let factor = Math.exp(Math.log(norm / current) * strength);
+      if (peak * factor > 0.98) {
+        factor = 0.98 / peak;
+      }
+      const scaled = scaleLevels(patch, factor);
+      if (scaled.audit !== null) {
+        patch = scaled.patch;
+        audits.push(scaled.audit);
+      }
+    }
   }
 
   return { patch, audits };
