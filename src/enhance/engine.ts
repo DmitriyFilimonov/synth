@@ -69,10 +69,24 @@ export interface BodyProfileSlot {
   sweepRatio?: FeatureDist;
 }
 
+/** Сигнатура тела архетипа (контракт C2). */
+export interface BodySignature {
+  slug: string;
+  fundamentalHz: number | null;
+  partials: {
+    ratio: number | null;
+    level: number | null;
+    dur: number | null;
+    sweep: number | null;
+  }[];
+}
+
 /** Файл приоров (контракт C2). */
 export interface PriorsFile {
   version: number;
   bodyProfile?: BodyProfileSlot[];
+  /** Сигнатуры тел по таргетам: совместные кортежи партиалов. */
+  bodySignatures?: BodySignature[];
   /** Семейная норма громкости: распределение RMS эталонов. */
   loudness?: { rms: FeatureDist };
   clusters: PriorCluster[];
@@ -436,13 +450,63 @@ const ENRICH_HARMONICS: {
 ];
 
 /**
+ * Слоты обогащения для патча: при наличии сигнатур тел — кортежи
+ * ближайшего по фундаменталке архетипа (переносим взаимосвязь
+ * целиком), иначе послотовые медианы bodyProfile, иначе умолчание
+ * 2f/3f. Свип у сигнатур свой у каждого партиала.
+ */
+function enrichSlots(
+  priors: PriorsFile,
+  fundHz: number,
+): {
+  ratio: number;
+  level: number;
+  dur: number;
+  sweep: number | null;
+}[] {
+  const sigs = priors.bodySignatures;
+  if (sigs !== undefined && sigs.length > 0) {
+    let best: BodySignature | null = null;
+    let bestDist = Infinity;
+    for (const sig of sigs) {
+      if (sig.fundamentalHz === null) {
+        continue;
+      }
+      const dist = Math.abs(Math.log(sig.fundamentalHz / fundHz));
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = sig;
+      }
+    }
+    if (best !== null) {
+      return best.partials
+        .filter(
+          (
+            p,
+          ): p is {
+            ratio: number;
+            level: number;
+            dur: number;
+            sweep: number | null;
+          } => p.ratio !== null && p.level !== null && p.dur !== null,
+        )
+        .map((p) => ({
+          ratio: p.ratio,
+          level: p.level,
+          dur: p.dur,
+          sweep: p.sweep,
+        }));
+    }
+  }
+  return enrichRatios(priors);
+}
+
+/**
  * Отношения для обогащения: из bodyProfile приоров (медианы),
  * иначе из умолчания. Профиль уже несёт уровень и длительность
  * относительно фундаменталки.
  */
-function enrichRatios(
-  priors: PriorsFile,
-): {
+function enrichRatios(priors: PriorsFile): {
   ratio: number;
   level: number;
   dur: number;
@@ -588,7 +652,10 @@ function enrichPrimitiveBody(arg: {
   // water_15: 0.124 → 0.248 → 0.409).
   const claimedIndices = new Set<number>();
 
-  for (const harmonic of enrichRatios(arg.priors)) {
+  for (const harmonic of enrichSlots(
+    arg.priors,
+    fundamental.group.osc.freqBase,
+  )) {
     const targetFreq = base.osc.freqBase * harmonic.ratio;
     const targetLevel =
       base.ampEnv.startLevel * harmonic.level * arg.strength;

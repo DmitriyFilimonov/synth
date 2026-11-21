@@ -90,6 +90,22 @@ interface BodyProfileSlot {
   sweepRatio: FeatureDist;
 }
 
+/**
+ * Сигнатура тела таргета: фундаменталка и кортежи партиалов
+ * (отношение частоты, уровня, затухания и свип), медианы по
+ * прогонам. Это и есть переносимая взаимосвязь параметров.
+ */
+interface BodySignature {
+  slug: string;
+  fundamentalHz: number | null;
+  partials: {
+    ratio: number | null;
+    level: number | null;
+    dur: number | null;
+    sweep: number | null;
+  }[];
+}
+
 /** Уровень слышимости осциллятора при майнинге профиля тела. */
 const AUDIBLE_LEVEL = 0.03;
 
@@ -293,6 +309,121 @@ function computeBodyProfile(all: TaggedOsc[]): BodyProfileSlot[] {
 }
 
 /**
+ * Считает сигнатуру тела одного прогона: доминант тела и кортежи
+ * его партиалов. Нуль-значения у прогонов без слышимого тела.
+ */
+function signatureOfRun(oscs: TaggedOsc[]): {
+  fundHz: number;
+  partials: {
+    ratio: number;
+    level: number;
+    dur: number;
+    sweep: number;
+  }[];
+} | null {
+  const sustain = oscs.filter(
+    (o) => o.role === 'sustain' && o.ampStartLevel >= AUDIBLE_LEVEL,
+  );
+  if (sustain.length === 0) {
+    return null;
+  }
+  const inZone = sustain.filter((o) => o.freqBase <= 150);
+  const fundPool = inZone.length > 0 ? inZone : sustain;
+  const fund = fundPool.reduce((a, b) =>
+    a.ampStartLevel ** 2 * a.ampEnvDurationSec >=
+    b.ampStartLevel ** 2 * b.ampEnvDurationSec
+      ? a
+      : b,
+  );
+  const partials = sustain
+    .filter(
+      (o) =>
+        o.freqBase >= fund.freqBase * 1.15 &&
+        o.freqBase <= fund.freqBase * 12,
+    )
+    .sort((a, b) => b.ampStartLevel - a.ampStartLevel)
+    .slice(0, 5)
+    .map((p) => ({
+      ratio: p.freqBase / fund.freqBase,
+      level: p.ampStartLevel / fund.ampStartLevel,
+      dur:
+        fund.ampEnvDurationSec > 0
+          ? p.ampEnvDurationSec / fund.ampEnvDurationSec
+          : 1,
+      sweep: p.freqStartToBase,
+    }));
+  return { fundHz: fund.freqBase, partials };
+}
+
+/**
+ * Считает сигнатуры тел по таргетам: медианные кортежи партиалов
+ * по прогонам таргета (слоты выравниваются по рангу уровня) и
+ * медианная частота фундаменталки.
+ */
+function computeBodySignatures(all: TaggedOsc[]): BodySignature[] {
+  const byTarget = new Map<string, TaggedOsc[]>();
+  for (const osc of all) {
+    if (!byTarget.has(osc.slug)) {
+      byTarget.set(osc.slug, []);
+    }
+    (byTarget.get(osc.slug) ?? []).push(osc);
+  }
+
+  const signatures: BodySignature[] = [];
+  for (const [slug, oscs] of [...byTarget.entries()].sort()) {
+    const byRun = new Map<number, TaggedOsc[]>();
+    for (const osc of oscs) {
+      if (!byRun.has(osc.seed)) {
+        byRun.set(osc.seed, []);
+      }
+      (byRun.get(osc.seed) ?? []).push(osc);
+    }
+    const runSignatures = [...byRun.values()]
+      .map(signatureOfRun)
+      .filter((s): s is NonNullable<typeof s> => s !== null);
+    if (runSignatures.length === 0) {
+      continue;
+    }
+    const fundHz = quantile(
+      runSignatures.map((s) => s.fundHz),
+      0.5,
+    );
+    const maxSlots = Math.max(
+      ...runSignatures.map((s) => s.partials.length),
+    );
+    const partials: BodySignature['partials'] = [];
+    for (let slot = 0; slot < maxSlots; slot += 1) {
+      const holders = runSignatures
+        .map((s) => s.partials[slot])
+        .filter((p): p is NonNullable<typeof p> => p !== undefined);
+      if (holders.length === 0) {
+        continue;
+      }
+      partials.push({
+        ratio: quantile(
+          holders.map((h) => h.ratio),
+          0.5,
+        ),
+        level: quantile(
+          holders.map((h) => h.level),
+          0.5,
+        ),
+        dur: quantile(
+          holders.map((h) => h.dur),
+          0.5,
+        ),
+        sweep: quantile(
+          holders.map((h) => h.sweep),
+          0.5,
+        ),
+      });
+    }
+    signatures.push({ slug, fundamentalHz: fundHz, partials });
+  }
+  return signatures;
+}
+
+/**
  * Считает семейную норму громкости: RMS таргетов датасета по
  * манифесту. Бочка с неверной громкостью — тоже дефект, и
  * нормализация идёт к этой норме.
@@ -425,6 +556,7 @@ async function main(): Promise<void> {
   }
 
   const bodyProfile = computeBodyProfile(all);
+  const bodySignatures = computeBodySignatures(all);
   const loudness = await computeLoudnessNorm(datasetDir);
   await writeJsonAtomic(join(datasetDir, 'priors.json'), {
     version: 1,
@@ -434,6 +566,7 @@ async function main(): Promise<void> {
     },
     note: 'Кластеры уровня компонентов (по ролям). Семейства уровня таргетов появятся с ростом датасета.',
     bodyProfile,
+    bodySignatures,
     loudness: loudness === null ? undefined : { rms: loudness },
     clusters,
   });

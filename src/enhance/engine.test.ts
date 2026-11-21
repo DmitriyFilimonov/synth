@@ -395,6 +395,82 @@ test('quiet patch is pulled toward the family loudness norm', () => {
   );
 });
 
+test('signature adoption adds the whole archetype jointly', () => {
+  const patch = makePatch();
+  // Слышимый transient, чтобы click не занял слот; два свободных.
+  const second = patch.oscillators[1];
+  if (second !== undefined) {
+    second.osc.on = true;
+    second.ampEnv.startLevel = 0.4;
+  }
+  patch.oscillators.push(
+    {
+      osc: {
+        on: false,
+        freqBase: 100,
+        freqStart: 100,
+        slope: 1,
+        duration: 0.1,
+        phase: 0,
+      },
+      ampEnv: {
+        duration: 0.1,
+        endLevel: 0.001,
+        slope: 1,
+        startLevel: 0.01,
+      },
+    },
+    {
+      osc: {
+        on: false,
+        freqBase: 100,
+        freqStart: 100,
+        slope: 1,
+        duration: 0.1,
+        phase: 0,
+      },
+      ampEnv: {
+        duration: 0.1,
+        endLevel: 0.001,
+        slope: 1,
+        startLevel: 0.01,
+      },
+    },
+  );
+  const priors = makePriors();
+  priors.bodySignatures = [
+    {
+      slug: 'archetype-a',
+      fundamentalHz: 50,
+      partials: [
+        { ratio: 1.43, level: 0.9, dur: 0.26, sweep: 1.34 },
+        { ratio: 2.04, level: 0.58, dur: 0.34, sweep: 1.22 },
+      ],
+    },
+  ];
+  const map = makeMap();
+  map.params['startLevel'] = { verdict: 'anchored' };
+  const result = enhancePatch({
+    patch,
+    identifiability: map,
+    priors,
+    strength: 1,
+  });
+  const added = result.patch.oscillators.filter(
+    (g) =>
+      g.osc.on &&
+      (Math.abs(g.osc.freqBase - 71.5) < 1e-6 ||
+        Math.abs(g.osc.freqBase - 102) < 1e-6),
+  );
+  assert.equal(added.length, 2, 'both signature partials added');
+  const first = added[0];
+  assert.ok(Math.abs((first?.osc.freqBase ?? 0) - 71.5) < 1e-6);
+  assert.ok(
+    Math.abs((first?.osc.freqStart ?? 0) - 71.5 * 1.34) < 1e-6,
+    `partial sweep from signature, got ${first?.osc.freqStart}`,
+  );
+});
+
 test('a body with covered profile slots is not enriched', () => {
   const patch = makePatch();
   // Тело уже покрывает оба слота умолчания (2f=100, 3f=150)
