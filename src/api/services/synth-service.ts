@@ -496,6 +496,9 @@ async function runEnhanceJob(
         identifiability: DEFAULT_IDENTIFIABILITY,
         priors,
         strength: enhancementStrength,
+        // Перенос тела выключен: последовательность множителей,
+        // привязанная к фундаментальной, законом не доказана (T17).
+        enrichBody: false,
       });
       enhanced = {
         patch: filled.patch,

@@ -109,6 +109,12 @@ export interface EnhanceArgs {
   priors: PriorsFile;
   /** 0 — ничего не менять, 1 — полностью приор. */
   strength: number;
+  /**
+   * Перенос тела по архетипам и профилю (партиалы, усиления).
+   * По умолчанию включён, чтобы сравнения шли на одной основе;
+   * сервис его выключает до проверки закона (T17 в плане).
+   */
+  enrichBody?: boolean;
 }
 
 /** Результат улучшения: патч и журнал трансформаций. */
@@ -385,7 +391,7 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
   }
 
   // Примитивный саб обогащаем партиалами по профилю тела приоров.
-  if (strength >= 0.5) {
+  if (strength >= 0.5 && args.enrichBody !== false) {
     const enriched = enrichPrimitiveBody({ patch, priors, strength });
     patch = enriched.patch;
     audits.push(...enriched.audits);

@@ -396,6 +396,18 @@ test('quiet patch is pulled toward the family loudness norm', () => {
   );
 });
 
+test('body enrichment is skipped when the caller turns it off', () => {
+  const result = enhancePatch({
+    patch: makePatch(),
+    identifiability: makeMap(),
+    priors: makePriors(),
+    strength: 1,
+    enrichBody: false,
+  });
+  const names = result.audits.map((a) => a.name);
+  assert.ok(!names.includes('enrichBody'), 'no added partial');
+});
+
 test('loud sum is held under the headroom, not left in the clamp', () => {
   // Три одинаковых осциллятора суммируются выше ±1 и обрезались бы
   // синтезатором; защита должна уменьшить громкость по выходу.
