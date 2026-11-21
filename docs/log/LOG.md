@@ -111,3 +111,9 @@
 - Добавлен `src/dataset/check-laws.ts`: метрики прогонов, медианы по сидам, пороги leave-one-out, отчёт law-check.json/md. Это заменяет разведочные скрипты из /tmp.
 - Результат на reference-4: bodySweepDown 6/6, upperSweepFlat 6/6, nonHarmonic 5/6, energyHierarchy 4/6, bodyClusters 1/6 (Г2 отвергнуто).
 - 76 тестов зелёные. Чистый клон проверен.
+
+## 2026-11-21: закон проверяется leave-one-out
+
+- `src/dataset/check-laws.ts` считает метрики прогонов и проверяет правила с порогами, построенными без проверяемого таргета. Отчёты law-check.json/md в каталоге датасета.
+- Результат на reference-4: bodySweepDown 6/6, upperSweepFlat 6/6, nonHarmonic 5/6, energyHierarchy 4/6, bodyClusters 1/6 (Г2 отвергнуто).
+- 76 тестов, сборка чистая. Инструмент готов к датасету integral.
