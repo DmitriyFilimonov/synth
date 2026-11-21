@@ -210,9 +210,12 @@ function buildPriorCluster(
 }
 
 /**
- * Считает профиль тела по прогонам: фундаменталка — самый низкий
- * слышимый sustain, партиалы — слышимые sustain в зоне 1.5f–12f,
- * топ-3 по уровню. Отношения собираются по рангам слотов.
+ * Считает профиль тела по прогонам: фундаменталка — самый сильный
+ * по энергии слышимый sustain до 150 Гц (то же правило, что у
+ * движка: самый низкий по частоте — неверен, под телом эталонов
+ * сидят слабые спутники, и профиль от них раздувает уровни
+ * партиалов до ×1.7 доминанта), партиалы — слышимые sustain в зоне
+ * 1.5f–12f, топ-3 по уровню. Отношения собираются по рангам слотов.
  */
 function computeBodyProfile(all: TaggedOsc[]): BodyProfileSlot[] {
   const byRun = new Map<string, TaggedOsc[]>();
@@ -241,8 +244,13 @@ function computeBodyProfile(all: TaggedOsc[]): BodyProfileSlot[] {
     if (sustain.length === 0) {
       continue;
     }
-    const fund = sustain.reduce((a, b) =>
-      a.freqBase <= b.freqBase ? a : b,
+    const inZone = sustain.filter((o) => o.freqBase <= 150);
+    const fundPool = inZone.length > 0 ? inZone : sustain;
+    const fund = fundPool.reduce((a, b) =>
+      a.ampStartLevel ** 2 * a.ampEnvDurationSec >=
+      b.ampStartLevel ** 2 * b.ampEnvDurationSec
+        ? a
+        : b,
     );
     const partials = sustain
       .filter(
