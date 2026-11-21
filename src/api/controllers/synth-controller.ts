@@ -180,6 +180,19 @@ export const matchBinaryHandler = async (
   }
 };
 
+/** Разбирает необязательную модель фазы из query; мусор → 400. */
+function parsePhaseModel(
+  raw: unknown,
+): 'legacy' | 'integral' | undefined {
+  if (raw === undefined || raw === '') {
+    return undefined;
+  }
+  if (raw === 'legacy' || raw === 'integral') {
+    return raw;
+  }
+  throw new Error('phaseModel must be legacy or integral');
+}
+
 export const createMatchJobHandler = async (
   req: Request,
   res: Response,
@@ -223,6 +236,11 @@ export const createMatchJobHandler = async (
       : attackBoostFloat;
     const seedInt = parseInt(queryParams.seed ?? '', 10);
     const seed = isNaN(seedInt) ? undefined : seedInt;
+    const phaseParam = queryParams.phaseModel;
+    const phaseModel =
+      phaseParam === 'integral' || phaseParam === 'legacy'
+        ? phaseParam
+        : undefined;
 
     const jobId = await matchWavWithJob(
       req.body,
@@ -235,6 +253,7 @@ export const createMatchJobHandler = async (
       queryParams.fileName,
       attackBoost,
       seed,
+      phaseModel,
     );
 
     res.status(202).json({ id: jobId });
@@ -315,6 +334,11 @@ export const createEnhanceJobHandler = async (
       : Math.min(1, Math.max(0, strengthFloat));
     const seedInt = parseInt(queryParams.seed ?? '', 10);
     const seed = Number.isNaN(seedInt) ? undefined : seedInt;
+    const phaseParam = queryParams.phaseModel;
+    const phaseModel =
+      phaseParam === 'integral' || phaseParam === 'legacy'
+        ? phaseParam
+        : undefined;
     const refineInt = parseInt(
       queryParams.refineIterations ?? '',
       10,
@@ -331,6 +355,7 @@ export const createEnhanceJobHandler = async (
       queryParams.fileName,
       seed,
       refineIterations,
+      phaseModel,
     );
 
     res.status(202).json({ id: jobId });
