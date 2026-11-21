@@ -404,17 +404,8 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
     const samples = renderSamples(patch, 0.5);
     const current = calculateRMS([...samples].map((s) => s / 32768));
     if (current > 1e-9) {
-      let peak = 0;
-      for (const s of samples) {
-        const v = Math.abs(s / 32768);
-        if (v > peak) {
-          peak = v;
-        }
-      }
-      let factor = Math.exp(Math.log(norm / current) * strength);
-      if (peak * factor > 0.98) {
-        factor = 0.98 / peak;
-      }
+      const wanted = Math.exp(Math.log(norm / current) * strength);
+      const factor = headroomFactor(patch, wanted);
       const scaled = scaleLevels(patch, factor);
       if (scaled.audit !== null) {
         patch = scaled.patch;
@@ -424,6 +415,61 @@ export function enhancePatch(args: EnhanceArgs): EnhanceResult {
   }
 
   return { patch, audits };
+}
+
+/** Потолок пика синтеза в долях полной шкалы: запас до жёсткого ±1. */
+const HEADROOM_PEAK = 0.98;
+
+/** Шагов бисекции для поиска множителя под потолком. */
+const HEADROOM_STEPS = 16;
+
+/** Пик синтеза патча в долях полной шкалы по окну 0.5 с. */
+function synthPeak(patch: ArgCreateSynth): number {
+  let peak = 0;
+  for (const s of renderSamples(patch, 0.5)) {
+    const v = Math.abs(s) / 32768;
+    if (v > peak) {
+      peak = v;
+    }
+  }
+  return peak;
+}
+
+/**
+ * Самый большой множитель громкости не выше `wanted`, при котором
+ * пик синтеза остаётся под потолком. Синтезатор ограничивает сумму
+ * осцилляторов значением ±1, поэтому измеренный пик насыщен и
+ * занижает превышение: делить на него нельзя, ищем бисекцией по
+ * выходу.
+ */
+function headroomFactor(
+  patch: ArgCreateSynth,
+  wanted: number,
+): number {
+  const fits = (k: number): boolean =>
+    synthPeak(scaleLevels(patch, k).patch) <= HEADROOM_PEAK;
+  if (fits(wanted)) {
+    return wanted;
+  }
+  let lo = 0;
+  let hi = wanted;
+  for (let i = 0; i < HEADROOM_STEPS; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+/**
+ * Ограничивает пик патча потолком, не поднимая громкость. Нужна
+ * там, где патч пересобран после масштабирования (доводка).
+ */
+export function limitPeak(patch: ArgCreateSynth): ArgCreateSynth {
+  return scaleLevels(patch, headroomFactor(patch, 1)).patch;
 }
 
 /**

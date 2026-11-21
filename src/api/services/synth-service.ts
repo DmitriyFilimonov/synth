@@ -8,7 +8,11 @@ import {
 import { matchWithWorker } from '../../match-worker';
 import { dualWindowInitVector } from '../../dual-window-init-vector';
 import { mapVectorToSynthConfig } from '../../vector-to-synth-config';
-import { enhancePatch, type PriorsFile } from '../../enhance/engine';
+import {
+  enhancePatch,
+  limitPeak,
+  type PriorsFile,
+} from '../../enhance/engine';
 import { correctPatch } from '../../enhance/correct';
 import { type TransformAudit } from '../../enhance/transforms';
 import { DEFAULT_IDENTIFIABILITY } from '../../enhance/defaults';
@@ -547,8 +551,11 @@ async function runEnhanceJob(
             }
           },
         });
-        finalPatch = refined.synthConfig;
-        finalSamples = readWav(tempRefined).samples;
+        finalPatch = limitPeak(refined.synthConfig);
+        finalSamples = renderSamples(
+          finalPatch,
+          targetWavData.samples.length / SAMPLE_RATE,
+        );
       } finally {
         await unlink(tempEnhanced).catch(() => {});
         await unlink(tempRefined).catch(() => {});

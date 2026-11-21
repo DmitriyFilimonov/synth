@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { renderSamples } from '../dataset/shared';
 import { type ArgCreateSynth } from '../synth';
 import {
   enhancePatch,
@@ -392,6 +393,45 @@ test('quiet patch is pulled toward the family loudness norm', () => {
   assert.ok(
     (osc?.ampEnv.startLevel ?? 0) > 0.3,
     `level should rise above 0.3, got ${osc?.ampEnv.startLevel}`,
+  );
+});
+
+test('loud sum is held under the headroom, not left in the clamp', () => {
+  // Три одинаковых осциллятора суммируются выше ±1 и обрезались бы
+  // синтезатором; защита должна уменьшить громкость по выходу.
+  const loud: ArgCreateSynth = {
+    oscillators: [0, 1, 2].map(() => ({
+      osc: {
+        on: true,
+        freqBase: 50,
+        freqStart: 50,
+        slope: 0.8,
+        duration: 0.25,
+        phase: 0,
+      },
+      ampEnv: {
+        duration: 0.4,
+        endLevel: 0.5,
+        slope: 0.8,
+        startLevel: 0.5,
+      },
+    })),
+  };
+  const priors = makePriors();
+  priors.loudness = { rms: { median: 0.9, p10: 0.8, p90: 0.95 } };
+  const result = enhancePatch({
+    patch: loud,
+    identifiability: makeMap(),
+    priors,
+    strength: 1,
+  });
+  let peak = 0;
+  for (const s of renderSamples(result.patch, 0.5)) {
+    peak = Math.max(peak, Math.abs(s) / 32768);
+  }
+  assert.ok(
+    peak <= 0.98 + 1e-6,
+    `peak must stay under 0.98, got ${peak}`,
   );
 });
 
