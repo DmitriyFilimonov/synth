@@ -9,6 +9,7 @@ import {
   getJobStatusHandler,
   getJobsListHandler,
   downloadJobResultHandler,
+  downloadJobMatchHandler,
   downloadJobParamsHandler,
   deleteJobHandler,
 } from '../controllers/synth-controller';
@@ -26,6 +27,7 @@ router.post('/enhance/job', createEnhanceJobHandler);
 router.get('/match/jobs', getJobsListHandler);
 router.get('/match/jobs/:id', getJobStatusHandler);
 router.get('/match/jobs/:id/download', downloadJobResultHandler);
+router.get('/match/jobs/:id/download-match', downloadJobMatchHandler);
 router.get(
   '/match/jobs/:id/download-params',
   downloadJobParamsHandler,

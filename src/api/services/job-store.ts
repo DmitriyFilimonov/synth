@@ -97,6 +97,11 @@ export function getResultFilePath(id: string): string {
   return resultFilePath(id);
 }
 
+/** Путь к WAV чистого match (этап до улучшения) внутри enhance-job'а. */
+export function getMatchFilePath(id: string): string {
+  return join(JOBS_DIR, `${id}_match.wav`);
+}
+
 export function getInputFilePath(id: string): string {
   return inputFilePath(id);
 }

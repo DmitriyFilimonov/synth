@@ -28,6 +28,7 @@ const STEPS: AnalysisStep[] = [
     script: 'analyze-oscillator-stability.ts',
     label: 'oscillator-stability',
   },
+  { script: 'mine-priors.ts', label: 'priors' },
 ];
 
 /**

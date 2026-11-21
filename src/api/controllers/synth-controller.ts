@@ -15,6 +15,7 @@ import {
   getJob,
   listJobs,
   getResultFilePath,
+  getMatchFilePath,
   deleteJob,
 } from '../services/job-store';
 import {
@@ -435,6 +436,44 @@ export const downloadJobResultHandler = async (
     res.set(
       'Content-Disposition',
       contentDisposition(`${jobFileBase(job)}_matched.wav`),
+    );
+    res.send(buffer);
+  } catch {
+    res.status(404).json({ error: 'Job not found' });
+  }
+};
+
+/** Отдаёт WAV чистого match (этап до улучшения) для A/B/C. */
+export const downloadJobMatchHandler = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    if (!id) {
+      res.status(400).json({ error: 'Job ID required' });
+      return;
+    }
+
+    const job = await getJob(id);
+    if (job.status !== 'completed') {
+      res.status(400).json({
+        error: `Job not completed. Status: ${job.status}`,
+      });
+      return;
+    }
+
+    const matchPath = getMatchFilePath(id);
+    if (!existsSync(matchPath)) {
+      res.status(404).json({ error: 'Match-stage file not found' });
+      return;
+    }
+
+    const buffer = await readFile(matchPath);
+    res.set('Content-Type', 'audio/wav');
+    res.set(
+      'Content-Disposition',
+      contentDisposition(`${jobFileBase(job)}_match.wav`),
     );
     res.send(buffer);
   } catch {

@@ -90,6 +90,17 @@ export async function getEnhanceJob(id: string): Promise<EnhanceJobEntry> {
   return { ...raw, enhanceAudit: parseAudit(raw.enhanceAudit) };
 }
 
+/** Скачивает WAV этапа match (до улучшения) для сравнения. */
+export async function downloadEnhanceMatch(jobId: string): Promise<Blob> {
+  const response = await fetch(
+    `/api/match/jobs/${encodeURIComponent(jobId)}/download-match`,
+  );
+  if (!response.ok) {
+    throw new Error('Failed to download match-stage result');
+  }
+  return response.blob();
+}
+
 /** Скачивает улучшенный WAV общим download-эндпоинтом очереди. */
 export async function downloadEnhanceResult(jobId: string): Promise<Blob> {
   const response = await fetch(

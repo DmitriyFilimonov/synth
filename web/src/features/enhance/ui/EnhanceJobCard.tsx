@@ -4,7 +4,7 @@ import type {
   EnhanceJobListEntry,
   JobStatus,
 } from '../model/types';
-import { downloadEnhanceResult } from '../api/enhance';
+import { downloadEnhanceMatch, downloadEnhanceResult } from '../api/enhance';
 import { AudioPlayer, Button } from '@/shared/ui';
 import styles from './EnhanceJobCard.module.css';
 
@@ -41,7 +41,9 @@ export function EnhanceJobCard({
   detail?: EnhanceJobEntry;
 }) {
   const [audioUrl, setAudioUrl] = useState<string>('');
+  const [matchAudioUrl, setMatchAudioUrl] = useState<string>('');
   const [audioLoading, setAudioLoading] = useState(false);
+  const [matchLoading, setMatchLoading] = useState(false);
   const [audioError, setAudioError] = useState('');
 
   const progress = detail?.progress ?? [];
@@ -85,6 +87,21 @@ export function EnhanceJobCard({
       setAudioError('Не удалось загрузить результат');
     } finally {
       setAudioLoading(false);
+    }
+  };
+
+  // Третья точка сравнения: чистый match до улучшения. Без него
+  // след улучшения на слух не отличить от несовершенства мэтчинга.
+  const handlePlayMatch = async () => {
+    setMatchLoading(true);
+    setAudioError('');
+    try {
+      const blob = await downloadEnhanceMatch(job.id);
+      setMatchAudioUrl(URL.createObjectURL(blob));
+    } catch {
+      setAudioError('Match-этап не сохранён (задание старой схемы)');
+    } finally {
+      setMatchLoading(false);
     }
   };
 
@@ -142,16 +159,36 @@ export function EnhanceJobCard({
             </div>
           </div>
 
-          {audioUrl ? (
-            <AudioPlayer
-              url={audioUrl}
-              downloadName={`${downloadBase}_enhanced.wav`}
-            />
-          ) : (
+          {matchAudioUrl && (
+            <div>
+              <span className={styles.statLabel}>Match до улучшения</span>
+              <AudioPlayer
+                url={matchAudioUrl}
+                downloadName={`${downloadBase}_match.wav`}
+              />
+            </div>
+          )}
+          {audioUrl && (
+            <div>
+              <span className={styles.statLabel}>Улучшенный</span>
+              <AudioPlayer
+                url={audioUrl}
+                downloadName={`${downloadBase}_enhanced.wav`}
+              />
+            </div>
+          )}
+          {(!audioUrl || !matchAudioUrl) && (
             <div className={styles.actions}>
-              <Button onClick={handlePlay} disabled={audioLoading}>
-                {audioLoading ? 'Загрузка…' : 'Слушать результат'}
-              </Button>
+              {!matchAudioUrl && (
+                <Button onClick={handlePlayMatch} disabled={matchLoading}>
+                  {matchLoading ? 'Загрузка…' : 'Слушать match'}
+                </Button>
+              )}
+              {!audioUrl && (
+                <Button onClick={handlePlay} disabled={audioLoading}>
+                  {audioLoading ? 'Загрузка…' : 'Слушать результат'}
+                </Button>
+              )}
             </div>
           )}
 

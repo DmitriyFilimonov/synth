@@ -556,6 +556,14 @@ async function runEnhanceJob(
     }
 
     const resultPath = getResultFilePath(jobId);
+    // Сохраняем чистый match отдельным артефактом: для A/B/C
+    // прослушивания (оригинал / match / улучшенное) — иначе след
+    // улучшения не отличить на слух от несовершенства мэтчинга.
+    const matchPath = resultPath.replace(
+      /_result\.wav$/,
+      '_match.wav',
+    );
+    await copyFile(tempOutput, matchPath);
     writeWav({
       samples: finalSamples,
       sampleRate: SAMPLE_RATE,
