@@ -152,6 +152,52 @@ test('swept oscillator differs between models (option has an effect)', () => {
   );
 });
 
+test('cycle phase rejects non-finite time and stays bounded far out', () => {
+  const constant = createCyclePhase(() => 100);
+  assert.equal(constant(Number.NaN), 0);
+  assert.equal(constant(Number.POSITIVE_INFINITY), 0);
+  assert.equal(constant(Number.NEGATIVE_INFINITY), 0);
+  // Постоянная частота: интеграл точен и за пределами таблицы.
+  assert.ok(Math.abs(constant(20) - 2000) < 1e-6);
+  assert.ok(Math.abs(constant(1000) - 100000) < 1e-6);
+});
+
+test('cycle phase rejects non-finite x instead of hanging', () => {
+  const cyclesAt = createCyclePhase(() => 100);
+  assert.equal(cyclesAt(Number.NaN), 0);
+  assert.equal(cyclesAt(Number.POSITIVE_INFINITY), 0);
+  assert.equal(cyclesAt(Number.NEGATIVE_INFINITY), 0);
+});
+
+test('cycle phase stays exact far beyond the cached table', () => {
+  // Постоянная частота: интеграл линеен, поэтому хвост за пределами
+  // таблицы обязан совпасть с аналитикой, а не зависнуть или
+  // съесть память.
+  const cyclesAt = createCyclePhase(() => 100);
+  assert.ok(Math.abs(cyclesAt(20) - 2000) < 1e-6);
+  assert.ok(Math.abs(cyclesAt(1000) - 100000) < 1e-4);
+  assert.ok(Math.abs(cyclesAt(1e6) - 1e8) < 1e-2);
+});
+
+test('cycle phase is continuous across the table boundary', () => {
+  const { frequencyEnvelop } = frequencyEnvelopeCreator({
+    base: 50,
+    modulation: 50,
+    duration: 0.1,
+    slope: 0.8,
+  });
+  const cyclesAt = createCyclePhase(frequencyEnvelop);
+  const a = cyclesAt(9.99);
+  const b = cyclesAt(10.01);
+  // Огибающая к этому моменту стоит на MIN: частота равна
+  // base + modulation·MIN = 50.05 Гц, а не ровно 50.
+  const settled = 50 + 50 * 0.001;
+  assert.ok(
+    Math.abs(b - a - settled * 0.02) < 1e-9,
+    `jump at boundary: ${b - a}`,
+  );
+});
+
 test('createSynth default options keep the legacy model', () => {
   const viaDefault = createSynth(regressionPatch());
   const viaLegacy = createSynth(regressionPatch(), {

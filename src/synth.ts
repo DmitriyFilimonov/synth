@@ -156,17 +156,26 @@ export interface SynthOptions {
  * трапециями на сетке 1/SAMPLE_RATE; таблица растёт по мере запросов,
  * значения между узлами интерполируются линейно.
  *
+ * Память и время ограничены: таблица покрывает первые
+ * `MAX_PHASE_TABLE_SECONDS`, дальше остаток интеграла добирается
+ * Симпсоном с фиксированным числом интервалов, без роста таблицы.
+ * Нефинитный `x` (NaN, Infinity) возвращает 0: зависание или
+ * бесконечный цикл в аудиопути недопустимы.
+ *
  * @param frequency - Мгновенная частота в Гц
  * @returns Функция x → число циклов от 0 до x
  */
+const MAX_PHASE_TABLE_SECONDS = 10;
+const PHASE_TAIL_INTERVALS = 2048;
+
 export const createCyclePhase = (
   frequency: (arg: { x: number }) => number,
 ): ((x: number) => number) => {
   const cycles: number[] = [0];
   let lastFrequency = frequency({ x: 0 });
-  return (x: number): number => {
-    const position = Math.max(0, x * SAMPLE_RATE);
-    const index = Math.floor(position);
+  const maxIndex = MAX_PHASE_TABLE_SECONDS * SAMPLE_RATE;
+
+  const ensureTable = (index: number): void => {
     while (cycles.length <= index + 1) {
       const k = cycles.length;
       const current = frequency({ x: k / SAMPLE_RATE });
@@ -176,6 +185,32 @@ export const createCyclePhase = (
       );
       lastFrequency = current;
     }
+  };
+
+  /** Остаток интеграла за пределами таблицы, с фиксированной ценой. */
+  const tailIntegral = (from: number, to: number): number => {
+    const n = PHASE_TAIL_INTERVALS;
+    const h = (to - from) / n;
+    let sum = frequency({ x: from }) + frequency({ x: to });
+    for (let k = 1; k < n; k++) {
+      sum += (k % 2 === 0 ? 2 : 4) * frequency({ x: from + k * h });
+    }
+    return (sum * h) / 3;
+  };
+
+  return (x: number): number => {
+    if (!Number.isFinite(x)) {
+      return 0;
+    }
+    const position = Math.max(0, x * SAMPLE_RATE);
+    if (position >= maxIndex) {
+      const baseIndex = maxIndex - 1;
+      ensureTable(baseIndex);
+      const from = baseIndex / SAMPLE_RATE;
+      return (cycles[baseIndex] ?? 0) + tailIntegral(from, x);
+    }
+    const index = Math.floor(position);
+    ensureTable(index);
     const c0 = cycles[index] ?? 0;
     const c1 = cycles[index + 1] ?? c0;
     return c0 + (position - index) * (c1 - c0);
