@@ -135,3 +135,121 @@ export function pooledBodyClusters(
     maxSpread: spreads.length > 0 ? Math.max(...spreads) : null,
   };
 }
+
+/** Вход проверки на отложенных таргетах: метрики одного таргета. */
+export interface HoldoutTarget {
+  slug: string;
+  metrics: LawMetrics;
+  bodyClusters: number;
+  bodyClusterSpread: number | null;
+}
+
+/** Итог одного правила: сколько отложенных таргетов его прошло. */
+export interface HoldoutRuleResult {
+  name: string;
+  description: string;
+  heldOutPassed: number;
+  targets: number;
+  details: string[];
+}
+
+/**
+ * Проверяет правила leave-one-out: порог каждого правила считается по
+ * таргетам без проверяемого. Правило, которое не обобщается, здесь
+ * видно сразу — например, кластеры тела (Г2) держатся не на всех.
+ */
+/** Человеческие формулировки правил для отчёта. */
+const RULE_DESCRIPTIONS: Record<string, string> = {
+  bodySweepDown: 'тело свипует вниз: медиана freqStart/freqBase ≥ 1',
+  upperSweepFlat:
+    'верх и клик без свипа: медиана ≤ max(остальные)·1.05',
+  nonHarmonic:
+    'спектр негармоничен: доля кратных ≤ max(остальные)+0.02',
+  energyHierarchy:
+    'топ-3 по энергии: доля ≥ min(остальные), частота ≤ max(остальные)',
+  bodyClusters:
+    'под-кластеры тела: 2–4 кластера шириной ≤ 20 % (правило Г2)',
+};
+
+export function evaluateHoldoutRules(
+  targets: HoldoutTarget[],
+): HoldoutRuleResult[] {
+  const results: HoldoutRuleResult[] = [
+    'bodySweepDown',
+    'upperSweepFlat',
+    'nonHarmonic',
+    'energyHierarchy',
+    'bodyClusters',
+  ].map((name) => ({
+    name,
+    description: RULE_DESCRIPTIONS[name] ?? name,
+    heldOutPassed: 0,
+    targets: targets.length,
+    details: [],
+  }));
+  const [body, upper, nonHarmonic, energy, clusters] = results;
+
+  for (const heldOut of targets) {
+    const others = targets.filter((t) => t.slug !== heldOut.slug);
+    const values = (
+      pick: (m: LawMetrics) => number | null,
+    ): number[] =>
+      others
+        .map((t) => pick(t.metrics))
+        .filter((v): v is number => v !== null);
+
+    const bodyValue = heldOut.metrics.bodySweepMedian;
+    if (bodyValue !== null && bodyValue >= 1) {
+      body!.heldOutPassed += 1;
+    }
+    body!.details.push(
+      `${heldOut.slug}: ${bodyValue?.toFixed(3) ?? '—'}`,
+    );
+
+    const upperValue = heldOut.metrics.upperSweepMedian;
+    const upperMax = Math.max(...values((m) => m.upperSweepMedian));
+    if (upperValue !== null && upperValue <= upperMax * 1.05) {
+      upper!.heldOutPassed += 1;
+    }
+    upper!.details.push(
+      `${heldOut.slug}: ${upperValue?.toFixed(3) ?? '—'} порог ${upperMax.toFixed(3)}`,
+    );
+
+    const near = heldOut.metrics.nearIntFraction;
+    const nearMax = Math.max(...values((m) => m.nearIntFraction));
+    if (near !== null && near <= nearMax + 0.02) {
+      nonHarmonic!.heldOutPassed += 1;
+    }
+    nonHarmonic!.details.push(
+      `${heldOut.slug}: ${near?.toFixed(3) ?? '—'} порог ${nearMax.toFixed(3)}`,
+    );
+
+    const share = heldOut.metrics.top3Share;
+    const maxFreq = heldOut.metrics.top3MaxFreq;
+    const shareMin = Math.min(...values((m) => m.top3Share));
+    const freqMax = Math.max(...values((m) => m.top3MaxFreq));
+    if (
+      share !== null &&
+      maxFreq !== null &&
+      share >= shareMin &&
+      maxFreq <= freqMax
+    ) {
+      energy!.heldOutPassed += 1;
+    }
+    energy!.details.push(
+      `${heldOut.slug}: доля ${share?.toFixed(3) ?? '—'} порог ${shareMin.toFixed(3)}`,
+    );
+
+    if (
+      heldOut.bodyClusters >= 2 &&
+      heldOut.bodyClusters <= 4 &&
+      (heldOut.bodyClusterSpread ?? 1) <= 0.2
+    ) {
+      clusters!.heldOutPassed += 1;
+    }
+    clusters!.details.push(
+      `${heldOut.slug}: ${heldOut.bodyClusters} кластеров`,
+    );
+  }
+  return results;
+}

@@ -15,6 +15,7 @@ import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   computeLawMetrics,
+  evaluateHoldoutRules,
   pooledBodyClusters,
   type LawMetrics,
   type LawOsc,
@@ -74,119 +75,9 @@ function medianField(
   );
 }
 
-/** Сводка по одному правилу на отложенных таргетах. */
-interface RuleReport {
-  name: string;
-  description: string;
-  heldOutPassed: number;
-  targets: number;
-  details: string[];
-}
-
-function evaluateRules(targets: TargetReport[]): RuleReport[] {
-  const rules: RuleReport[] = [
-    {
-      name: 'bodySweepDown',
-      description:
-        'тело свипует вниз: медиана freqStart/freqBase ≥ 1',
-      heldOutPassed: 0,
-      targets: targets.length,
-      details: [],
-    },
-    {
-      name: 'upperSweepFlat',
-      description:
-        'верх и клик без свипа: медиана ≤ max(остальные)·1.05',
-      heldOutPassed: 0,
-      targets: targets.length,
-      details: [],
-    },
-    {
-      name: 'nonHarmonic',
-      description:
-        'спектр негармоничен: доля кратных ≤ max(остальные)+0.02',
-      heldOutPassed: 0,
-      targets: targets.length,
-      details: [],
-    },
-    {
-      name: 'energyHierarchy',
-      description:
-        'топ-3 по энергии: доля ≥ min(остальные), частота ≤ max(остальные)',
-      heldOutPassed: 0,
-      targets: targets.length,
-      details: [],
-    },
-    {
-      name: 'bodyClusters',
-      description:
-        'под-кластеры тела: 2–4 кластера шириной ≤ 20 % (правило Г2)',
-      heldOutPassed: 0,
-      targets: targets.length,
-      details: [],
-    },
-  ];
-
-  for (const heldOut of targets) {
-    const others = targets.filter((t) => t.slug !== heldOut.slug);
-    const vals = (pick: (m: LawMetrics) => number | null): number[] =>
-      others
-        .map((t) => pick(t.metrics))
-        .filter((v): v is number => v !== null);
-
-    const body = heldOut.metrics.bodySweepMedian;
-    const bodyOk = body !== null && body >= 1;
-    if (bodyOk) rules[0]!.heldOutPassed += 1;
-    rules[0]!.details.push(
-      `${heldOut.slug}: ${body?.toFixed(3) ?? '—'}`,
-    );
-
-    const upper = heldOut.metrics.upperSweepMedian;
-    const upperMax = Math.max(...vals((m) => m.upperSweepMedian));
-    const upperOk = upper !== null && upper <= upperMax * 1.05;
-    if (upperOk) rules[1]!.heldOutPassed += 1;
-    rules[1]!.details.push(
-      `${heldOut.slug}: ${upper?.toFixed(3) ?? '—'} при пороге ${upperMax.toFixed(3)}`,
-    );
-
-    const near = heldOut.metrics.nearIntFraction;
-    const nearMax = Math.max(...vals((m) => m.nearIntFraction));
-    const nearOk = near !== null && near <= nearMax + 0.02;
-    if (nearOk) rules[2]!.heldOutPassed += 1;
-    rules[2]!.details.push(
-      `${heldOut.slug}: ${near?.toFixed(3) ?? '—'} при пороге ${nearMax.toFixed(3)}`,
-    );
-
-    const share = heldOut.metrics.top3Share;
-    const maxFreq = heldOut.metrics.top3MaxFreq;
-    const shareMin = Math.min(...vals((m) => m.top3Share));
-    const freqMax = Math.max(...vals((m) => m.top3MaxFreq));
-    const energyOk =
-      share !== null &&
-      maxFreq !== null &&
-      share >= shareMin &&
-      maxFreq <= freqMax;
-    if (energyOk) rules[3]!.heldOutPassed += 1;
-    rules[3]!.details.push(
-      `${heldOut.slug}: доля ${share?.toFixed(3) ?? '—'} (порог ${shareMin.toFixed(3)}), ` +
-        `${maxFreq?.toFixed(0) ?? '—'} Гц (порог ${freqMax.toFixed(0)})`,
-    );
-
-    const clustersOk =
-      heldOut.bodyClusters >= 2 &&
-      heldOut.bodyClusters <= 4 &&
-      (heldOut.bodyClusterSpread ?? 1) <= 0.2;
-    if (clustersOk) rules[4]!.heldOutPassed += 1;
-    rules[4]!.details.push(
-      `${heldOut.slug}: ${heldOut.bodyClusters} кластеров, разброс ${heldOut.bodyClusterSpread?.toFixed(3) ?? '—'}`,
-    );
-  }
-  return rules;
-}
-
 function buildMarkdown(
   targets: TargetReport[],
-  rules: RuleReport[],
+  rules: import('./law-metrics').HoldoutRuleResult[],
 ): string {
   const lines: string[] = [];
   lines.push('# Проверка кандидатов в закон (leave-one-out)');
@@ -286,7 +177,7 @@ async function main(): Promise<void> {
     });
   }
 
-  const rules = evaluateRules(targets);
+  const rules = evaluateHoldoutRules(targets);
   await writeJsonAtomic(join(datasetDir, 'law-report.json'), {
     targets,
     rules,
