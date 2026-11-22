@@ -1,7 +1,7 @@
 /**
  * Инспектор звука — «уши» для анализа WAV без прослушивания:
- * уровни, спектральные пики, центроид и плоскость по окнам,
- * сравнение двух файлов (глобально, по полосам и по времени).
+ * уровни, f0 тела, спад, спектральные пики, центроид и плоскость
+ * по окнам. Сравнивает два файла глобально, по полосам и по времени.
  *
  * Стоит на собственных модулях проекта (read-wav, fft, rms,
  * cancellation-assessment) — без внешних зависимостей. Решение по
@@ -19,6 +19,11 @@ import { evaluateSuppressionFromWaveform } from './optimize/evaluate';
 import { readWav } from './read-wav';
 import { calculateRMS } from './rms';
 import { compareWaveformBands } from './waveform-bands';
+import {
+  compareCharacter,
+  measureCharacter,
+  type CharacterMetrics,
+} from './character-metrics';
 
 /** Аргументы командной строки инспектора. */
 interface CliArgs {
@@ -42,6 +47,7 @@ interface FileReport {
   rms: number;
   peak: number;
   crestDb: number;
+  character: CharacterMetrics;
   peaks: { frequency: number; magnitude: number }[];
   windows: WindowStats[];
 }
@@ -163,7 +169,14 @@ function analyzeWindow(
   };
 }
 
-/** Собирает полный разбор файла: уровни, пики, окна. */
+/**
+ * Собирает полный разбор файла: уровни, f0 тела, спад, пики и окна.
+ *
+ * @param path - Путь к WAV-файлу
+ * @param args - Число спектральных пиков и длительность окна
+ * @returns Метрики файла для печати отчёта
+ * @throws Error если WAV не читается или не проходит проверки формата
+ */
 function analyzeFile(path: string, args: CliArgs): FileReport {
   const wav = readWav(path);
   const n = wav.samples.length;
@@ -201,6 +214,7 @@ function analyzeFile(path: string, args: CliArgs): FileReport {
     rms,
     peak,
     crestDb,
+    character: measureCharacter(wav.samples, wav.sampleRate),
     peaks,
     windows,
   };
@@ -213,6 +227,16 @@ function printFileReport(path: string, report: FileReport): void {
     `  длительность ${report.durationSec.toFixed(3)}с, ` +
       `RMS ${report.rms.toFixed(4)}, пик ${report.peak.toFixed(4)}, ` +
       `крест-фактор ${report.crestDb.toFixed(1)} дБ`,
+  );
+  const f0 = report.character.bodyF0Hz;
+  const f0Correlation = report.character.bodyF0Correlation;
+  const decay = report.character.decayDb20Sec;
+  const decayPeak = report.character.decayPeakTimeSec;
+  console.log(
+    `  Характер: f0 тела ${f0 === null ? '—' : `${f0.toFixed(2)} Гц`}, ` +
+      `корреляция ${f0Correlation === null ? '—' : f0Correlation.toFixed(3)}, ` +
+      `спад −20 дБ ${decay === null ? '—' : `${decay.toFixed(4)} с`}, ` +
+      `пик спада ${decayPeak === null ? '—' : `${decayPeak.toFixed(4)} с`}`,
   );
   console.log('  Топ пиков:');
   const maxMag = Math.max(
@@ -253,8 +277,13 @@ function bandEnergy(
 }
 
 /**
- * Сравнивает b против a: глобальный suppression и остаток по
- * полосам (доля энергии остатка к энергии эталона в полосе).
+ * Печатает сравнение B с A: suppression, разницу f0 и спада,
+ * энергию остатка и баланс полос по времени.
+ *
+ * @param pathA - Путь к эталонному WAV
+ * @param pathB - Путь к проверяемому WAV
+ * @throws Error если файлы не читаются или их частоты дискретизации
+ *   различаются
  */
 function compareFiles(pathA: string, pathB: string): void {
   const a = readWav(pathA);
@@ -277,6 +306,17 @@ function compareFiles(pathA: string, pathB: string): void {
   console.log(`B (проверяемый): ${pathB}`);
   console.log(
     `  globalSuppression B против A: ${global.toFixed(2)}%`,
+  );
+  const character = compareCharacter(
+    a.samples,
+    b.samples,
+    a.sampleRate,
+  );
+  const f0Delta = character.bodyF0DeltaCents;
+  const decayDelta = character.decayDb20DeltaSec;
+  console.log(
+    `  Характер B−A: f0 ${f0Delta === null ? '—' : `${f0Delta.toFixed(2)} центов`}, ` +
+      `спад −20 дБ ${decayDelta === null ? '—' : `${(decayDelta * 1000).toFixed(2)} мс`}`,
   );
 
   const residual = new Float64Array(n);
