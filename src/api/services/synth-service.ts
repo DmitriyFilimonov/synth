@@ -10,17 +10,22 @@ import {
   MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
   SAMPLE_RATE,
 } from '../../consts';
-import { matchWithWorker } from '../../match-worker';
-import { dualWindowInitVector } from '../../dual-window-init-vector';
-import { mapVectorToSynthConfig } from '../../vector-to-synth-config';
 import {
-  enhancePatch,
-  limitPeak,
-  type PriorsFile,
-} from '../../enhance/engine';
+  matchWithWorker,
+  type MatchWorkerProgress,
+  type MatchWorkerResult,
+} from '../../match-worker';
+import { dualWindowInitVector } from '../../dual-window-init-vector';
+import { mapSynthConfigToVector } from '../../synth-config-to-vector';
+import { mapVectorToSynthConfig } from '../../vector-to-synth-config';
+import { enhancePatch, type PriorsFile } from '../../enhance/engine';
 import { correctPatch } from '../../enhance/correct';
 import { type TransformAudit } from '../../enhance/transforms';
 import { DEFAULT_IDENTIFIABILITY } from '../../enhance/defaults';
+import {
+  createRefinementPlan,
+  limitRefinementPeak,
+} from '../../enhance/refinement';
 import { evaluateSuppressionFromWaveform } from '../../optimize/evaluate';
 import { renderSamples } from '../../dataset/shared';
 import { readWav } from '../../read-wav';
@@ -421,10 +426,350 @@ async function loadPriors(
   }
 }
 
+type EnhanceProgressEntry = Omit<MatchWorkerProgress, 'bestVector'>;
+
 /**
- * Гоняет job улучшения: match таргета, затем движок режима A,
- * затем синтез улучшенного патча в result WAV. Артефакты match
- * (патч и suppression) сохраняются в полях job'а.
+ * Создаёт колбэки прогресса match и C4 с общей историей job.
+ *
+ * @param jobId - Идентификатор job, чей статус обновляется
+ * @param refinementOffset - Смещение номеров итераций C4 в общей
+ *   истории
+ * @returns Общую историю и отдельные колбэки для match и C4
+ * @remarks История пополняется на каждый вызов, а запись статуса
+ *   ограничена интервалом в одну секунду. Match сохраняет последний
+ *   bestVector между обновлениями; C4 передаёт только собственный
+ *   вектор. Ошибки записи статуса игнорируются, чтобы не остановить
+ *   вычисления.
+ */
+function createEnhanceJobProgressReporter(
+  jobId: string,
+  refinementOffset: number,
+): {
+  history: EnhanceProgressEntry[];
+  onMatchProgress: (entry: MatchWorkerProgress) => void;
+  onRefinementProgress: (entry: MatchWorkerProgress) => void;
+} {
+  const history: EnhanceProgressEntry[] = [];
+  const updateThrottleMs = 1000;
+  let lastUpdateMs = 0;
+  let latestBestVector: number[] | null = null;
+
+  const report = (
+    entry: MatchWorkerProgress,
+    bestVector: readonly number[] | undefined,
+  ): void => {
+    const now = Date.now();
+    if (now - lastUpdateMs < updateThrottleMs) {
+      return;
+    }
+    lastUpdateMs = now;
+    const update: Parameters<typeof updateJobStatus>[2] = {
+      progress: [...history],
+      suppressionPercent: entry.suppressionPercent,
+    };
+    if (bestVector !== undefined) {
+      update.bestVector = [...bestVector];
+      update.synthConfig = mapVectorToSynthConfig([...bestVector]);
+    }
+    // Ошибка записи статуса не должна останавливать синтез.
+    void updateJobStatus(jobId, 'running', update).catch(() => {});
+  };
+
+  return {
+    history,
+    onMatchProgress: (entry): void => {
+      const { bestVector, ...historyEntry } = entry;
+      history.push(historyEntry);
+      if (bestVector !== undefined) {
+        latestBestVector = [...bestVector];
+      }
+      report(entry, latestBestVector ?? undefined);
+    },
+    onRefinementProgress: (entry): void => {
+      history.push({
+        iteration: refinementOffset + entry.iteration,
+        suppressionPercent: entry.suppressionPercent,
+      });
+      // C4 не использует последний bestVector основного match.
+      report(entry, entry.bestVector);
+    },
+  };
+}
+
+/**
+ * Читает таргет, строит init-вектор и запускает основной match.
+ *
+ * @param args - Пути к WAV, бюджет, сид, модель фазы и колбэк прогресса
+ * @returns Разобранный таргет и полный результат worker-потока
+ * @throws Error если входной WAV не читается или worker завершает match
+ *   с ошибкой
+ * @remarks Init-вектор строится dualWindowInitVector с SAMPLE_RATE;
+ *   worker пишет основной match во временный tempOutput.
+ */
+async function matchEnhancementTarget(args: {
+  inputPath: string;
+  tempOutput: string;
+  numOscillators: number;
+  maxIterations: number;
+  seed?: number;
+  phaseModel?: PhaseModel;
+  onProgress: (entry: MatchWorkerProgress) => void;
+}): Promise<{
+  targetWavData: ReturnType<typeof readWav>;
+  result: MatchWorkerResult;
+}> {
+  const targetWavData = readWav(args.inputPath);
+  const initialVector = dualWindowInitVector(
+    targetWavData.samples,
+    SAMPLE_RATE,
+    args.numOscillators,
+  );
+  const result = await matchWithWorker({
+    targetWavPath: args.inputPath,
+    outputWavPath: args.tempOutput,
+    initialVector,
+    sampleRate: SAMPLE_RATE,
+    maxIterations: args.maxIterations,
+    seed: args.seed,
+    phaseModel: args.phaseModel,
+    onProgress: args.onProgress,
+  });
+  return { targetWavData, result };
+}
+
+/**
+ * Исправляет анкеры режимом B и заполняет свободные параметры режимом
+ * A по приорам.
+ *
+ * @param args - Патч основного match, сила улучшения и модель фазы
+ * @returns Улучшенный патч и объединённый журнал обеих трансформаций
+ * @remarks Путь к приорам задаёт ENHANCE_PRIORS_PATH; по умолчанию
+ *   используется datasets/reference-4/priors.json. Если файл отсутствует
+ *   или не читается, функция возвращает исходный патч с пустым журналом.
+ *   Перенос множителей тела отключён, пока закон качества не доказан.
+ */
+async function enhanceMatchedPatch(args: {
+  patch: ArgCreateSynth;
+  enhancementStrength: number;
+  phaseModel?: PhaseModel;
+}): Promise<{ patch: ArgCreateSynth; audits: TransformAudit[] }> {
+  const priorsPath =
+    process.env.ENHANCE_PRIORS_PATH ??
+    join(process.cwd(), 'datasets', 'reference-4', 'priors.json');
+  const priors = await loadPriors(priorsPath);
+  if (priors === null) {
+    return { patch: args.patch, audits: [] };
+  }
+  const corrected = correctPatch({
+    patch: args.patch,
+    priors,
+    strength: args.enhancementStrength,
+  });
+  const filled = enhancePatch({
+    patch: corrected.patch,
+    identifiability: DEFAULT_IDENTIFIABILITY,
+    priors,
+    strength: args.enhancementStrength,
+    phaseModel: args.phaseModel,
+    // Перенос множителей тела не доказан как закон (T17).
+    enrichBody: false,
+  });
+  return {
+    patch: filled.patch,
+    audits: [...corrected.audits, ...filled.audits],
+  };
+}
+
+/** Задаёт исходный патч, таргет и настройки одного прогона C4. */
+interface RefineEnhancedPatchArgs {
+  patch: ArgCreateSynth;
+  inputPath: string;
+  numSamples: number;
+  iterations: number;
+  seed?: number;
+  phaseModel?: PhaseModel;
+  onProgress: (entry: MatchWorkerProgress) => void;
+}
+
+/** Объединяет результат C4, его сэмплы и запись для журнала. */
+interface RefinedPatch {
+  patch: ArgCreateSynth;
+  samples: Int16Array;
+  audit: TransformAudit;
+}
+
+/**
+ * Доводит улучшенный патч к исходному WAV с ограничениями C4.
+ *
+ * @param args - Патч, путь к исходному WAV, длина, бюджет и колбэк
+ *   прогресса
+ * @returns Доведённый патч, его сэмплы и запись c4Refinement
+ * @throws Error если worker не завершает доводку успешно
+ * @remarks createRefinementPlan закрепляет анкеры и сохраняет флаги.
+ *   После worker функция применяет limitRefinementPeak и синтезирует
+ *   ровно numSamples сэмплов. Временный WAV удаляется даже при ошибке.
+ */
+async function refineEnhancedPatch(
+  args: RefineEnhancedPatchArgs,
+): Promise<RefinedPatch> {
+  const tempRefined = join(tmpdir(), `${randomUUID()}_ref.wav`);
+  try {
+    const refinement = createRefinementPlan(
+      args.patch,
+      DEFAULT_IDENTIFIABILITY,
+    );
+    const refined = await matchWithWorker({
+      targetWavPath: args.inputPath,
+      outputWavPath: tempRefined,
+      initialVector: refinement.initialVector,
+      sampleRate: SAMPLE_RATE,
+      maxIterations: args.iterations,
+      seed: args.seed,
+      phaseModel: args.phaseModel,
+      config: refinement.config,
+      onProgress: args.onProgress,
+    });
+    const peakLimit = limitRefinementPeak(
+      refined.synthConfig,
+      DEFAULT_IDENTIFIABILITY,
+      { phaseModel: args.phaseModel },
+    );
+    return {
+      patch: peakLimit.patch,
+      samples: renderSamples(
+        peakLimit.patch,
+        args.numSamples / SAMPLE_RATE,
+        { phaseModel: args.phaseModel },
+      ),
+      audit: {
+        name: 'c4Refinement',
+        detail: `Доводка к исходному WAV: бюджет ${args.iterations} итераций, анкеров ${refinement.config.frozenParameterIndices?.length ?? 0}; ${peakLimit.skipReason ?? 'после неё применён потолок пика'}`,
+      },
+    };
+  } finally {
+    await unlink(tempRefined).catch(() => {});
+  }
+}
+
+/**
+ * Рендерит улучшенный патч и при ненулевом бюджете запускает C4.
+ *
+ * @param args - Патч, журнал, исходный WAV, бюджет C4 и колбэк прогресса
+ * @returns Итоговый патч, сэмплы и журнал трансформаций
+ * @throws Error если запрошенная доводка завершается ошибкой
+ * @remarks При refineIterations <= 0 функция возвращает исходный
+ *   улучшенный патч и его сэмплы без новых записей. Иначе она заменяет
+ *   их результатом refineEnhancedPatch и добавляет аудит C4 в конец
+ *   журнала.
+ */
+async function renderAndRefineEnhancedPatch(args: {
+  patch: ArgCreateSynth;
+  audits: TransformAudit[];
+  inputPath: string;
+  numSamples: number;
+  refineIterations: number;
+  seed?: number;
+  phaseModel?: PhaseModel;
+  onProgress: (entry: MatchWorkerProgress) => void;
+}): Promise<{
+  patch: ArgCreateSynth;
+  samples: Int16Array;
+  audits: TransformAudit[];
+}> {
+  const samples = renderSamples(
+    args.patch,
+    args.numSamples / SAMPLE_RATE,
+    { phaseModel: args.phaseModel },
+  );
+  if (args.refineIterations <= 0) {
+    return {
+      patch: args.patch,
+      samples,
+      audits: args.audits,
+    };
+  }
+  const refined = await refineEnhancedPatch({
+    patch: args.patch,
+    inputPath: args.inputPath,
+    numSamples: args.numSamples,
+    iterations: args.refineIterations,
+    seed: args.seed,
+    phaseModel: args.phaseModel,
+    onProgress: args.onProgress,
+  });
+  return {
+    patch: refined.patch,
+    samples: refined.samples,
+    audits: [...args.audits, refined.audit],
+  };
+}
+
+/**
+ * Сохраняет отдельно чистый match и окончательный улучшенный WAV.
+ *
+ * @param jobId - Идентификатор job, определяющий пути артефактов
+ * @param tempOutput - Временный WAV основного match
+ * @param samples - Сэмплы окончательного улучшенного варианта
+ * @returns Промис, который завершается после записи обоих WAV
+ * @throws Error если копирование match или запись результата не удалась
+ * @remarks Основной match сохраняется рядом с результатом с суффиксом
+ *   _match.wav; итоговый WAV занимает стандартный путь _result.wav.
+ */
+async function writeEnhanceArtifacts(
+  jobId: string,
+  tempOutput: string,
+  samples: Int16Array,
+): Promise<void> {
+  const resultPath = getResultFilePath(jobId);
+  const matchPath = resultPath.replace(/_result\.wav$/, '_match.wav');
+  await copyFile(tempOutput, matchPath);
+  writeWav({
+    samples,
+    sampleRate: SAMPLE_RATE,
+    filePath: resultPath,
+  });
+}
+
+/**
+ * Считает global suppression улучшенного WAV против исходного таргета.
+ *
+ * @param samples - Сэмплы окончательного улучшенного варианта
+ * @param targetSamples - Сэмплы исходного таргета той же длины
+ * @returns Глобальный suppression в процентах либо null при ошибке
+ * @remarks Оценка не влияет на уже записанные артефакты: любое
+ *   исключение метрики превращается в null.
+ */
+function evaluateEnhanceGlobal(
+  samples: Int16Array,
+  targetSamples: Int16Array,
+): number | null {
+  try {
+    return evaluateSuppressionFromWaveform(
+      [...samples],
+      [...targetSamples],
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Выполняет job улучшения: подбирает патч по исходному WAV,
+ * исправляет и достраивает его по приорам, при необходимости
+ * запускает C4 и сохраняет артефакты и метрики в job.
+ *
+ * @param jobId - Идентификатор job улучшения
+ * @param numOscillators - Число осцилляторов в стартовом векторе match
+ * @param maxIterations - Бюджет итераций основного match
+ * @param inputPath - Путь к исходному WAV
+ * @param enhancementStrength - Сила исправлений и достраивания от 0 до 1
+ * @param seed - Сид ГПСЧ для match и C4; без него действует дефолт CD
+ * @param refineIterations - Бюджет C4; 0 пропускает доводку
+ * @param phaseModel - Модель фазы синтеза; без неё действует legacy
+ * @returns Промис, который завершается после обработки job
+ * @remarks C4 стартует с улучшенного патча и подгоняет свободные
+ *   параметры к исходному WAV. Анкеры и флаги on/off сохраняются.
+ *   Патч и global основного match остаются в отдельных полях job.
  */
 async function runEnhanceJob(
   jobId: string,
@@ -437,192 +782,57 @@ async function runEnhanceJob(
   phaseModel?: PhaseModel,
 ): Promise<void> {
   const tempOutput = join(tmpdir(), `${randomUUID()}_enhance.wav`);
-  const history: {
-    iteration: number;
-    suppressionPercent: number;
-  }[] = [];
-  let lastUpdateMs = 0;
-  const UPDATE_THROTTLE_MS = 1000;
-  let latestBestVector: number[] | null = null;
+  const reporter = createEnhanceJobProgressReporter(
+    jobId,
+    maxIterations,
+  );
 
   try {
     await updateJobStatus(jobId, 'running');
-
-    const targetWavData = readWav(inputPath);
-    const initialVector = dualWindowInitVector(
-      targetWavData.samples,
-      SAMPLE_RATE,
+    const { targetWavData, result } = await matchEnhancementTarget({
+      inputPath,
+      tempOutput,
       numOscillators,
-    );
-
-    const result = await matchWithWorker({
-      targetWavPath: inputPath,
-      outputWavPath: tempOutput,
-      initialVector,
-      sampleRate: SAMPLE_RATE,
       maxIterations,
       seed,
       phaseModel,
-      onProgress: (entry) => {
-        const { bestVector: entryVector, ...historyEntry } = entry;
-        history.push(historyEntry);
-        if (entryVector !== undefined) {
-          latestBestVector = [...entryVector];
-        }
-        // Промежуточный статус раз в секунду: UI показывает живой
-        // прогресс. Ошибка записи не должна ронять оптимизацию,
-        // поэтому обновление fire-and-forget.
-        const now = Date.now();
-        if (now - lastUpdateMs >= UPDATE_THROTTLE_MS) {
-          lastUpdateMs = now;
-          const update: Parameters<typeof updateJobStatus>[2] = {
-            progress: [...history],
-            suppressionPercent: entry.suppressionPercent,
-          };
-          if (latestBestVector !== null) {
-            update.bestVector = latestBestVector;
-            update.synthConfig = mapVectorToSynthConfig([
-              ...latestBestVector,
-            ]);
-          }
-          void updateJobStatus(jobId, 'running', update);
-        }
-      },
+      onProgress: reporter.onMatchProgress,
+    });
+    const enhanced = await enhanceMatchedPatch({
+      patch: result.synthConfig,
+      enhancementStrength,
+      phaseModel,
+    });
+    const final = await renderAndRefineEnhancedPatch({
+      patch: enhanced.patch,
+      audits: enhanced.audits,
+      inputPath,
+      numSamples: targetWavData.samples.length,
+      refineIterations,
+      seed,
+      phaseModel,
+      onProgress: reporter.onRefinementProgress,
     });
 
-    const priorsPath =
-      process.env.ENHANCE_PRIORS_PATH ??
-      join(process.cwd(), 'datasets', 'reference-4', 'priors.json');
-    const priors = await loadPriors(priorsPath);
-
-    // Режим B исправляет анкерные параметры вне вилок семейства,
-    // режим A заполняет свободные — в таком порядке, чтобы коррекция
-    // не переписывала достроенное.
-    let enhanced: { patch: ArgCreateSynth; audits: TransformAudit[] };
-    if (priors === null) {
-      enhanced = { patch: result.synthConfig, audits: [] };
-    } else {
-      const corrected = correctPatch({
-        patch: result.synthConfig,
-        priors,
-        strength: enhancementStrength,
-      });
-      const filled = enhancePatch({
-        patch: corrected.patch,
-        identifiability: DEFAULT_IDENTIFIABILITY,
-        priors,
-        strength: enhancementStrength,
-        phaseModel,
-        // Перенос тела выключен: последовательность множителей,
-        // привязанная к фундаментальной, законом не доказана (T17).
-        enrichBody: false,
-      });
-      enhanced = {
-        patch: filled.patch,
-        audits: [...corrected.audits, ...filled.audits],
-      };
-    }
-
-    const enhancedSamples = renderSamples(
-      enhanced.patch,
-      targetWavData.samples.length / SAMPLE_RATE,
-      { phaseModel },
+    await writeEnhanceArtifacts(jobId, tempOutput, final.samples);
+    const enhanceGlobal = evaluateEnhanceGlobal(
+      final.samples,
+      targetWavData.samples,
     );
-
-    // Доводка: консолидируем улучшенную структуру коротким вторым
-    // match по улучшенному сигналу — фазы и уровни добавленного
-    // встают на место. Мишень доводки — улучшенный сигнал, а не
-    // оригинал: мы сознательно улучшаем, а не возвращаемся.
-    let finalPatch = enhanced.patch;
-    let finalSamples: Int16Array = enhancedSamples;
-    if (refineIterations > 0) {
-      const tempEnhanced = join(tmpdir(), `${randomUUID()}_enh.wav`);
-      const tempRefined = join(tmpdir(), `${randomUUID()}_ref.wav`);
-      try {
-        writeWav({
-          samples: enhancedSamples,
-          sampleRate: SAMPLE_RATE,
-          filePath: tempEnhanced,
-        });
-        const enhancedWav = readWav(tempEnhanced);
-        const refineInit = dualWindowInitVector(
-          enhancedWav.samples,
-          SAMPLE_RATE,
-          numOscillators,
-        );
-        const refined = await matchWithWorker({
-          targetWavPath: tempEnhanced,
-          outputWavPath: tempRefined,
-          initialVector: refineInit,
-          sampleRate: SAMPLE_RATE,
-          maxIterations: refineIterations,
-          seed,
-          phaseModel,
-          onProgress: (entry) => {
-            history.push({
-              iteration: maxIterations + entry.iteration,
-              suppressionPercent: entry.suppressionPercent,
-            });
-            const now = Date.now();
-            if (now - lastUpdateMs >= UPDATE_THROTTLE_MS) {
-              lastUpdateMs = now;
-              void updateJobStatus(jobId, 'running', {
-                progress: [...history],
-                suppressionPercent: entry.suppressionPercent,
-              }).catch(() => {});
-            }
-          },
-        });
-        finalPatch = limitPeak(refined.synthConfig, { phaseModel });
-        finalSamples = renderSamples(
-          finalPatch,
-          targetWavData.samples.length / SAMPLE_RATE,
-          { phaseModel },
-        );
-      } finally {
-        await unlink(tempEnhanced).catch(() => {});
-        await unlink(tempRefined).catch(() => {});
-      }
-    }
-
-    const resultPath = getResultFilePath(jobId);
-    // Сохраняем чистый match отдельным артефактом: для A/B/C
-    // прослушивания (оригинал / match / улучшенное) — иначе след
-    // улучшения не отличить на слух от несовершенства мэтчинга.
-    const matchPath = resultPath.replace(
-      /_result\.wav$/,
-      '_match.wav',
-    );
-    await copyFile(tempOutput, matchPath);
-    writeWav({
-      samples: finalSamples,
-      sampleRate: SAMPLE_RATE,
-      filePath: resultPath,
-    });
-
-    let enhanceGlobal: number | null = null;
-    try {
-      enhanceGlobal = evaluateSuppressionFromWaveform(
-        [...finalSamples],
-        [...targetWavData.samples],
-      );
-    } catch {
-      enhanceGlobal = null;
-    }
-
     await updateJobStatus(jobId, 'completed', {
-      progress: history,
+      progress: reporter.history,
       suppressionPercent:
-        history.length > 0
-          ? (history[history.length - 1]?.suppressionPercent ?? 0)
+        reporter.history.length > 0
+          ? (reporter.history[reporter.history.length - 1]
+              ?.suppressionPercent ?? 0)
           : 0,
       globalSuppressionPercent:
         result.globalSuppressionPercent ?? null,
       targetInfo: result.targetInfo,
-      bestVector: result.bestVector,
-      synthConfig: finalPatch,
+      bestVector: mapSynthConfigToVector(final.patch),
+      synthConfig: final.patch,
       matchSynthConfig: result.synthConfig,
-      enhanceAudit: enhanced.audits,
+      enhanceAudit: final.audits,
       enhanceGlobalSuppressionPercent: enhanceGlobal,
     });
   } catch (error) {

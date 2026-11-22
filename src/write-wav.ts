@@ -6,6 +6,15 @@ interface ArgWriteWav {
   filePath: string;
 }
 
+/**
+ * Записывает сэмплы Int16Array в монофонический 16-битный PCM WAV.
+ *
+ * @param arg - Сэмплы, частота дискретизации и путь назначения
+ * @returns Ничего; синхронно записывает файл
+ * @throws Error если файл не удалось создать или записать
+ * @remarks DataView использует смещение и длину выделенного Buffer,
+ *   чтобы заголовок и сэмплы попадали именно в этот буфер.
+ */
 export const writeWav = ({
   samples,
   sampleRate,
@@ -16,7 +25,11 @@ export const writeWav = ({
   const bufferSize = 44 + dataSize;
 
   const buffer = Buffer.alloc(bufferSize);
-  const view = new DataView(buffer.buffer);
+  const view = new DataView(
+    buffer.buffer,
+    buffer.byteOffset,
+    buffer.byteLength,
+  );
 
   view.setUint32(0, 0x52494646, false);
   view.setUint32(4, 36 + dataSize, true);

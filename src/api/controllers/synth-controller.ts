@@ -303,6 +303,18 @@ export const createMatchJobJsonHandler = async (
   }
 };
 
+/**
+ * Создаёт асинхронный job улучшения из бинарного WAV-запроса.
+ *
+ * @param req - Запрос с WAV в теле и настройками match, C4 и фазы в
+ *   query
+ * @param res - Ответ с идентификатором созданного job
+ * @returns Ничего; отправляет 202 после создания job
+ * @remarks enhancementStrength ограничивается диапазоном [0, 1].
+ *   refineIterations принимается только как безопасное неотрицательное
+ *   целое. Неверные refineIterations и phaseModel дают 400, остальные
+ *   ошибки создания job — 500.
+ */
 export const createEnhanceJobHandler = async (
   req: Request,
   res: Response,
@@ -334,13 +346,22 @@ export const createEnhanceJobHandler = async (
     const seedInt = parseInt(queryParams.seed ?? '', 10);
     const seed = Number.isNaN(seedInt) ? undefined : seedInt;
     const phaseModel = parsePhaseModel(queryParams.phaseModel);
-    const refineInt = parseInt(
-      queryParams.refineIterations ?? '',
-      10,
-    );
-    const refineIterations = Number.isNaN(refineInt)
-      ? undefined
-      : refineInt;
+    const refineRaw = queryParams.refineIterations;
+    if (refineRaw !== undefined && !/^\d+$/.test(refineRaw)) {
+      throw new Error(
+        'refineIterations must be a non-negative integer',
+      );
+    }
+    const refineIterations =
+      refineRaw === undefined ? undefined : Number(refineRaw);
+    if (
+      refineIterations !== undefined &&
+      !Number.isSafeInteger(refineIterations)
+    ) {
+      throw new Error(
+        'refineIterations must be a non-negative integer',
+      );
+    }
 
     const jobId = await enhanceWavWithJob(
       req.body,
@@ -357,8 +378,12 @@ export const createEnhanceJobHandler = async (
   } catch (error) {
     const message =
       error instanceof Error ? error.message : 'Unknown error';
-    // Неверная модель фазы — ошибка клиента, а не сервера.
-    const status = message.startsWith('phaseModel') ? 400 : 500;
+    // Неверные параметры запроса — ошибка клиента, а не сервера.
+    const status =
+      message.startsWith('phaseModel') ||
+      message.startsWith('refineIterations')
+        ? 400
+        : 500;
     res.status(status).json({ error: message });
   }
 };

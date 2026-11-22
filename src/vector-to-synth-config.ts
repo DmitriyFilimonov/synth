@@ -5,6 +5,7 @@ import {
   oscConfigNormales as oscNormales,
   ampEnvConfigNormales as ampEnvNormales,
 } from './synth';
+import { VECTOR_PARAM_OFFSETS as OFFSET } from './vector-param-offsets';
 
 type VectorToSynthConfig = (vector: number[]) => ArgCreateSynth;
 
@@ -20,6 +21,14 @@ const denormalize = (arg: {
   return clipped * (arg.max - arg.min) + arg.min;
 };
 
+/**
+ * Денормализует вектор оптимизатора в полную конфигурацию синтезатора.
+ *
+ * @param vector - Нормализованные параметры осцилляторов
+ * @returns Конфигурация ровно с MAX_OSCILLATORS осцилляторами
+ * @remarks Недостающие слоты читаются как нули, поэтому короткий вектор
+ *   дополняется выключенными осцилляторами.
+ */
 export const mapVectorToSynthConfig: VectorToSynthConfig = (
   vector,
 ) => {
@@ -32,6 +41,17 @@ export const mapVectorToSynthConfig: VectorToSynthConfig = (
   return { oscillators };
 };
 
+/**
+ * Денормализует один слот вектора в настройки осциллятора и огибающей.
+ *
+ * @param vector - Общий нормализованный вектор оптимизатора
+ * @param oscIndex - Нулевой индекс нужного осциллятора
+ * @returns Параметры osc и ampEnv в единицах конфигурации синтезатора
+ * @remarks Отсутствующие значения заменяются нулём, непрерывные
+ *   параметры ограничиваются диапазоном [0, 1] перед денормализацией,
+ *   а флаг on включается при значении от 0.5. Позиции берутся из
+ *   VECTOR_PARAM_OFFSETS.
+ */
 export const mapVectorToSynthConfigForOsc = (
   vector: readonly number[],
   oscIndex: number,
@@ -54,16 +74,18 @@ export const mapVectorToSynthConfigForOsc = (
   const i = oscIndex;
   const offset = i * OSC_PARAMS_PER_OSCILLATOR;
 
-  const on = vector[offset] ?? 0;
-  const freqBaseNorm = vector[offset + 1] ?? 0;
-  const freqStartNorm = vector[offset + 2] ?? 0;
-  const slopeNorm = vector[offset + 3] ?? 0;
-  const freqEnvDurationNorm = vector[offset + 4] ?? 0;
-  const phaseNorm = vector[offset + 5] ?? 0;
-  const ampEnvDurationNorm = vector[offset + 6] ?? 0;
-  const endLevelNorm = vector[offset + 7] ?? 0;
-  const ampEnvSlopeNorm = vector[offset + 8] ?? 0;
-  const ampEnvStartLevelNorm = vector[offset + 9] ?? 0;
+  const on = vector[offset + OFFSET.flag] ?? 0;
+  const freqBaseNorm = vector[offset + OFFSET.freqBase] ?? 0;
+  const freqStartNorm = vector[offset + OFFSET.freqStart] ?? 0;
+  const slopeNorm = vector[offset + OFFSET.slope] ?? 0;
+  const freqEnvDurationNorm = vector[offset + OFFSET.duration] ?? 0;
+  const phaseNorm = vector[offset + OFFSET.phase] ?? 0;
+  const ampEnvDurationNorm =
+    vector[offset + OFFSET.ampEnvDuration] ?? 0;
+  const endLevelNorm = vector[offset + OFFSET.endLevel] ?? 0;
+  const ampEnvSlopeNorm = vector[offset + OFFSET.ampEnvSlope] ?? 0;
+  const ampEnvStartLevelNorm =
+    vector[offset + OFFSET.startLevel] ?? 0;
 
   const onBool = on >= 0.5;
 

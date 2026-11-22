@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { existsSync } from 'node:fs';
 import type { ArgCreateSynth, PhaseModel } from './synth';
+import type { CoordinateDescentConfig } from './optimize/coordinate-descent';
 
 /** Точка истории прогресса оптимизации от worker'а. */
 export interface MatchWorkerProgress {
@@ -55,6 +56,13 @@ interface MatchWorkerArgs {
   /** Модель фазы; без неё — legacy. */
   phaseModel?: PhaseModel;
   /**
+   * Переопределения CD, включая анкеры и сохранение флагов для C4.
+   * Без этого поля worker ведёт обычный match. Пустой список
+   * frozenParameterIndices и preserveOscillatorFlags=false сохраняют
+   * прежнее поведение оптимизатора.
+   */
+  config?: Partial<CoordinateDescentConfig>;
+  /**
    * Куда писать логи worker'а. По умолчанию — в stdout процесса;
    * батч-раннеры перенаправляют в файл прогона, чтобы не шуметь.
    */
@@ -88,12 +96,17 @@ function resolveWorkerPath(): {
  * промис с результатом прогона.
  *
  * @param arg - Параметры прогона: таргет, init-вектор, сид,
- *   колбэки логов и прогресса
- * @returns История прогресса, метрики suppression, лучший
- *   вектор и конфиг синтезатора
- * @remarks Промис отклоняется при ошибке worker'а и при
- *   ненулевом коде его выхода. Сообщения worker'а с типом `log`
- *   уходят в `arg.onLog`, а без него — в stdout процесса.
+ *   конфиг CD, колбэки логов и прогресса
+ * @returns Промис с историей, метриками suppression, лучшим вектором
+ *   и конфигом синтезатора
+ * @throws Error Отклоняет промис при ошибке worker'а или при его
+ *   выходе без результата, включая выход с нулевым кодом
+ * @remarks Сообщения worker'а с типом `log` уходят в `arg.onLog`, а без
+ *   него — в stdout процесса. Поле `arg.config` передаётся в coordinate
+ *   descent. После `done` или `error` функция завершает worker и
+ *   игнорирует повторные события. Без `arg.config`, с пустым списком
+ *   анкеров и preserveOscillatorFlags=false worker выполняет обычный
+ *   match без изменений.
  */
 export function matchWithWorker(
   arg: MatchWorkerArgs,
@@ -104,6 +117,10 @@ export function matchWithWorker(
       workerData: {},
       ...(execArgv ? { execArgv } : {}),
     });
+    let settled = false;
+    const stopWorker = (): void => {
+      void worker.terminate().catch(() => {});
+    };
 
     worker.on('message', (msg: { type: string; data: unknown }) => {
       if (msg.type === 'log') {
@@ -116,19 +133,41 @@ export function matchWithWorker(
       } else if (msg.type === 'progress') {
         arg.onProgress?.(msg.data as MatchWorkerProgress);
       } else if (msg.type === 'done') {
+        if (settled) {
+          return;
+        }
+        settled = true;
         resolveFn(msg.data as MatchWorkerResult);
+        stopWorker();
       } else if (msg.type === 'error') {
+        if (settled) {
+          return;
+        }
+        settled = true;
         rejectFn(new Error(msg.data as string));
+        stopWorker();
       }
     });
 
     worker.on('error', (err) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       rejectFn(err instanceof Error ? err : new Error(String(err)));
+      stopWorker();
     });
 
     worker.on('exit', (code) => {
-      if (code !== 0) {
-        rejectFn(new Error(`Worker stopped with exit code ${code}`));
+      if (!settled) {
+        settled = true;
+        rejectFn(
+          new Error(
+            code === 0
+              ? 'Worker exited without a result'
+              : `Worker stopped with exit code ${code}`,
+          ),
+        );
       }
     });
 
@@ -143,6 +182,7 @@ export function matchWithWorker(
       stepDecayFactor: arg.stepDecayFactor,
       seed: arg.seed,
       phaseModel: arg.phaseModel,
+      config: arg.config,
     });
   });
 }

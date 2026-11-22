@@ -9,6 +9,7 @@ import { attackWeighting } from './optimize/evaluate';
 import { mapVectorToSynthConfig } from './vector-to-synth-config';
 import { readWav } from './read-wav';
 import type { PhaseModel } from './synth';
+import type { CoordinateDescentConfig } from './optimize/coordinate-descent';
 
 if (!parentPort) {
   throw new Error('Must run as worker thread');
@@ -79,12 +80,17 @@ interface WorkerMessage {
   seed?: number;
   /** Модель фазы; без неё — legacy, поведение прежних прогонов. */
   phaseModel?: PhaseModel;
+  /** Дополнительные параметры CD, включая анкеры для C4. */
+  config?: Partial<CoordinateDescentConfig>;
 }
 
 parentPort.on('message', (msg: WorkerMessage) => {
   try {
     const targetWav = readWav(msg.targetWavPath);
     const targetSignal = [...targetWav.samples];
+    const effectiveSeed = msg.seed ?? msg.config?.seed;
+    const effectivePhaseModel =
+      msg.phaseModel ?? msg.config?.phaseModel;
 
     // Вес атаки задаётся на job. Каждый job поднимает свой worker-
     // поток, поэтому модульное состояние метрики здесь изолировано и
@@ -107,9 +113,12 @@ parentPort.on('message', (msg: WorkerMessage) => {
       // Собираем config условно: spread `...DEFAULT, ...config`
       // в coordinateDescent затирал бы дефолт значением undefined.
       config: {
-        ...(typeof msg.seed === 'number' ? { seed: msg.seed } : {}),
-        ...(msg.phaseModel !== undefined
-          ? { phaseModel: msg.phaseModel }
+        ...msg.config,
+        ...(typeof effectiveSeed === 'number'
+          ? { seed: effectiveSeed }
+          : {}),
+        ...(effectivePhaseModel !== undefined
+          ? { phaseModel: effectivePhaseModel }
           : {}),
       },
       onProgress: (entry) => {
@@ -136,7 +145,7 @@ parentPort.on('message', (msg: WorkerMessage) => {
       sampleRate: msg.sampleRate,
       outputWavPath: msg.outputWavPath,
       history,
-      phaseModel: msg.phaseModel,
+      phaseModel: effectivePhaseModel,
     });
 
     const optimizedConfig = mapVectorToSynthConfig(vector);

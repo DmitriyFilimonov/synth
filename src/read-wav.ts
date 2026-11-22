@@ -7,9 +7,23 @@ interface ReadWavResult {
   numChannels: number;
 }
 
+/**
+ * Читает монофонический 16-битный PCM WAV в Int16Array.
+ *
+ * @param filePath - Путь к WAV-файлу
+ * @returns Сэмплы, частоту дискретизации, разрядность и число каналов
+ * @throws Error если файл недоступен, не содержит нужных RIFF-чанков
+ *   или не соответствует формату mono PCM 16 bit
+ * @remarks DataView ограничен смещением и длиной Buffer, поэтому разбор
+ *   не затрагивает соседние байты общего пула Node.js.
+ */
 export const readWav = (filePath: string): ReadWavResult => {
   const buffer = readFileSync(filePath);
-  const view = new DataView(buffer.buffer);
+  const view = new DataView(
+    buffer.buffer,
+    buffer.byteOffset,
+    buffer.byteLength,
+  );
 
   const riff = view.getUint32(0, false);
   if (riff !== 0x52494646) {
