@@ -12,6 +12,8 @@
  *   npx tsx src/dataset/build-dataset.ts \
  *     --targets targets --out datasets/reference-4 \
  *     --iterations 300 --seeds 1,2,3,4 --oscillators 50 --parallel 2
+ *   Необязательный `--attack-boost N` усиливает окна первых 10 мс;
+ *   по умолчанию 1, то есть обычный match не меняется.
  *
  * Живой прогресс в чате:
  *   ... 2>&1 | grep --line-buffered -E 'INIT|RUN|PROGRESS|DONE|FAIL|SKIP|SUMMARY'
@@ -56,6 +58,8 @@ interface CliArgs {
   parallel: number;
   /** Модель фазы синтеза; по умолчанию legacy, как у прежних сборок. */
   phase: PhaseModel;
+  /** Вес окон атаки; 1 сохраняет обычную метрику. */
+  attackBoost: number;
   only?: string;
 }
 
@@ -77,11 +81,14 @@ interface RunRecord {
   seed: number;
   maxIterations: number;
   numOscillators: number;
+  /** Вес атаки, записанный в каждый прогон для воспроизводимости. */
+  attackBoost: number;
   startedAt: string;
   finishedAt: string;
   durationSec: number;
   suppressionPercent: number | null;
   globalSuppressionPercent: number | null;
+  targetInfo: MatchWorkerResult['targetInfo'] | null;
   error: string | null;
   /** Итерация чекпоинта, с которой прогон подняли; null — шёл с нуля. */
   resumedFromIteration: number | null;
@@ -99,6 +106,8 @@ interface DatasetManifest {
   numOscillators: number;
   /** Модель фазы, на которой собран датасет: смешивать нельзя. */
   phaseModel: PhaseModel;
+  /** Вес окон атаки; 1 соответствует обычному match. */
+  attackBoost: number;
   codeRevision: string | null;
   platform: string;
   nodeVersion: string;
@@ -115,8 +124,13 @@ interface PoolSummary {
 const PROGRESS_LOG_EVERY = 25;
 
 /**
- * Разбирает аргументы командной строки в {@link CliArgs}.
- * Неизвестный ключ или отсутствующее значение — ошибка с подсказкой.
+ * Разбирает аргументы командной строки и применяет значения по
+ * умолчанию, включая нейтральный `--attack-boost 1`.
+ *
+ * @param argv - Пары «ключ — значение» без пути к скрипту
+ * @returns Аргументы сборки датасета
+ * @throws Error если ключ неизвестен, значение отсутствует или
+ *   числовой параметр не проходит проверку
  */
 function parseCliArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
@@ -127,6 +141,7 @@ function parseCliArgs(argv: string[]): CliArgs {
     oscillators: 50,
     parallel: Math.max(1, cpus().length),
     phase: 'legacy',
+    attackBoost: 1,
   };
 
   for (let i = 0; i < argv.length; i += 2) {
@@ -161,6 +176,9 @@ function parseCliArgs(argv: string[]): CliArgs {
         break;
       case '--parallel':
         args.parallel = parsePositiveInt(key, value);
+        break;
+      case '--attack-boost':
+        args.attackBoost = parsePositiveInt(key, value);
         break;
       case '--only':
         args.only = value.toLowerCase();
@@ -242,7 +260,14 @@ function readCodeRevision(): string | null {
   }
 }
 
-/** Собирает манифест сборки из аргументов и списка таргетов. */
+/**
+ * Собирает манифест сборки и сохраняет в нём вес атаки.
+ *
+ * @param args - Аргументы командной строки
+ * @param targetsDir - Абсолютный путь к каталогу таргетов
+ * @param files - Имена WAV-файлов, вошедших в сборку
+ * @returns Манифест с параметрами прогонов и версией кода
+ */
 function buildManifest(
   args: CliArgs,
   targetsDir: string,
@@ -257,6 +282,7 @@ function buildManifest(
     maxIterations: args.iterations,
     numOscillators: args.oscillators,
     phaseModel: args.phase,
+    attackBoost: args.attackBoost,
     codeRevision: readCodeRevision(),
     platform: process.platform,
     nodeVersion: process.version,
@@ -419,8 +445,13 @@ async function readCheckpoint(
 }
 
 /**
- * Собирает запись `run.json`: для завершённого прогона — с метриками
- * и историей, для упавшего — с текстом ошибки и пустой историей.
+ * Собирает запись `run.json` и фиксирует вес атаки в каждом прогоне.
+ *
+ * @param arg - Статус, задача, аргументы сборки, время и результат
+ *   либо текст ошибки
+ * @returns Для завершённого прогона — обе метрики, `targetInfo` и
+ *   история, для упавшего — `null` в полях результата, текст ошибки
+ *   и пустая история
  */
 function buildRunRecord(arg: {
   status: 'completed' | 'failed';
@@ -437,6 +468,7 @@ function buildRunRecord(arg: {
     seed: arg.task.seed,
     maxIterations: arg.args.iterations,
     numOscillators: arg.args.oscillators,
+    attackBoost: arg.args.attackBoost,
     startedAt: arg.startedAt.toISOString(),
     finishedAt: new Date().toISOString(),
     durationSec: arg.durationSec,
@@ -447,6 +479,7 @@ function buildRunRecord(arg: {
       ...base,
       suppressionPercent: arg.result.suppressionPercent,
       globalSuppressionPercent: arg.result.globalSuppressionPercent,
+      targetInfo: arg.result.targetInfo,
       error: null,
       history: arg.result.history.map((h) => ({
         iteration: h.iteration,
@@ -458,6 +491,7 @@ function buildRunRecord(arg: {
     ...base,
     suppressionPercent: null,
     globalSuppressionPercent: null,
+    targetInfo: null,
     error: arg.error ?? 'unknown error',
     history: [],
   };
@@ -505,9 +539,14 @@ async function persistFailureRecord(arg: {
 }
 
 /**
- * Выполняет один прогон: оптимизация в worker-потоке с заданным
- * сидом, затем сохранение артефактов. Ошибка прогона не роняет
- * сборку: пишем failed-запись и идём дальше.
+ * Выполняет один прогон в worker-потоке и сохраняет его артефакты.
+ *
+ * @param task - Таргет, сид и каталог прогона
+ * @param initVector - Начальный вектор или геном из чекпоинта
+ * @param args - Параметры оптимизации, включая вес атаки для worker
+ * @returns Итоговый статус прогона
+ * @remarks Ошибка оптимизации не роняет сборку: функция пишет
+ *   failed-запись и возвращает `failed`, чтобы пул шёл дальше.
  */
 async function runSingleTask(
   task: RunTask,
@@ -531,6 +570,7 @@ async function runSingleTask(
       maxIterations: args.iterations,
       seed: task.seed,
       phaseModel: args.phase,
+      attackBoost: args.attackBoost,
       onLog: (line) => {
         logStream.write(line + '\n');
       },

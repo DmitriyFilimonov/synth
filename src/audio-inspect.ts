@@ -1,7 +1,7 @@
 /**
  * Инспектор звука — «уши» для анализа WAV без прослушивания:
  * уровни, спектральные пики, центроид и плоскость по окнам,
- * сравнение двух файлов (глобально и по полосам).
+ * сравнение двух файлов (глобально, по полосам и по времени).
  *
  * Стоит на собственных модулях проекта (read-wav, fft, rms,
  * cancellation-assessment) — без внешних зависимостей. Решение по
@@ -18,6 +18,7 @@ import { fftExtractHarmonics, fftMagnitudeSpectrum } from './fft';
 import { evaluateSuppressionFromWaveform } from './optimize/evaluate';
 import { readWav } from './read-wav';
 import { calculateRMS } from './rms';
+import { compareWaveformBands } from './waveform-bands';
 
 /** Аргументы командной строки инспектора. */
 interface CliArgs {
@@ -51,6 +52,18 @@ const COMPARE_BANDS: { name: string; lo: number; hi: number }[] = [
   { name: 'low 120–800', lo: 120, hi: 800 },
   { name: 'mid 800–4000', lo: 800, hi: 4000 },
   { name: 'high 4000–16000', lo: 4000, hi: 16000 },
+];
+
+/** Более короткие окна показывают раннюю атаку без узкого низа. */
+const ATTACK_COMPARE_BANDS = [
+  { name: 'mid', minHz: 300, maxHz: 1000 },
+  { name: 'upper-mid', minHz: 1000, maxHz: 4000 },
+  { name: 'high', minHz: 4000, maxHz: 16000 },
+];
+const ATTACK_COMPARE_REGIONS = [
+  { name: '0-5ms', startSec: 0, endSec: 0.005 },
+  { name: '5-20ms', startSec: 0.005, endSec: 0.02 },
+  { name: '20-50ms', startSec: 0.02, endSec: 0.05 },
 ];
 
 /** Разбирает аргументы командной строки в {@link CliArgs}. */
@@ -246,6 +259,11 @@ function bandEnergy(
 function compareFiles(pathA: string, pathB: string): void {
   const a = readWav(pathA);
   const b = readWav(pathB);
+  if (a.sampleRate !== b.sampleRate) {
+    throw new Error(
+      `Разные sample rate: ${a.sampleRate} и ${b.sampleRate}`,
+    );
+  }
   const n = Math.max(a.samples.length, b.samples.length);
   const aSamples: number[] = new Array<number>(n).fill(0);
   const bSamples: number[] = new Array<number>(n).fill(0);
@@ -289,6 +307,39 @@ function compareFiles(pathA: string, pathB: string): void {
     const ratio = tgt > 0 ? res / tgt : 0;
     console.log(
       `    ${band.name.padEnd(16)} ${(ratio * 100).toFixed(2)}%`,
+    );
+  }
+
+  const deltas = compareWaveformBands(
+    a.samples,
+    b.samples,
+    a.sampleRate,
+  );
+  console.log('  Баланс B против A по времени (дБ энергии):');
+  for (const delta of deltas) {
+    const value =
+      delta.deltaDb === null ? '—' : delta.deltaDb.toFixed(2);
+    console.log(
+      `    ${delta.region.padEnd(6)} ${delta.name.padEnd(9)} ` +
+        `${value.padStart(7)} дБ`,
+    );
+  }
+
+  const attackDeltas = compareWaveformBands(
+    a.samples,
+    b.samples,
+    a.sampleRate,
+    ATTACK_COMPARE_BANDS,
+    ATTACK_COMPARE_REGIONS,
+  );
+  console.log('  Ранняя атака B против A (дБ; A — энергия полосы):');
+  for (const delta of attackDeltas) {
+    const value =
+      delta.deltaDb === null ? '—' : delta.deltaDb.toFixed(2);
+    console.log(
+      `    ${delta.region.padEnd(7)} ${delta.name.padEnd(9)} ` +
+        `${value.padStart(7)} дБ  ` +
+        `A=${delta.referenceEnergy.toExponential(1)}`,
     );
   }
 }

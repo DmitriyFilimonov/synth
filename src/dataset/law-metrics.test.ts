@@ -11,6 +11,8 @@ import {
   pooledBodyClusters,
   type LawOsc,
 } from './law-metrics';
+import { groundTruthToPatch } from './ground-truth';
+import { renderSamples } from './shared';
 
 function osc(partial: Partial<LawOsc>): LawOsc {
   return {
@@ -129,4 +131,44 @@ test('clusters split on gaps larger than six percent', () => {
   ];
   const result = pooledBodyClusters(perSeed, 3);
   assert.equal(result.count, 2);
+});
+
+test('equivalent redundant split keeps WAV but changes low-band candidate', () => {
+  const single = groundTruthToPatch({
+    freqHz: 50,
+    level: 0.5,
+    decayRate: 2,
+    durationSec: 0.1,
+  });
+  const split = structuredClone(single);
+  const group = split.oscillators[0];
+  assert.ok(group);
+  split.oscillators.push(structuredClone(group));
+  for (const oscillator of split.oscillators) {
+    oscillator.ampEnv.startLevel = 0.25;
+  }
+
+  const singleSamples = renderSamples(single, 0.1, {
+    phaseModel: 'integral',
+  });
+  const splitSamples = renderSamples(split, 0.1, {
+    phaseModel: 'integral',
+  });
+  assert.deepEqual(splitSamples, singleSamples);
+
+  const known = {
+    role: 'sustain' as const,
+    freqBase: 50,
+    freqStartToBase: 1,
+    decayDb20Sec: 0.1,
+  };
+  const one = computeLawMetrics([{ ...known, ampStartLevel: 0.5 }]);
+  const two = computeLawMetrics([
+    { ...known, ampStartLevel: 0.25 },
+    { ...known, ampStartLevel: 0.25 },
+  ]);
+  assert.equal(one.lowBandTop1Share, 1);
+  assert.equal(two.lowBandTop1Share, 0.5);
+  assert.ok(Math.abs((one.lowBandEffectiveCount ?? 0) - 1) < 1e-9);
+  assert.ok(Math.abs((two.lowBandEffectiveCount ?? 0) - 2) < 1e-9);
 });

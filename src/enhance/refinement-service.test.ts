@@ -51,9 +51,6 @@ test('enhance service completes C4 and stores both patches and WAVs', async (t) 
     'integral',
   );
   t.after(async () => {
-    await unlink(
-      getResultFilePath(jobId).replace(/_result\.wav$/, '_match.wav'),
-    ).catch(() => {});
     if (previousPriors === undefined) {
       delete process.env.ENHANCE_PRIORS_PATH;
     } else {

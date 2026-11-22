@@ -36,8 +36,8 @@ export interface CorrectArgs {
  * suppression с 86% до −22%. При узких приорах легальные высоты
  * выпадают за края семейных вилок, и коррекция частоты опаснее
  * дефектов. Механика сохранена: вернуть true, когда приоры
- * покроют диапазоны плотно. Правки огибающих безопасны и
- * остаются включёнными.
+ * покроют диапазоны плотно. Правки огибающих остаются включёнными,
+ * но субмиллисекундные импульсы не продлеваются.
  */
 const FREQ_CORRECTION_ENABLED = false;
 
@@ -50,6 +50,14 @@ const FREQ_MOVE_CAP_LOG = Math.log(1.15);
  * он уже показал, что умеет утаскивать частоту на сотни герц.
  */
 const MIN_CLUSTER_TARGETS = 2;
+
+/**
+ * Субмиллисекундная огибающая описывает импульс, а не короткий тон.
+ * Режим B не продлевает её до семейного p10: на water_12 это
+ * превратило полноуровневый односэмпловый щелчок 68 Гц в громкий
+ * тон 37 мс.
+ */
+const MIN_CORRECTABLE_DURATION_SEC = 0.001;
 
 /** Результат коррекции: патч и журнал трансформаций. */
 export interface CorrectResult {
@@ -85,10 +93,14 @@ function capFreqMove(from: number, to: number): number {
 }
 
 /**
- * Корректирует патч по режиму B: вываливающиеся из приорных вилок
- * анкерные параметры подтягивает к границам. Частота двигается с
- * сохранением отношения sweep (retuneOscillator), длительность
- * огибающей — двунаправленным сеттером.
+ * Корректирует патч по режиму B: подтягивает анкерные параметры,
+ * вышедшие за приорные вилки, к их границам.
+ *
+ * @param args - Патч, приоры и сила коррекции
+ * @returns Патч после коррекции и журнал применённых трансформаций
+ * @remarks Частотная коррекция сейчас отключена. Длительность
+ *   огибающей меняется в обе стороны, но субмиллисекундные огибающие
+ *   не продлеваются: они описывают импульсы, а не короткие тона.
  */
 export function correctPatch(args: CorrectArgs): CorrectResult {
   const { priors, strength } = args;
@@ -153,6 +165,12 @@ export function correctPatch(args: CorrectArgs): CorrectResult {
         durDist.p90,
         strength,
       );
+      if (
+        group.ampEnv.duration < MIN_CORRECTABLE_DURATION_SEC &&
+        target > group.ampEnv.duration
+      ) {
+        return;
+      }
       if (target !== group.ampEnv.duration) {
         apply(setAmpEnvDuration(patch, index, target));
       }

@@ -27,9 +27,11 @@ interface ArgMatch {
   stepDecayFactor?: number;
 }
 
-interface MatchResult {
+export interface MatchResult {
   optimizedVector: number[];
   optimizedConfig: ArgCreateSynth;
+  suppressionPercent: number;
+  globalSuppressionPercent: number | null;
   history: { iteration: number; suppressionPercent: number }[];
   targetInfo: {
     sampleRate: number;
@@ -90,6 +92,21 @@ export const generateOutput = (
   return { samples, synthConfig: optimizedConfig };
 };
 
+/**
+ * Подбирает осцилляторы под WAV и синтезирует звук по лучшему
+ * вектору.
+ *
+ * @param arg - Пути к файлам, начальный вектор и настройки спуска
+ * @returns Лучший вектор, конфигурация `ArgCreateSynth`, обе метрики,
+ *   история и сведения о таргете
+ * @throws Error если не удалось прочитать или записать файлы, а также
+ *   если частота дискретизации таргета не равна {@link SAMPLE_RATE}
+ * @remarks Помимо WAV создаёт визуализацию рядом с `outputWavPath`.
+ *   Поле `suppressionPercent` повторяет последнюю запись истории или
+ *   равно нулю без неё. Поле `globalSuppressionPercent` содержит
+ *   RMS-оценку всего сигнала; если оценка не удалась, функция
+ *   возвращает `null` в этом поле и сохраняет остальной результат.
+ */
 export const match = (arg: ArgMatch): MatchResult => {
   console.log(`Reading target: ${arg.targetWavPath}`);
   const targetWav = readWav(arg.targetWavPath);
@@ -151,13 +168,14 @@ export const match = (arg: ArgMatch): MatchResult => {
 
   console.log(`Generated: ${arg.outputWavPath}`);
 
+  let globalSuppressionPercent: number | null = null;
   try {
-    const globalSuppression = evaluateSuppressionFromWaveform(
+    globalSuppressionPercent = evaluateSuppressionFromWaveform(
       [...samples],
       targetSignal,
     );
     console.log(
-      `Global suppression (RMS, full signal): ${globalSuppression.toFixed(2)}%`,
+      `Global suppression (RMS, full signal): ${globalSuppressionPercent.toFixed(2)}%`,
     );
   } catch (assessError) {
     console.warn(
@@ -168,6 +186,8 @@ export const match = (arg: ArgMatch): MatchResult => {
   return {
     optimizedVector: vector,
     optimizedConfig: mapVectorToSynthConfig(vector),
+    suppressionPercent: bestSuppression,
+    globalSuppressionPercent,
     history,
     targetInfo: {
       sampleRate: targetWav.sampleRate,

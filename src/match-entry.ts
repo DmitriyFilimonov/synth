@@ -4,7 +4,7 @@ import { readWav } from './read-wav';
 import { match } from './match';
 import { simpleInitVector } from './simple-init-vector';
 import { MATCH_DEFAULT_OSCILLATORS } from './match-defaults';
-import { writeFileSync, renameSync } from 'node:fs';
+import { writeMatchArtifacts } from './match-metadata';
 
 const targetWavPath = './fixtures/output15.wav';
 const outputWavPath =
@@ -27,11 +27,6 @@ const result = match({
   onProgress: () => {},
 });
 
-const paramsPath = `${outputWavPath}.params.json`;
-const tmpParamsPath = `${paramsPath}.tmp`;
-writeFileSync(
-  tmpParamsPath,
-  JSON.stringify(result.optimizedConfig, null, 2),
-);
-renameSync(tmpParamsPath, paramsPath);
-console.log(`Parameters: ${paramsPath}`);
+const artifacts = writeMatchArtifacts(outputWavPath, result);
+console.log(`Parameters: ${artifacts.paramsPath}`);
+console.log(`Metadata: ${artifacts.metadataPath}`);

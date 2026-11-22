@@ -83,6 +83,38 @@ test('envelope corrections still fire while frequency is disabled', () => {
   );
 });
 
+test('sub-millisecond impulse never becomes a family-length tone', () => {
+  const patch = makePatch();
+  const first = patch.oscillators[0];
+  assert.ok(first);
+  first.ampEnv.duration = 1 / 44100;
+  first.ampEnv.startLevel = 1;
+  const result = correctPatch({
+    patch,
+    priors: makePriors(),
+    strength: 1,
+  });
+  assert.equal(result.patch, patch);
+  assert.equal(
+    result.patch.oscillators[0]?.ampEnv.duration,
+    1 / 44100,
+  );
+  assert.equal(result.audits.length, 0);
+});
+
+test('short tonal envelope above one millisecond still corrects', () => {
+  const patch = makePatch();
+  const first = patch.oscillators[0];
+  assert.ok(first);
+  first.ampEnv.duration = 0.02;
+  const result = correctPatch({
+    patch,
+    priors: makePriors(),
+    strength: 1,
+  });
+  assert.equal(result.patch.oscillators[0]?.ampEnv.duration, 0.3);
+});
+
 test('over-long envelope shortens, clamped by the 0.5s synth ceiling', () => {
   const result = correctPatch({
     patch: makePatch(),
