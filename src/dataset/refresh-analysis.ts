@@ -1,7 +1,8 @@
 /**
  * Обновляет анализ датасета одной командой: извлекает признаки,
  * запускает оба анализа стабильности, измеряет разброс характера,
- * проверяет биение в исходниках и match-прогонах и собирает приоры.
+ * строит кандидаты допусков Q4, проверяет биение в исходниках и
+ * match-прогонах и собирает приоры.
  * Это вторая половина договора
  * «переобучение одной командой» (первая — build-dataset.ts):
  * на новом наборе таргетов гоняем build-dataset, затем refresh-analysis.
@@ -9,7 +10,7 @@
  * Запуск:
  *   npx tsx src/dataset/refresh-analysis.ts --dataset datasets/reference-4
  *
- * Терпим к неполному датасету: семь ступеней используют доступные
+ * Терпим к неполному датасету: восемь ступеней используют доступные
  * данные, поэтому команду можно повторять по мере готовности
  * прогонов.
  */
@@ -31,6 +32,10 @@ const STEPS: AnalysisStep[] = [
     label: 'oscillator-stability',
   },
   { script: 'character-spread.ts', label: 'character-spread' },
+  {
+    script: 'character-tolerances.ts',
+    label: 'character-tolerances',
+  },
   { script: 'beat-report.ts', label: 'beat-report' },
   { script: 'beat-seed-report.ts', label: 'beat-seed-report' },
   { script: 'mine-priors.ts', label: 'priors' },
@@ -63,7 +68,7 @@ function runStep(script: string, datasetDir: string): boolean {
 }
 
 /**
- * Запускает семь ступеней по порядку и печатает сводку.
+ * Запускает восемь ступеней по порядку и печатает сводку.
  *
  * @remarks Ожидает аргумент `--dataset <dir>`. Ошибка одной
  *   ступени не отменяет остальные. При отсутствии аргумента или хотя
