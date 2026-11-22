@@ -2,6 +2,14 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-22: перенос отклонён, preserved-сиды выбраны
+
+Проверены три offline-пути восстановления биения на пяти lost-патчах: Friend 1/4 и Jenry 1/2/4. Полная замена с refit коэффициентов улучшила Jenry seed 2 до accepted, но уронила global с 86.93% до 81.62%; остальные замены тоже потеряли global. Guard по атаке и хвосту вне validation затем отклонил все пять вариантов, включая Jenry seed 4. Фазовый ремонт сохранил global, но не восстановил accepted: Friend 1 R² 0.439→0.445, Friend 4 0.241→0.270, Jenry без изменений. Доводка огибающих дала Friend 1 R² 0.397 и Friend 4 R² 0.402 при global 93.05% и 90.80%; Jenry seeds 1, 2 и 4 снова без изменений. Ни один путь не прошёл критерий accepted без потерь, поэтому сервис их не использует.
+
+Добавлен `beat-select.ts`: он выбирает максимум global только среди preserved и не меняет артефакты. Три unit-теста проверяют фильтрацию introduced/lost, tie-break, no-candidate и точное копирование байтов. Выбраны Friend seed 3 global 93.62%, Val R² 0.610, GrumU seed 4 global 86.84%, Val R² 0.708, и Jenry seed 3 global 88.56%, Val R² 0.645. BOg и Daft Punk получили no-candidate. После завершения Jenry seeds 3–4 отчёт содержит 20 runs: 7 preserved, 5 lost, 3 introduced и 5 absent. SHA-256 выбранных WAV совпадает с исходными match-файлами. Команда: `npx tsx src/dataset/beat-select.ts --dataset datasets/reference-integral --out datasets/beat-selected`.
+
+Восемь known-answer тестов переноса прошли, включая пару 200/204 Гц, сохранение полезного тона 100 Гц, фазы, доводку огибающих, legacy-sweep и длину исходника. Ещё три теста проверяют длину и sample rate patch-WAV. Offline-инструмент оставлен для повторения отрицательных контролей. Полный комплекс на v1.9.0 прошёл: 144/144 тестов, backend и web build, Prettier, lint с нулём ошибок.
+
 ## 2026-11-22: v1.8.0 опубликована
 
 Коммит `db177230f1390a5e1af83573578bfa201d12ad19` (`feat: validate low-end beating across match seeds`) отправлен в `origin/master`; аннотированный тег `v1.8.0` указывает на него и тоже отправлен. Независимый release gate вернул READY после свежей backend-сборки с полным путём исходника.

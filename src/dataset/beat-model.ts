@@ -59,8 +59,10 @@ interface PairEvaluation {
   rejectionReasons: string[];
 }
 
-const DECIMATION = 4;
+export const BEAT_DECIMATION = 4;
+const DECIMATION = BEAT_DECIMATION;
 const LOWPASS_SIZE = 64;
+const LOWPASS_PASSES = 3;
 const MIN_FREQ_HZ = 25;
 const MAX_FREQ_HZ = 250;
 const MIN_DELTA_HZ = 1;
@@ -75,9 +77,11 @@ const MAX_DELTA_HZ = 8;
  * @remarks Каждый проход усредняет окно из 64 отсчётов. После
  *   третьего прохода функция берёт каждый четвёртый отсчёт.
  */
-function lowpassDecimate(samples: ArrayLike<number>): number[] {
+export function lowpassDecimate(
+  samples: ArrayLike<number>,
+): number[] {
   let current = Float64Array.from(samples, (value) => value / 32768);
-  for (let pass = 0; pass < 3; pass += 1) {
+  for (let pass = 0; pass < LOWPASS_PASSES; pass += 1) {
     const filtered = new Float64Array(current.length);
     let sum = 0;
     for (let i = 0; i < current.length; i += 1) {
@@ -100,7 +104,7 @@ function lowpassDecimate(samples: ArrayLike<number>): number[] {
  * Коэффициенты модели относятся к отфильтрованному сигналу, поэтому
  * перед вычитанием из исходного WAV их нужно разделить на это число.
  */
-function lowpassAmplitudeGain(
+export function lowpassAmplitudeGain(
   frequency: number,
   sampleRate: number,
 ): number {
@@ -111,7 +115,15 @@ function lowpassAmplitudeGain(
   const single = Math.abs(
     Math.sin(LOWPASS_SIZE * x) / (LOWPASS_SIZE * Math.sin(x)),
   );
-  return single ** 3;
+  return single ** LOWPASS_PASSES;
+}
+
+/** Групповая задержка всех проходов фильтра в секундах. */
+export function lowpassGroupDelaySec(sampleRate: number): number {
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+    throw new Error('sampleRate должен быть положительным');
+  }
+  return (LOWPASS_PASSES * (LOWPASS_SIZE - 1)) / (2 * sampleRate);
 }
 
 /**
@@ -122,7 +134,7 @@ function lowpassAmplitudeGain(
  * @param times - Время каждого отсчёта в секундах
  * @returns Столбцы в порядке cos/sin для каждой частоты
  */
-function basis(
+export function basis(
   frequencies: number[],
   lambda: number,
   times: number[],
@@ -152,7 +164,7 @@ function basis(
  * @remarks Складывает нормальную систему, добавляет `1e-8` на
  *   диагональ и решает её с выбором главного элемента.
  */
-function solveLeastSquares(
+export function solveLeastSquares(
   columns: number[][],
   values: number[],
 ): number[] {
@@ -633,7 +645,7 @@ export function removeFittedComponent(
   if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
     throw new Error('sampleRate должен быть положительным');
   }
-  const groupDelaySec = (3 * (LOWPASS_SIZE - 1)) / (2 * sampleRate);
+  const groupDelaySec = lowpassGroupDelaySec(sampleRate);
   const times = Array.from(
     { length: samples.length },
     (_, index) => index / sampleRate + groupDelaySec,
