@@ -16,6 +16,9 @@
 - Контракты между стадиями: `docs/spec-kick-enhancement.md`
 - Эндпоинт: `POST /api/enhance/job`; по умолчанию возвращает чистую хирургию. Экспериментальная C4 включается только через `refineIterations > 0`, но слуховой пилот её отклонил
 - Диагностика WAV по атаке, телу и хвосту, f0 и спаду до −20 дБ: `npx tsx src/audio-inspect.ts a.wav --compare b.wav`; это мера характера, не готовый закон качества
+- Проверка биения низа на всех исходниках: `npx tsx src/dataset/beat-report.ts --targets targets --out datasets/beat-report`; водные добавляются через `--extra raw/water_12_kick.wav,raw/water_15_kick.wav`
+- Вмешательство Q2: `npx tsx src/dataset/beat-interventions.ts --report datasets/beat-report/beat-report.json --out datasets/beat-interventions`; текущий контроль — 4/4 повторных отклонений среди исходно принятых кандидатов
+- Сравнение биения в match и исходниках: `npx tsx src/dataset/beat-seed-report.ts --dataset datasets/reference-integral`; на 18 готовых прогонах — 6 preserved, 4 lost, 3 introduced и 5 absent
 - Инструментарий датасета: `src/dataset/` (сборка прогонов, признаки, анализ стабильности, приоры, соло-рендеры для чистки, оценка порчей)
 
 ## Доменная модель
