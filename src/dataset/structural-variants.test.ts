@@ -21,6 +21,7 @@ const ALL_FIELDS: readonly OscField[] = [
   'osc.duration',
   'osc.slope',
   'osc.phase',
+  'osc.delay',
   'ampEnv.startLevel',
   'ampEnv.endLevel',
   'ampEnv.duration',
@@ -242,6 +243,9 @@ function overwriteField(
     case 'osc.phase':
       group.osc.phase += 0.125;
       return group.osc.phase;
+    case 'osc.delay':
+      group.osc.delay = 0.125;
+      return group.osc.delay;
     case 'ampEnv.startLevel':
       group.ampEnv.startLevel += 0.125;
       return group.ampEnv.startLevel;

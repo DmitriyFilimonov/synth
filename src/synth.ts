@@ -53,14 +53,16 @@ interface ArgOscConfig {
   slope: number;
   phase: number;
   on: boolean;
+  /** Время начала в секундах; отсутствие и 0 сохраняют прежний PCM. */
+  delay?: number;
 }
 
-type OscConfigNormales = {
+type OscConfigNormales = Required<{
   [K in keyof ArgOscConfig]: {
     min: number;
     max: number;
   };
-};
+}>;
 
 export const oscConfigNormales: OscConfigNormales = {
   duration: {
@@ -78,6 +80,10 @@ export const oscConfigNormales: OscConfigNormales = {
   on: {
     min: 0,
     max: 1,
+  },
+  delay: {
+    min: 0,
+    max: 0.5,
   },
   phase: {
     min: 0,
@@ -217,10 +223,24 @@ export const createCyclePhase = (
   };
 };
 
+/**
+ * Создаёт функцию одного осциллятора с двумя огибающими.
+ *
+ * @param config - Параметры осциллятора и его огибающих
+ * @param options - Модель фазы; по умолчанию используется `legacy`
+ * @returns Функция, которая принимает время в секундах и возвращает
+ *   нормированный отсчёт
+ * @throws Error если `osc.delay` не конечен или выходит за диапазон
+ *   0–0.5 секунды
+ * @remarks Отсутствующий или нулевой `osc.delay` сохраняет прежний
+ *   рендер без сдвига. При положительной задержке функция выдаёт нули
+ *   до onset, а затем вычисляет фазу и обе огибающие по локальному
+ *   времени `x - delay`. Нефинитное `x` у отложенной группы даёт 0.
+ */
 export const createOscillatorGroup = (
   config: OscillatorGroup,
   options: SynthOptions = {},
-) => {
+): ((arg: { x: number }) => number) => {
   const osc = oscillatorCreator({
     on: config.osc.on,
     initialPhase: config.osc.phase,
@@ -240,25 +260,47 @@ export const createOscillatorGroup = (
     slope: config.ampEnv.slope,
   });
 
-  if (options.phaseModel === 'integral') {
-    const cyclesAt = createCyclePhase(frequencyEnvelop);
-    return ({ x }: { x: number }): number => {
-      if (!config.osc.on) {
-        return 0;
-      }
-      return (
-        Math.sin(2 * Math.PI * cyclesAt(x) + config.osc.phase) *
-        amplitudeEnvelope({ x })
-      );
-    };
+  const cyclesAt =
+    options.phaseModel === 'integral'
+      ? createCyclePhase(frequencyEnvelop)
+      : null;
+  const renderLocal =
+    options.phaseModel === 'integral'
+      ? ({ x }: { x: number }): number => {
+          if (!config.osc.on) {
+            return 0;
+          }
+          return (
+            Math.sin(
+              2 * Math.PI * (cyclesAt?.(x) ?? 0) + config.osc.phase,
+            ) * amplitudeEnvelope({ x })
+          );
+        }
+      : ({ x }: { x: number }): number => {
+          return osc({
+            amplitude: amplitudeEnvelope({ x }),
+            frequency: frequencyEnvelop({ x }),
+            x,
+          });
+        };
+  const delay = config.osc.delay ?? 0;
+  if (
+    !Number.isFinite(delay) ||
+    delay < oscConfigNormales.delay.min ||
+    delay > oscConfigNormales.delay.max
+  ) {
+    throw new Error(
+      `Delay must be finite and within [${oscConfigNormales.delay.min}, ${oscConfigNormales.delay.max}] seconds`,
+    );
   }
-
+  if (delay === 0) {
+    return renderLocal;
+  }
   return ({ x }: { x: number }): number => {
-    return osc({
-      amplitude: amplitudeEnvelope({ x }),
-      frequency: frequencyEnvelop({ x }),
-      x,
-    });
+    if (!Number.isFinite(x)) {
+      return 0;
+    }
+    return x < delay ? 0 : renderLocal({ x: x - delay });
   };
 };
 

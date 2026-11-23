@@ -23,12 +23,13 @@ export type OscField =
   | 'osc.duration'
   | 'osc.slope'
   | 'osc.phase'
+  | 'osc.delay'
   | 'ampEnv.startLevel'
   | 'ampEnv.endLevel'
   | 'ampEnv.duration'
   | 'ampEnv.slope';
 
-/** Значение scalar-поля; null обозначает отсутствующий endLevel. */
+/** Значение scalar-поля; null обозначает отсутствующий endLevel или delay. */
 export type ScalarValue = number | boolean | null;
 
 /** Связь одной attack-компоненты с перестройкой мембраны. */
@@ -135,6 +136,7 @@ const FIELD_ORDER: readonly OscField[] = [
   'osc.duration',
   'osc.slope',
   'osc.phase',
+  'osc.delay',
   'ampEnv.startLevel',
   'ampEnv.endLevel',
   'ampEnv.duration',
@@ -166,8 +168,16 @@ function canonicalNumber(value: number): number {
 }
 
 /**
- * Возвращает scalar-поле или null для отсутствующего значения.
- * Все числовые нули проходят границу как +0, включая исходный -0.
+ * Возвращает scalar-поле или `null` для отсутствующего значения.
+ *
+ * @param patch - Патч, из которого читается поле
+ * @param oscillatorIndex - Нулевой индекс осциллятора
+ * @param field - Имя scalar-поля
+ * @returns Точное значение поля; отсутствующий осциллятор, `endLevel`
+ *   или `delay` дают `null`
+ * @remarks Все числовые нули становятся +0, включая исходный -0. Явный
+ *   `osc.delay: 0` остаётся числом, поэтому verifier отличает его от
+ *   отсутствующего поля.
  */
 function readField(
   patch: ArgCreateSynth,
@@ -191,6 +201,10 @@ function readField(
       return canonicalNumber(group.osc.slope);
     case 'osc.phase':
       return canonicalNumber(group.osc.phase);
+    case 'osc.delay':
+      return group.osc.delay === undefined
+        ? null
+        : canonicalNumber(group.osc.delay);
     case 'ampEnv.startLevel':
       return canonicalNumber(group.ampEnv.startLevel);
     case 'ampEnv.endLevel':
@@ -572,8 +586,9 @@ function collectActualEdits(
  *   перестраивает все активные осцилляторы. Выход любой новой частоты
  *   за нормы отклоняет весь вариант без обрезки значений. При
  *   `frequencyRatio = 1` planned edits остаются в манифесте, но патч
- *   совпадает с исходником, а `actualEdits` пуст. Входной `spec` также
- *   остаётся неизменным.
+ *   совпадает с исходником, а `actualEdits` пуст. Поле `osc.delay`
+ *   всегда заморожено: verifier различает отсутствующее значение и
+ *   явный ноль. Входной `spec` также остаётся неизменным.
  */
 export function makeStructuralVariant(
   source: ArgCreateSynth,

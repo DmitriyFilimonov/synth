@@ -16,11 +16,18 @@ import { VECTOR_PARAM_OFFSETS as OFFSET } from './vector-param-offsets';
  * @remarks Непрерывные параметры переводятся в долю своего диапазона,
  *   включённый флаг становится 1. Выключенный осциллятор даёт слот из
  *   нулей. Позиции значений задаёт VECTOR_PARAM_OFFSETS.
+ * @throws Error если хотя бы один осциллятор имеет ненулевой delay:
+ *   десятипараметровый вектор не может сохранить это поле
  */
 export const mapSynthConfigToVector = (
   arg: ArgCreateSynth,
-): number[] =>
-  arg.oscillators.flatMap<number>((osc) => {
+): number[] => {
+  if (arg.oscillators.some((group) => (group.osc.delay ?? 0) !== 0)) {
+    throw new Error(
+      'Delayed oscillator patches cannot be mapped to the 10-parameter optimizer vector',
+    );
+  }
+  return arg.oscillators.flatMap<number>((osc) => {
     if (osc.osc.on) {
       const on = Number(osc.osc.on);
 
@@ -77,3 +84,4 @@ export const mapSynthConfigToVector = (
 
     return new Array<number>(OSC_PARAMS_PER_OSCILLATOR).fill(0);
   });
+};

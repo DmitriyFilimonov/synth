@@ -2,6 +2,14 @@
 
 Формат: что изменилось, как проверено, какие ограничения. Теги в git аннотированные и дублируют краткое описание на русском.
 
+## v1.14.0 — независимый onset и canonical delayed patch/WAV
+
+**Что.** `ArgCreateSynth` получил optional `osc.delay` в секундах от 0 до 0.5. До onset осциллятор молчит, затем фаза и обе огибающие вычисляются по локальному времени. Отсутствие поля и нулевой delay сохраняют прежний PCM. Десятипараметровый вектор CD не расширен: конвертер явно отклоняет delayed patch. T35 включает delay в полный набор frozen-полей. Добавлены onset/clip oracle и offline delayed-patch runner. K2 проверяет both-delayed и mixed delayed+zero пары; `--max-onset-ms` задаёт предел поиска до 450 мс. Runner сверяет canonical global/J с oracle, сохраняет patch/WAV/audit и откатывает проигрышный candidate.
+
+**Проверки.** Known-answer покрывает delay0 в legacy/integral, поздний sweep, векторный запрет, paired identity, смешанные onset 300/0, canonical patch/WAV и fallback. Реальный BOg seed 1 после рефакторинга полностью совпал с сохранённым v1. В `delayed-patches-v1` BOg получил +4.272, +4.785, +5.761 и +8.491 п.п. global, среднее +5.827 и 4/4 улучшения; средний J +1.848. GrumU четыре раза сохранил исходники с нулевой дельтой. Все canonical patch/WAV прошли проверку, runner завершил 8/8 без ошибок. Полный комплекс прошёл: 206/206 тестов, backend и web build, Prettier, lint с нулём ошибок. Чистый клон остаётся обязательной проверкой перед публикацией тега.
+
+**Ограничения.** Лучший BOg v1 global — 82.812%, поэтому цель 98% не достигнута. Delay не подключён к production match/enhance и не доказывает закон T35 или Q1–Q5. Mixed v2 завершён и повторил BOg v1, GrumU снова не улучшился. На каждом BOg хотя бы один onset достиг 200 мс; отдельный контроль до 400 мс ещё выполняется и не считается доказанным. Для GrumU следующий механизм — совместная проекция и clip-aware доводка. Датасет `reference-integral` завершён 32/32; water_12 ждёт слепого голосования, water_15 — независимых match-сидов, допуски Q4 — согласования.
+
 ## v1.13.0 — variable projection и защищённый T35-runner
 
 **Что.** K2 получил optional variable projection, выключенный по умолчанию. Пять нелинейных проходов меняют частоты, sweep ratio и огибающие пары, а уровни и фазы каждый раз решает bounded МНК 4×4. VP умеет стартовать с лучшего guard-отвергнутого candidate, но принимает только полный global/J guard и canonical WAV. Runner сравнивает K1, K2 и K2-VP при равном пределе замен. Добавлен offline CLI `structural-variants-run.ts`: он проверяет полный spec и hash исходника, заново строит ожидаемый вариант перед записью и атомарно сохраняет manifest/patch/audit/result.wav/evaluation. Production match/enhance/API новые режимы не вызывают.

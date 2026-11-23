@@ -139,7 +139,14 @@ export interface BlockPursuitResult {
   variableProjection?: VariableProjectionSummary;
 }
 
-interface SlotSetChoice {
+/**
+ * Ранжированный набор слотов и сумма без именно их вкладов.
+ *
+ * @remarks Каждый выбор независим: `rawWithout` строится от исходной
+ *   суммы состояния, а не от другого K1/K2-кандидата. Поэтому K1 не
+ *   удаляет скрыто вклад второго слота.
+ */
+export interface SlotSetChoice {
   slots: number[];
   rawWithout: Float64Array;
   globalAfterRemoval: number;
@@ -362,8 +369,19 @@ function rankSingleSlots(arg: {
   return ranked;
 }
 
-/** Строит до двух одиночных слотов или двух пар из четырёх лучших слотов. */
-function rankSlotSets(arg: {
+/**
+ * Выбирает до двух независимых наборов слотов для K1 или K2.
+ *
+ * @param arg - Состояние рендера, вклады осцилляторов, target, уже
+ *   использованные слоты и размер блока
+ * @returns До двух одиночных слотов или пар, отсортированных по global
+ *   после удаления их вкладов
+ * @remarks K1 ранжирует все неиспользованные слоты поодиночке. K2 строит
+ *   пары из четырёх лучших одиночных слотов и заново ранжирует каждую пару.
+ *   Каждый `rawWithout` вычитает из исходной суммы только слоты собственного
+ *   набора, поэтому кандидаты K1 и K2 не наследуют удаления друг друга.
+ */
+export function rankSlotSets(arg: {
   state: RenderState;
   contributions: (Float64Array | null)[];
   target: number[];
