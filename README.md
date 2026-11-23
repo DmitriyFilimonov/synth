@@ -23,6 +23,7 @@
 - Выбор лучшего preserved-сида без изменения патча: `npx tsx src/dataset/beat-select.ts --dataset datasets/reference-integral --out datasets/beat-selected`; выбраны Friend seed 3 (global 93.62%), GrumU seed 4 (86.84%), Jenry seed 3 (88.56%) и SpaceR seed 3 (90.66%), introduced/lost исключены
 - Offline-контроли переноса биения: `npx tsx src/dataset/beat-transfer-run.ts --dataset datasets/reference-integral --out datasets/beat-transfer-pilot --mode replace` и `--mode phase`/`envelope`; полная замена, фазовый ремонт и доводка огибающих не дали accepted без потерь и не подключены к сервису
 - Offline post-pass готового match: `npx tsx src/dataset/quadrature-refit-run.ts --dataset datasets/reference-integral --out datasets/postpass --mode refit --passes 2` или `--mode pursuit --steps 12`; CLI сохраняет patch/WAV/аудит и считает парные дельты по сидам. Это эксперименты реверс-синтеза, а не включённый enhancement или доказанный структурный закон
+- Равнобюджетный K1/K2 screening: `npx tsx src/dataset/block-pursuit-run.ts --dataset datasets/reference-integral --out datasets/block-screen --blocks 1 --diverse 1`; K1 делает две одиночные замены, K2 — одну совместно подобранную пару. В `block-pursuit-screen-v2` BOg получил средние приросты +1.379 у K1 и +1.895 п.п. у K2, GrumU — +0.012 и 0; K2 для GrumU закрыт. Runner сохраняет оба patch/WAV, аудит и чекпоинты; production его не вызывает
 - Инструментарий датасета: `src/dataset/` (сборка прогонов, признаки, анализ стабильности, приоры, соло-рендеры для чистки, оценка порчей)
 
 ## Доменная модель

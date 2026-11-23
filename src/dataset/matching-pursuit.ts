@@ -29,8 +29,8 @@ import {
   type RenderState,
 } from './quadrature-refit';
 
-type OscillatorGroup = ArgCreateSynth['oscillators'][number];
-type SearchWindow = 'attack' | 'early' | 'full';
+export type OscillatorGroup = ArgCreateSynth['oscillators'][number];
+export type SearchWindow = 'attack' | 'early' | 'full';
 
 interface ResidualPeak {
   frequency: number;
@@ -38,7 +38,7 @@ interface ResidualPeak {
   window: SearchWindow;
 }
 
-interface AtomDescription {
+export interface AtomDescription {
   frequency: number;
   freqStart: number;
   duration: number;
@@ -629,8 +629,58 @@ function lowSweepAtoms(arg: {
   return { atoms: [...unique.values()], evaluations };
 }
 
+/** Общий словарь одиночного и блочного pursuit на одном остатке. */
+export interface PursuitDictionary {
+  descriptions: AtomDescription[];
+  localEvaluations: number;
+}
+
+/**
+ * Ищет пики остатка и строит общий shortlist атомов для K1 и K2.
+ *
+ * @param arg - Исходный patch, остаток, полезная зона и модель фазы;
+ *   `diverseShortlist` включает разнесённый выбор стационарных атомов
+ * @returns До 16 описаний атомов и число локальных оценок; если пиков
+ *   нет, возвращает пустой словарь с нулевым счётчиком
+ * @remarks Сначала ранжирует стационарные огибающие, затем добавляет
+ *   низкие sweep-шаблоны. Общий список обрезается до лимита точных
+ *   кандидатов; сами точные проверки здесь не выполняются.
+ */
+export function buildPursuitDictionary(arg: {
+  patch: ArgCreateSynth;
+  residual: Float64Array;
+  zone: UsefulZone;
+  phaseModel: PhaseModel;
+  diverseShortlist?: boolean;
+}): PursuitDictionary {
+  const peaks = findResidualPeaks(arg.residual, arg.zone);
+  if (peaks.length === 0) {
+    return { descriptions: [], localEvaluations: 0 };
+  }
+  const stationary = rankStationaryAtoms(
+    peaks,
+    arg.residual,
+    arg.zone,
+    arg.diverseShortlist ?? false,
+  );
+  const swept = lowSweepAtoms({
+    peaks,
+    patch: arg.patch,
+    residual: arg.residual,
+    zone: arg.zone,
+    phaseModel: arg.phaseModel,
+  });
+  return {
+    descriptions: [...stationary.atoms, ...swept.atoms].slice(
+      0,
+      MAX_EXACT_CANDIDATES,
+    ),
+    localEvaluations: stationary.evaluations + swept.evaluations,
+  };
+}
+
 /** Строит кэш текущих solo-вкладов один раз на исходный патч. */
-function buildContributions(
+export function buildContributions(
   patch: ArgCreateSynth,
   sampleCount: number,
   phaseModel: PhaseModel,
@@ -641,7 +691,7 @@ function buildContributions(
 }
 
 /** Global одного PCM без расчёта J; нужен для leave-one-out слотов. */
-function globalOfSamples(
+export function globalOfSamples(
   samples: Int16Array,
   target: number[],
 ): number {
@@ -715,7 +765,7 @@ function chooseSlot(arg: {
 }
 
 /** Создаёт точный osc group из описания и подобранных квадратур. */
-function groupFromAtom(
+export function groupFromAtom(
   description: AtomDescription,
   fit: QuadratureFit,
 ): OscillatorGroup {
@@ -850,27 +900,14 @@ function pursueOneStep(arg: {
       (value - (withoutSamples[index] ?? 0)) /
       MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
   );
-  const peaks = findResidualPeaks(residual, arg.zone);
-  if (peaks.length === 0) {
-    return null;
-  }
-  const stationary = rankStationaryAtoms(
-    peaks,
-    residual,
-    arg.zone,
-    arg.diverseShortlist,
-  );
-  const swept = lowSweepAtoms({
-    peaks,
+  const dictionary = buildPursuitDictionary({
     patch: arg.state.patch,
     residual,
     zone: arg.zone,
     phaseModel: arg.phaseModel,
+    diverseShortlist: arg.diverseShortlist,
   });
-  const descriptions = [...stationary.atoms, ...swept.atoms].slice(
-    0,
-    MAX_EXACT_CANDIDATES,
-  );
+  const descriptions = dictionary.descriptions;
   let best: AtomCandidate | null = null;
   let exactEvaluations = 0;
   for (const description of descriptions) {
@@ -949,7 +986,7 @@ function pursueOneStep(arg: {
       phaseModel: arg.phaseModel,
     }),
     audit,
-    localEvaluations: stationary.evaluations + swept.evaluations,
+    localEvaluations: dictionary.localEvaluations,
     exactEvaluations,
   };
 }
