@@ -1,8 +1,7 @@
 /**
  * Screening совместного residual pursuit для одного или двух слотов.
  * Оба режима используют один словарь и проверяют несколько слотов.
- * Это offline-эксперимент: production match, enhance и API его не
- * вызывают. Результат screening не доказывает закон T35.
+ * Это offline-эксперимент: production match, enhance и API его не вызывают.
  */
 import {
   MAX_AMPLITUDE_16_BIT_WAV_ENCODED,
@@ -12,7 +11,12 @@ import {
   computeUsefulZone,
   type UsefulZone,
 } from '../optimize/evaluate';
-import type { ArgCreateSynth, PhaseModel } from '../synth';
+import {
+  ampEnvConfigNormales,
+  oscConfigNormales,
+  type ArgCreateSynth,
+  type PhaseModel,
+} from '../synth';
 import { solveBoundedQuadratureSystem } from './bounded-quadrature';
 import {
   buildContributions,
@@ -64,6 +68,58 @@ export interface BlockPursuitStep {
   exactCandidates: number;
   jointCandidates: number;
   slotSetsEvaluated: number;
+  variableProjection?: VariableProjectionAttemptAudit;
+}
+
+/** Нелинейные параметры одного атома в аудите variable projection. */
+export interface VariableProjectionAtomAudit {
+  frequency: number;
+  freqStart: number;
+  ratio: number;
+  duration: number;
+  slope: number;
+  oscDuration: number;
+  oscSlope: number;
+}
+
+/** Победитель одного навигационного прохода и его точная проверка. */
+export interface VariableProjectionPassAudit {
+  pass: number;
+  winnerGain: number;
+  globalSuppressionPercent: number | null;
+  windowedSuppressionPercent: number | null;
+  accepted: boolean;
+  evaluations: number;
+  unitBasisRenders: number;
+}
+
+/** Чем закончилась попытка VP относительно обычного K2. */
+export type VariableProjectionOutcome =
+  'accepted' | 'k2-fallback' | 'no-seed' | 'no-accepted';
+
+/** Полный аудит VP внутри одного блока; guard не меняет его навигацию. */
+export interface VariableProjectionAttemptAudit {
+  step: number;
+  seedAccepted: boolean;
+  outcome: VariableProjectionOutcome;
+  seed: VariableProjectionAtomAudit[] | null;
+  final: VariableProjectionAtomAudit[] | null;
+  evaluations: number;
+  unitBasisRenders: number;
+  exactCandidates: number;
+  passes: VariableProjectionPassAudit[];
+}
+
+/** Стоимость и исходы всех VP-попыток одного запуска. */
+export interface VariableProjectionSummary {
+  evaluations: number;
+  unitBasisRenders: number;
+  exactCandidates: number;
+  accepted: number;
+  k2Fallback: number;
+  noSeed: number;
+  noAccepted: number;
+  attempts: VariableProjectionAttemptAudit[];
 }
 
 /** Итог поиска; unchanged всегда возвращает исходный patch и WAV. */
@@ -80,6 +136,7 @@ export interface BlockPursuitResult {
   basisRenders: number;
   slotSetsEvaluated: number;
   replacementCount: number;
+  variableProjection?: VariableProjectionSummary;
 }
 
 interface SlotSetChoice {
@@ -108,6 +165,57 @@ interface BlockCandidate {
   choice: SlotSetChoice;
 }
 
+type VariableProjectionParameter =
+  'frequency' | 'ratio' | 'duration' | 'slope';
+
+interface VariableProjectionAxis {
+  atomIndex: number;
+  parameter: VariableProjectionParameter;
+}
+
+interface VariableProjectionPoint {
+  descriptions: AtomDescription[];
+  atoms: PreparedAtom[];
+  fit: JointFit;
+  gain: number;
+}
+
+interface VariableProjectionEvaluation {
+  descriptions: AtomDescription[];
+  atoms: PreparedAtom[];
+  fit: JointFit | null;
+  gain: number;
+}
+
+interface VariableProjectionEvaluationCounters {
+  evaluations: number;
+  unitBasisRenders: number;
+}
+
+interface VariableProjectionEvaluator {
+  centerEvaluation: VariableProjectionEvaluation;
+  counters: VariableProjectionEvaluationCounters;
+  evaluate: (
+    descriptions: AtomDescription[],
+  ) => VariableProjectionEvaluation;
+}
+
+interface VariableProjectionPassResult {
+  center: VariableProjectionPoint;
+  bestAccepted: BlockCandidate | null;
+  audit: VariableProjectionPassAudit;
+  counters: VariableProjectionEvaluationCounters;
+}
+
+interface VariableProjectionRefinement {
+  bestAccepted: BlockCandidate | null;
+  final: AtomDescription[];
+  evaluations: number;
+  unitBasisRenders: number;
+  exactCandidates: number;
+  passes: VariableProjectionPassAudit[];
+}
+
 interface AttemptCounters {
   localEvaluations: number;
   jointEvaluations: number;
@@ -130,6 +238,21 @@ const EXACT_PAIRS_PER_SLOT_SET = 8;
 const MIN_GLOBAL_GAIN = 0.005;
 const CURRENT_WINDOWED_TOLERANCE = 0.01;
 const INITIAL_WINDOWED_TOLERANCE = 0.05;
+const VP_FREQUENCY_STEPS = [0.005, 0.001, 0.0002, 0.00004, 0.000008];
+const VP_MULTIPLICATIVE_STEPS = [2, 1.1892, 1.0443, 1.0109, 1.0027];
+const VP_SLOPE_STEPS = [0.32, 0.08, 0.02, 0.005, 0.00125];
+const VP_PARAMETERS: VariableProjectionParameter[] = [
+  'frequency',
+  'ratio',
+  'duration',
+  'slope',
+];
+const VP_AXES: VariableProjectionAxis[] = VP_PARAMETERS.flatMap(
+  (parameter) => [
+    { atomIndex: 0, parameter },
+    { atomIndex: 1, parameter },
+  ],
+);
 
 /** Скалярное произведение двух одинаково длинных массивов. */
 function dot(a: ArrayLike<number>, b: ArrayLike<number>): number {
@@ -142,13 +265,7 @@ function dot(a: ArrayLike<number>, b: ArrayLike<number>): number {
 
 /**
  * Совместно подгоняет один или два атома к остатку полного сигнала.
- *
- * @param arg - Sine/cosine-базисы, target PCM в int16-шкале и
- *   необрезанная сумма синтеза без выбранных слотов
- * @returns Квадратуры атомов либо `null` при несовместимых размерах,
- *   вырожденном базисе или отсутствии допустимого решения
- * @remarks Порядок базисов: sine/cosine первого атома, затем второго.
- *   Норма квадратур каждого атома ограничена диапазоном [0.001, 1].
+ * Порядок базисов: sine/cosine первого атома, затем второго.
  */
 export function fitQuadratureBlock(arg: {
   basis: Float64Array[];
@@ -515,6 +632,506 @@ function betterCandidate(
   );
 }
 
+/** Ограничивает нелинейный параметр нормами синтезатора. */
+function clampParameter(
+  value: number,
+  range: { min: number; max: number },
+): number {
+  return Math.max(range.min, Math.min(range.max, value));
+}
+
+/** Ключ содержит только параметры, влияющие на unit-базисы атома. */
+function atomShapeKey(description: AtomDescription): string {
+  return JSON.stringify([
+    description.frequency,
+    description.freqStart,
+    description.duration,
+    description.slope,
+    description.oscDuration,
+    description.oscSlope,
+  ]);
+}
+
+/**
+ * Строит ключ пары по параметрам, которые меняют unit-базисы.
+ *
+ * @param descriptions - Нелинейные описания атомов пары
+ * @returns Ключ для пропуска повторных кандидатов после clamp
+ */
+function variableProjectionShapeKey(
+  descriptions: AtomDescription[],
+): string {
+  return JSON.stringify(descriptions.map(atomShapeKey));
+}
+
+/**
+ * Копирует нелинейные параметры атомов в компактный аудит.
+ *
+ * @param descriptions - Описания сида или конечной точки VP
+ * @returns Параметры атомов без unit-базисов и квадратурных решений
+ */
+function variableProjectionAtomsAudit(
+  descriptions: AtomDescription[],
+): VariableProjectionAtomAudit[] {
+  return descriptions.map((description) => ({
+    frequency: description.frequency,
+    freqStart: description.freqStart,
+    ratio: description.freqStart / description.frequency,
+    duration: description.duration,
+    slope: description.slope,
+    oscDuration: description.oscDuration,
+    oscSlope: description.oscSlope,
+  }));
+}
+
+/**
+ * Сохраняет характер частотной огибающей исходного атома.
+ *
+ * @param description - Изменённое нелинейное описание атома
+ * @param origin - Исходный атом словарного сида
+ * @returns Описание с согласованными параметрами частотной огибающей
+ * @remarks Если стационарный сид получает sweep, функция задаёт
+ *   `oscDuration` по длительности амплитудной огибающей, а `oscSlope`
+ *   делает равным 1. У sweep-сида сохраняются исходные значения.
+ */
+function normalizeVariableProjectionAtom(
+  description: AtomDescription,
+  origin: AtomDescription,
+): AtomDescription {
+  const next = { ...description };
+  const originWasStationary = origin.freqStart === origin.frequency;
+  const hasSweep = next.freqStart !== next.frequency;
+  if (originWasStationary && hasSweep) {
+    next.oscDuration = clampParameter(
+      next.duration,
+      oscConfigNormales.duration,
+    );
+    next.oscSlope = 1;
+  } else {
+    next.oscDuration = origin.oscDuration;
+    next.oscSlope = origin.oscSlope;
+  }
+  return next;
+}
+
+/**
+ * Сдвигает одну нелинейную ось атома на шаг выбранного прохода.
+ *
+ * @param arg - Атом, исходный сид, параметр, направление и проход
+ * @returns Новое описание атома в нормах синтезатора
+ * @remarks Сдвиг базовой частоты сохраняет `freqStart/frequency`.
+ *   При сдвиге этого отношения базовая частота не меняется.
+ */
+function moveVariableProjectionAtom(arg: {
+  description: AtomDescription;
+  origin: AtomDescription;
+  parameter: VariableProjectionParameter;
+  sign: -1 | 1;
+  pass: number;
+}): AtomDescription {
+  const next = { ...arg.description };
+  if (arg.parameter === 'frequency') {
+    const ratio = next.freqStart / next.frequency;
+    const relativeStep = VP_FREQUENCY_STEPS[arg.pass] ?? 0;
+    const relativeDelta = next.frequency * relativeStep;
+    const delta =
+      arg.pass === VP_FREQUENCY_STEPS.length - 1
+        ? Math.max(0.01, relativeDelta)
+        : relativeDelta;
+    next.frequency = clampParameter(
+      next.frequency + arg.sign * delta,
+      oscConfigNormales.freqBase,
+    );
+    next.freqStart = clampParameter(
+      next.frequency * ratio,
+      oscConfigNormales.freqStart,
+    );
+  } else if (arg.parameter === 'ratio') {
+    const factor = VP_MULTIPLICATIVE_STEPS[arg.pass] ?? 1;
+    const ratio = next.freqStart / next.frequency;
+    const movedRatio = arg.sign > 0 ? ratio * factor : ratio / factor;
+    next.freqStart = clampParameter(
+      next.frequency * movedRatio,
+      oscConfigNormales.freqStart,
+    );
+  } else if (arg.parameter === 'duration') {
+    const factor = VP_MULTIPLICATIVE_STEPS[arg.pass] ?? 1;
+    const movedDuration =
+      arg.sign > 0 ? next.duration * factor : next.duration / factor;
+    next.duration = clampParameter(
+      movedDuration,
+      ampEnvConfigNormales.duration,
+    );
+  } else {
+    const step = VP_SLOPE_STEPS[arg.pass] ?? 0;
+    next.slope = clampParameter(
+      next.slope + arg.sign * step,
+      ampEnvConfigNormales.slope,
+    );
+  }
+  return normalizeVariableProjectionAtom(next, arg.origin);
+}
+
+/**
+ * Применяет один или несколько сдвигов к паре на заданном проходе.
+ *
+ * @param arg - Центр поиска, исходные сиды, сдвиги и номер прохода
+ * @returns Новая пара описаний; входные массивы и атомы не изменяются
+ */
+function moveVariableProjectionAtPass(arg: {
+  center: AtomDescription[];
+  origins: AtomDescription[];
+  moves: { axis: VariableProjectionAxis; sign: -1 | 1 }[];
+  pass: number;
+}): AtomDescription[] {
+  const next = arg.center.map((description) => ({ ...description }));
+  for (const move of arg.moves) {
+    const index = move.axis.atomIndex;
+    const description = next[index];
+    const origin = arg.origins[index];
+    if (description === undefined || origin === undefined) {
+      continue;
+    }
+    next[index] = moveVariableProjectionAtom({
+      description,
+      origin,
+      parameter: move.axis.parameter,
+      sign: move.sign,
+      pass: arg.pass,
+    });
+  }
+  return next;
+}
+
+/**
+ * Создаёт кэшированный измеритель точек одного прохода VP.
+ *
+ * @param arg - Центр прохода, target, остаток для МНК и модель фазы
+ * @returns Оценку центра, функцию измерения и локальные счётчики
+ * @remarks Повторная clamped-форма возвращается из кэша. Для новой формы
+ *   переиспользуются `PreparedAtom` неизменных атомов центра; базисы
+ *   изменённых атомов строятся заново, после чего общий bounded МНК
+ *   пересчитывает уровни и фазы всей пары.
+ */
+function createVariableProjectionEvaluator(arg: {
+  center: VariableProjectionPoint;
+  target: number[];
+  fitResidual: Float64Array;
+  phaseModel: PhaseModel;
+}): VariableProjectionEvaluator {
+  const cache = new Map<string, VariableProjectionEvaluation>();
+  const centerEvaluation: VariableProjectionEvaluation = {
+    descriptions: arg.center.descriptions,
+    atoms: arg.center.atoms,
+    fit: arg.center.fit,
+    gain: arg.center.gain,
+  };
+  const counters: VariableProjectionEvaluationCounters = {
+    evaluations: 0,
+    unitBasisRenders: 0,
+  };
+  cache.set(
+    variableProjectionShapeKey(arg.center.descriptions),
+    centerEvaluation,
+  );
+  const evaluate = (
+    descriptions: AtomDescription[],
+  ): VariableProjectionEvaluation => {
+    const key = variableProjectionShapeKey(descriptions);
+    const cached = cache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const atoms = descriptions.map((description, index) => {
+      const previous = arg.center.atoms[index];
+      if (
+        previous !== undefined &&
+        atomShapeKey(previous.description) ===
+          atomShapeKey(description)
+      ) {
+        return previous;
+      }
+      counters.unitBasisRenders += 2;
+      return prepareAtom({
+        description,
+        target: arg.target,
+        fitResidual: arg.fitResidual,
+        phaseModel: arg.phaseModel,
+      });
+    });
+    counters.evaluations += 1;
+    const fit = fitPreparedAtoms(atoms);
+    const evaluated: VariableProjectionEvaluation = {
+      descriptions,
+      atoms,
+      fit,
+      gain: fit?.gain ?? -Infinity,
+    };
+    cache.set(key, evaluated);
+    return evaluated;
+  };
+  return { centerEvaluation, counters, evaluate };
+}
+
+/**
+ * Строит 16 одиночных и четыре совместных кандидата прохода VP.
+ *
+ * @param arg - Центр, исходные атомы, номер прохода и измеритель точек
+ * @returns Кандидаты в исходном детерминированном порядке
+ * @remarks Сначала оси из `VP_AXES` проверяются в направлениях minus/plus.
+ *   Затем `VP_PARAMETERS` задаёт четыре совместных хода. Для каждого
+ *   атома направление выбирается по большему RSS gain среди его одиночных
+ *   ходов, включая случаи неположительного прироста.
+ */
+function buildVariableProjectionPassCandidates(arg: {
+  center: VariableProjectionPoint;
+  origins: AtomDescription[];
+  pass: number;
+  evaluate: (
+    descriptions: AtomDescription[],
+  ) => VariableProjectionEvaluation;
+}): VariableProjectionEvaluation[] {
+  const singles = new Map<
+    string,
+    {
+      minus: VariableProjectionEvaluation;
+      plus: VariableProjectionEvaluation;
+    }
+  >();
+  const candidates: VariableProjectionEvaluation[] = [];
+  for (const axis of VP_AXES) {
+    const minus = arg.evaluate(
+      moveVariableProjectionAtPass({
+        center: arg.center.descriptions,
+        origins: arg.origins,
+        moves: [{ axis, sign: -1 }],
+        pass: arg.pass,
+      }),
+    );
+    const plus = arg.evaluate(
+      moveVariableProjectionAtPass({
+        center: arg.center.descriptions,
+        origins: arg.origins,
+        moves: [{ axis, sign: 1 }],
+        pass: arg.pass,
+      }),
+    );
+    singles.set(`${axis.parameter}:${axis.atomIndex}`, {
+      minus,
+      plus,
+    });
+    candidates.push(minus, plus);
+  }
+  for (const parameter of VP_PARAMETERS) {
+    const moves: { axis: VariableProjectionAxis; sign: -1 | 1 }[] =
+      [];
+    for (let atomIndex = 0; atomIndex < 2; atomIndex += 1) {
+      const single = singles.get(`${parameter}:${atomIndex}`);
+      if (single === undefined) {
+        continue;
+      }
+      moves.push({
+        axis: { atomIndex, parameter },
+        sign: single.plus.gain > single.minus.gain ? 1 : -1,
+      });
+    }
+    candidates.push(
+      arg.evaluate(
+        moveVariableProjectionAtPass({
+          center: arg.center.descriptions,
+          origins: arg.origins,
+          moves,
+          pass: arg.pass,
+        }),
+      ),
+    );
+  }
+  return candidates;
+}
+
+/**
+ * Обрабатывает один проход VP от оценки ходов до нового центра.
+ *
+ * @param arg - Текущий центр, контекст exact render и лучший accepted
+ * @returns Новый центр, обновлённый accepted, аудит и стоимость прохода
+ * @remarks Победитель максимизирует RSS gain среди кандидатов и прежнего
+ *   центра. Полный global/J guard влияет только на `bestAccepted` и аудит:
+ *   центр следующего прохода всегда следует за RSS-победителем.
+ */
+function processVariableProjectionPass(arg: {
+  center: VariableProjectionPoint;
+  origins: AtomDescription[];
+  pass: number;
+  state: RenderState;
+  seed: BlockCandidate;
+  target: number[];
+  sampleRate: number;
+  phaseModel: PhaseModel;
+  zone: UsefulZone;
+  windowedFloor: number;
+  fitResidual: Float64Array;
+  bestAccepted: BlockCandidate | null;
+}): VariableProjectionPassResult {
+  const evaluator = createVariableProjectionEvaluator({
+    center: arg.center,
+    target: arg.target,
+    fitResidual: arg.fitResidual,
+    phaseModel: arg.phaseModel,
+  });
+  const candidates = buildVariableProjectionPassCandidates({
+    center: arg.center,
+    origins: arg.origins,
+    pass: arg.pass,
+    evaluate: evaluator.evaluate,
+  });
+  let winner = evaluator.centerEvaluation;
+  for (const candidate of candidates) {
+    if (candidate.gain > winner.gain) {
+      winner = candidate;
+    }
+  }
+  const exact =
+    winner.fit === null
+      ? null
+      : renderBlockCandidate({
+          state: arg.state,
+          choice: arg.seed.choice,
+          atoms: winner.atoms,
+          fits: winner.fit.fits,
+          target: arg.target,
+          sampleRate: arg.sampleRate,
+          zone: arg.zone,
+        });
+  const accepted =
+    exact !== null &&
+    acceptsCandidate({
+      current: arg.state.metrics,
+      candidate: exact.state.metrics,
+      windowedFloor: arg.windowedFloor,
+    });
+  let bestAccepted = arg.bestAccepted;
+  if (
+    exact !== null &&
+    accepted &&
+    betterCandidate(exact, bestAccepted)
+  ) {
+    bestAccepted = exact;
+  }
+  const audit: VariableProjectionPassAudit = {
+    pass: arg.pass + 1,
+    winnerGain: winner.gain,
+    globalSuppressionPercent:
+      exact?.state.metrics.globalSuppressionPercent ?? null,
+    windowedSuppressionPercent:
+      exact?.state.metrics.windowedSuppressionPercent ?? null,
+    accepted,
+    evaluations: evaluator.counters.evaluations,
+    unitBasisRenders: evaluator.counters.unitBasisRenders,
+  };
+  const center =
+    winner.fit === null
+      ? arg.center
+      : {
+          descriptions: winner.descriptions,
+          atoms: winner.atoms,
+          fit: winner.fit,
+          gain: winner.gain,
+        };
+  return {
+    center,
+    bestAccepted,
+    audit,
+    counters: evaluator.counters,
+  };
+}
+
+/**
+ * Уточняет нелинейные параметры словарной пары пятью проходами VP.
+ *
+ * @param arg - Проверенное состояние, словарный сид, target и порог J
+ * @returns Лучший принятый кандидат, конечный центр и аудит стоимости
+ * @remarks Каждый проход оценивает 16 одиночных и четыре совместных
+ *   сдвига. Для каждой точки bounded МНК 4×4 заново решает уровни
+ *   и фазы обоих атомов. Победителя выбирают по локальному RSS gain,
+ *   затем рендерят полный сигнал и проверяют global вместе с обоими
+ *   ограничениями J. Guard определяет только `bestAccepted`: даже
+ *   отклонённый победитель может стать центром следующего прохода и
+ *   попасть в аудит `final`, но не может сам изменить patch.
+ */
+function refineVariableProjection(arg: {
+  state: RenderState;
+  seed: BlockCandidate;
+  target: number[];
+  sampleRate: number;
+  phaseModel: PhaseModel;
+  zone: UsefulZone;
+  windowedFloor: number;
+}): VariableProjectionRefinement {
+  const origins = arg.seed.atoms.map((atom) => ({
+    ...atom.description,
+  }));
+  const seedFit = fitPreparedAtoms(arg.seed.atoms);
+  let evaluations = 1;
+  let unitBasisRenders = 0;
+  let exactCandidates = 0;
+  let bestAccepted: BlockCandidate | null = null;
+  const passes: VariableProjectionPassAudit[] = [];
+  if (seedFit === null) {
+    return {
+      bestAccepted,
+      final: origins,
+      evaluations,
+      unitBasisRenders,
+      exactCandidates,
+      passes,
+    };
+  }
+  let center: VariableProjectionPoint = {
+    descriptions: origins.map((description) => ({ ...description })),
+    atoms: arg.seed.atoms,
+    fit: seedFit,
+    gain: seedFit.gain,
+  };
+  const fitResidual = Float64Array.from(
+    { length: arg.target.length },
+    (_, index) =>
+      (arg.target[index] ?? 0) / MAX_AMPLITUDE_16_BIT_WAV_ENCODED -
+      (arg.seed.choice.rawWithout[index] ?? 0),
+  );
+  for (let pass = 0; pass < VP_FREQUENCY_STEPS.length; pass += 1) {
+    const processed = processVariableProjectionPass({
+      center,
+      origins,
+      pass,
+      state: arg.state,
+      seed: arg.seed,
+      target: arg.target,
+      sampleRate: arg.sampleRate,
+      phaseModel: arg.phaseModel,
+      zone: arg.zone,
+      windowedFloor: arg.windowedFloor,
+      fitResidual,
+      bestAccepted,
+    });
+    center = processed.center;
+    bestAccepted = processed.bestAccepted;
+    evaluations += processed.counters.evaluations;
+    unitBasisRenders += processed.counters.unitBasisRenders;
+    exactCandidates += 1;
+    passes.push(processed.audit);
+  }
+  return {
+    bestAccepted,
+    final: center.descriptions.map((description) => ({
+      ...description,
+    })),
+    evaluations,
+    unitBasisRenders,
+    exactCandidates,
+    passes,
+  };
+}
+
 /** Готовит общий словарь и базисы одной пары или одиночного слота. */
 function prepareSlotSet(arg: {
   state: RenderState;
@@ -574,7 +1191,8 @@ function searchPreparedSlotSet(arg: {
   zone: UsefulZone;
   windowedFloor: number;
 }): {
-  best: BlockCandidate | null;
+  bestAccepted: BlockCandidate | null;
+  bestAny: BlockCandidate | null;
   exactEvaluations: number;
   jointEvaluations: number;
 } {
@@ -615,7 +1233,8 @@ function searchPreparedSlotSet(arg: {
     );
     combinations.splice(EXACT_PAIRS_PER_SLOT_SET);
   }
-  let best: BlockCandidate | null = null;
+  let bestAccepted: BlockCandidate | null = null;
+  let bestAny: BlockCandidate | null = null;
   let exactEvaluations = 0;
   for (const combination of combinations) {
     if (combination.fit === null) {
@@ -631,19 +1250,29 @@ function searchPreparedSlotSet(arg: {
       zone: arg.zone,
     });
     exactEvaluations += 1;
+    if (candidate === null) {
+      continue;
+    }
+    if (betterCandidate(candidate, bestAny)) {
+      bestAny = candidate;
+    }
     if (
-      candidate !== null &&
       acceptsCandidate({
         current: arg.state.metrics,
         candidate: candidate.state.metrics,
         windowedFloor: arg.windowedFloor,
       }) &&
-      betterCandidate(candidate, best)
+      betterCandidate(candidate, bestAccepted)
     ) {
-      best = candidate;
+      bestAccepted = candidate;
     }
   }
-  return { best, exactEvaluations, jointEvaluations };
+  return {
+    bestAccepted,
+    bestAny,
+    exactEvaluations,
+    jointEvaluations,
+  };
 }
 
 /** Сохраняет новые solo-вклады всех слотов принятого блока. */
@@ -712,7 +1341,17 @@ function auditAtoms(arg: {
   return atoms;
 }
 
-/** Пробует до двух наборов слотов и возвращает лучший принятый блок. */
+/**
+ * Ищет лучший блок не более чем в двух наборах слотов.
+ *
+ * @param arg - Состояние, target, ограничения поиска и флаг VP
+ * @returns Принятый блок, стоимость и необязательный аудит VP
+ * @remarks В K2-VP отклонённый guard'ом `bestAny` служит только
+ *   сидом для нелинейного уточнения и никогда не возвращается как
+ *   принятый блок. Если VP не даёт лучшего принятого кандидата,
+ *   сохраняется обычный принятый K2; без такого K2 исходный patch
+ *   остаётся неизменным.
+ */
 function pursueOneBlock(arg: {
   state: RenderState;
   contributions: (Float64Array | null)[];
@@ -725,7 +1364,12 @@ function pursueOneBlock(arg: {
   blockSize: PursuitBlockSize;
   usedSlots: ReadonlySet<number>;
   diverseShortlist: boolean;
-}): { accepted: AcceptedBlock | null; counters: AttemptCounters } {
+  variableProjection: boolean;
+}): {
+  accepted: AcceptedBlock | null;
+  counters: AttemptCounters;
+  variableProjection?: VariableProjectionAttemptAudit;
+} {
   const counters: AttemptCounters = {
     localEvaluations: 0,
     jointEvaluations: 0,
@@ -740,7 +1384,8 @@ function pursueOneBlock(arg: {
     usedSlots: arg.usedSlots,
     blockSize: arg.blockSize,
   });
-  let best: BlockCandidate | null = null;
+  let bestAccepted: BlockCandidate | null = null;
+  let bestAny: BlockCandidate | null = null;
   for (const choice of choices) {
     counters.slotSetsEvaluated += 1;
     const prepared = prepareSlotSet({
@@ -766,14 +1411,102 @@ function pursueOneBlock(arg: {
     counters.exactEvaluations += searched.exactEvaluations;
     counters.jointEvaluations += searched.jointEvaluations;
     if (
-      searched.best !== null &&
-      betterCandidate(searched.best, best)
+      searched.bestAccepted !== null &&
+      betterCandidate(searched.bestAccepted, bestAccepted)
     ) {
-      best = searched.best;
+      bestAccepted = searched.bestAccepted;
+    }
+    if (
+      searched.bestAny !== null &&
+      betterCandidate(searched.bestAny, bestAny)
+    ) {
+      bestAny = searched.bestAny;
     }
   }
+  if (!arg.variableProjection || arg.blockSize !== 2) {
+    if (bestAccepted === null) {
+      return { accepted: null, counters };
+    }
+    const audit: BlockPursuitStep = {
+      step: arg.step,
+      atoms: auditAtoms({
+        previousPatch: arg.state.patch,
+        candidate: bestAccepted,
+      }),
+      before: arg.state.metrics,
+      after: bestAccepted.state.metrics,
+      exactCandidates: counters.exactEvaluations,
+      jointCandidates: counters.jointEvaluations,
+      slotSetsEvaluated: counters.slotSetsEvaluated,
+    };
+    return {
+      accepted: {
+        state: bestAccepted.state,
+        contributions: replaceBlockContributions({
+          contributions: arg.contributions,
+          candidate: bestAccepted,
+          sampleCount: arg.target.length,
+          phaseModel: arg.phaseModel,
+        }),
+        audit,
+      },
+      counters,
+    };
+  }
+  const seedAccepted = bestAccepted !== null;
+  const seed = bestAccepted ?? bestAny;
+  if (seed === null) {
+    return {
+      accepted: null,
+      counters,
+      variableProjection: {
+        step: arg.step,
+        seedAccepted: false,
+        outcome: 'no-seed',
+        seed: null,
+        final: null,
+        evaluations: 0,
+        unitBasisRenders: 0,
+        exactCandidates: 0,
+        passes: [],
+      },
+    };
+  }
+  const refined = refineVariableProjection({
+    state: arg.state,
+    seed,
+    target: arg.target,
+    sampleRate: arg.sampleRate,
+    phaseModel: arg.phaseModel,
+    zone: arg.zone,
+    windowedFloor: arg.windowedFloor,
+  });
+  let best = bestAccepted;
+  let outcome: VariableProjectionOutcome = bestAccepted
+    ? 'k2-fallback'
+    : 'no-accepted';
+  if (
+    refined.bestAccepted !== null &&
+    betterCandidate(refined.bestAccepted, bestAccepted)
+  ) {
+    best = refined.bestAccepted;
+    outcome = 'accepted';
+  }
+  const variableProjection: VariableProjectionAttemptAudit = {
+    step: arg.step,
+    seedAccepted,
+    outcome,
+    seed: variableProjectionAtomsAudit(
+      seed.atoms.map((atom) => atom.description),
+    ),
+    final: variableProjectionAtomsAudit(refined.final),
+    evaluations: refined.evaluations,
+    unitBasisRenders: refined.unitBasisRenders,
+    exactCandidates: refined.exactCandidates,
+    passes: refined.passes,
+  };
   if (best === null) {
-    return { accepted: null, counters };
+    return { accepted: null, counters, variableProjection };
   }
   const audit: BlockPursuitStep = {
     step: arg.step,
@@ -786,6 +1519,7 @@ function pursueOneBlock(arg: {
     exactCandidates: counters.exactEvaluations,
     jointCandidates: counters.jointEvaluations,
     slotSetsEvaluated: counters.slotSetsEvaluated,
+    variableProjection,
   };
   return {
     accepted: {
@@ -799,14 +1533,61 @@ function pursueOneBlock(arg: {
       audit,
     },
     counters,
+    variableProjection,
   };
 }
 
-/** Возвращает исходный результат и накопленную стоимость неудачного поиска. */
+/**
+ * Суммирует стоимость и исходы всех VP-попыток, включая неудачные.
+ *
+ * @param attempts - Аудит каждой выполненной попытки VP
+ * @returns Общие счётчики и подробные записи по каждому блоку
+ */
+function summarizeVariableProjection(
+  attempts: VariableProjectionAttemptAudit[],
+): VariableProjectionSummary {
+  return {
+    evaluations: attempts.reduce(
+      (sum, attempt) => sum + attempt.evaluations,
+      0,
+    ),
+    unitBasisRenders: attempts.reduce(
+      (sum, attempt) => sum + attempt.unitBasisRenders,
+      0,
+    ),
+    exactCandidates: attempts.reduce(
+      (sum, attempt) => sum + attempt.exactCandidates,
+      0,
+    ),
+    accepted: attempts.filter(
+      (attempt) => attempt.outcome === 'accepted',
+    ).length,
+    k2Fallback: attempts.filter(
+      (attempt) => attempt.outcome === 'k2-fallback',
+    ).length,
+    noSeed: attempts.filter(
+      (attempt) => attempt.outcome === 'no-seed',
+    ).length,
+    noAccepted: attempts.filter(
+      (attempt) => attempt.outcome === 'no-accepted',
+    ).length,
+    attempts,
+  };
+}
+
+/**
+ * Возвращает исходник после поиска без принятого результата.
+ *
+ * @param arg - Исходник, счётчики и необязательный аудит VP
+ * @returns Результат `unchanged` с копией patch и исходными samples
+ * @remarks Аудит VP сохраняется даже при отказе, но отклонённые сиды
+ *   и промежуточные кандидаты не попадают в возвращаемые patch и WAV.
+ */
 function unchangedResult(arg: {
   patch: ArgCreateSynth;
   initial: RenderState;
   counters: AttemptCounters;
+  variableProjection?: VariableProjectionSummary;
 }): BlockPursuitResult {
   return {
     status: 'unchanged',
@@ -817,25 +1598,35 @@ function unchangedResult(arg: {
     steps: [],
     ...arg.counters,
     replacementCount: 0,
+    ...(arg.variableProjection === undefined
+      ? {}
+      : { variableProjection: arg.variableProjection }),
   };
 }
 
 /**
  * Выполняет не более `maxBlocks` жадных одиночных или парных замен.
  *
- * @param arg - Готовый match, target PCM и размер блока K=1 или K=2
- * @returns Лучший patch/WAV, полный аудит и стоимость; при неудаче —
- *   исходные данные
- * @remarks K1 и K2 используют общий словарь и проверяют до двух наборов
- *   слотов на шаг. K2 ранжирует пары совместным МНК 4×4 и точно проверяет
- *   восемь лучших пар на набор. Слот меняется не более одного раза за
- *   прогон. Каждый блок повышает global минимум на 0.005 п.п.; J не падает
- *   больше чем на 0.01 п.п. от текущего и 0.05 п.п. от исходного match.
- *   Финальный WAV получается каноническим рендером патча. Новый CD не
- *   запускается. Production match, enhance и API не вызывают этот
- *   offline-эксперимент; его результат не доказывает закон T35.
- * @throws Error если target пуст, sample rate не 44100 Гц, blockSize
- *   не 1 и не 2 или maxBlocks не является целым от 1 до 12
+ * @param arg - Match, target PCM, размер блока и опции поиска;
+ *   `variableProjection` по умолчанию равен `false`
+ * @returns Лучший patch/WAV и аудит; при неудаче — исходник
+ * @remarks K1 и K2 используют общий словарь и проверяют до двух
+ *   наборов слотов на шаг. K2 ранжирует пары совместным МНК 4×4 и
+ *   точно проверяет восемь лучших пар на набор. Слот меняется
+ *   не более одного раза за прогон. Каждый блок повышает global
+ *   минимум на 0.005 п.п.; J не падает больше чем на 0.01 п.п. от
+ *   текущего и 0.05 п.п. от исходного match.
+ *   `variableProjection=true` включает
+ *   пять проходов только для K2. Уровни и фазы каждой VP-точки решает
+ *   общий bounded МНК 4×4. Отклонённый словарный `bestAny` служит
+ *   только сидом: принять блок можно лишь после полного global/J
+ *   guard. Финальный WAV получается каноническим рендером патча и
+ *   повторно проходит суммарный global/J guard; новый CD не
+ *   запускается. Это offline-screening вне production: он не
+ *   доказывает закон T35 и не показывает, что достигнуты 98%
+ *   suppression.
+ * @throws Error если target пуст, sample rate не 44100 Гц,
+ *   blockSize не 1/2 или maxBlocks не целый от 1 до 12
  */
 export function pursueResidualBlocks(arg: {
   patch: ArgCreateSynth;
@@ -845,6 +1636,7 @@ export function pursueResidualBlocks(arg: {
   blockSize: PursuitBlockSize;
   maxBlocks?: number;
   diverseShortlist?: boolean;
+  variableProjection?: boolean;
 }): BlockPursuitResult {
   const sampleRate = arg.sampleRate ?? SAMPLE_RATE;
   const phaseModel = arg.phaseModel ?? 'legacy';
@@ -884,6 +1676,10 @@ export function pursueResidualBlocks(arg: {
   );
   const usedSlots = new Set<number>();
   const steps: BlockPursuitStep[] = [];
+  const variableProjectionEnabled =
+    (arg.variableProjection ?? false) && arg.blockSize === 2;
+  const variableProjectionAttempts: VariableProjectionAttemptAudit[] =
+    [];
   const counters: AttemptCounters = {
     localEvaluations: 0,
     jointEvaluations: 0,
@@ -907,7 +1703,11 @@ export function pursueResidualBlocks(arg: {
       blockSize: arg.blockSize,
       usedSlots,
       diverseShortlist: arg.diverseShortlist ?? false,
+      variableProjection: variableProjectionEnabled,
     });
+    if (attempt.variableProjection !== undefined) {
+      variableProjectionAttempts.push(attempt.variableProjection);
+    }
     for (const key of Object.keys(
       counters,
     ) as (keyof AttemptCounters)[]) {
@@ -923,8 +1723,16 @@ export function pursueResidualBlocks(arg: {
       usedSlots.add(atom.slot);
     }
   }
+  const variableProjection = variableProjectionEnabled
+    ? summarizeVariableProjection(variableProjectionAttempts)
+    : undefined;
   if (steps.length === 0) {
-    return unchangedResult({ patch: arg.patch, initial, counters });
+    return unchangedResult({
+      patch: arg.patch,
+      initial,
+      counters,
+      variableProjection,
+    });
   }
   const finalSamples = renderForTarget(
     state.patch,
@@ -948,7 +1756,12 @@ export function pursueResidualBlocks(arg: {
         CURRENT_WINDOWED_TOLERANCE ||
     finalMetrics.windowedSuppressionPercent < windowedFloor
   ) {
-    return unchangedResult({ patch: arg.patch, initial, counters });
+    return unchangedResult({
+      patch: arg.patch,
+      initial,
+      counters,
+      variableProjection,
+    });
   }
   return {
     status: 'refined',
@@ -962,5 +1775,8 @@ export function pursueResidualBlocks(arg: {
       (sum, step) => sum + step.atoms.length,
       0,
     ),
+    ...(variableProjection === undefined
+      ? {}
+      : { variableProjection }),
   };
 }

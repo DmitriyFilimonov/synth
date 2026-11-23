@@ -1,12 +1,10 @@
 /* eslint-disable no-console */
 /**
- * Парный screening K1 против K2 на готовых match-прогонах.
- * Оба режима стартуют с одного patch и используют один словарь.
+ * Парный screening K1, K2 и K2 с variable projection на готовых match-прогонах.
+ * Все режимы стартуют с одного patch и используют один словарь.
  * Новый coordinate descent не запускается, production-сервис не меняется.
- * Результат screening не доказывает закон T35.
  *
- * npx tsx src/dataset/block-pursuit-run.ts \
- *   --dataset datasets/ref --out datasets/block-screen
+ * npx tsx src/dataset/block-pursuit-run.ts --dataset datasets/ref --out datasets/block-screen
  */
 import { mkdirSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
@@ -76,6 +74,8 @@ interface ModeRunReport {
   exactEvaluations: number;
   basisRenders: number;
   slotSetsEvaluated: number;
+  variableProjection: boolean;
+  variableProjectionAudit?: BlockPursuitResult['variableProjection'];
   character: ReturnType<typeof compareCharacter>;
   bands: ReturnType<typeof compareWaveformBands>;
 }
@@ -87,7 +87,10 @@ interface PairedBlockRun {
   savedGlobalSuppressionPercent: number | null;
   k1: ModeRunReport;
   k2: ModeRunReport;
+  k2Vp: ModeRunReport;
   pairGlobalDelta: number;
+  vpMinusK2: number;
+  vpMinusK1: number;
 }
 
 interface BlockTargetSummary {
@@ -95,12 +98,17 @@ interface BlockTargetSummary {
   runs: number;
   k1MeanGlobalDelta: number;
   k2MeanGlobalDelta: number;
+  k2VpMeanGlobalDelta: number;
   meanPairGlobalDelta: number;
+  meanVpMinusK2: number;
+  meanVpMinusK1: number;
   medianPairGlobalDelta: number | null;
   sampleSdPairGlobalDelta: number | null;
   k1Improved: number;
   k2Improved: number;
+  k2VpImproved: number;
   k2Wins: number;
+  k2VpWinsAgainstK2: number;
   k2PassesScreen: boolean;
 }
 
@@ -139,14 +147,15 @@ function sampleSd(values: number[]): number | null {
 }
 
 /**
- * Сводит парную разницу K2−K1 и проверяет порог продолжения.
+ * Сводит результаты K1, K2 и K2-VP по одному таргету.
  *
- * @param slug - Слаг таргета
- * @param runs - Парные результаты доступных сидов этого таргета
- * @returns Средние приросты, разброс K2−K1 и итог screening
- * @remarks K2 проходит screening только на четырёх прогонах при среднем
- *   приросте не меньше 0.5 п.п. и минимум двух улучшенных сидах. Этот
- *   порог разрешает следующий эксперимент, но не доказывает закон T35.
+ * @param slug - Имя таргета в датасете
+ * @param runs - Парные прогоны всех доступных сидов этого таргета
+ * @returns Средние приросты, различия режимов и итог screening для K2
+ * @remarks `k2PassesScreen` по-прежнему проверяет только обычный K2:
+ *   четыре сида, средний прирост не меньше 0.5 п.п. и минимум два
+ *   улучшенных сида. Метрики VP описывают эксперимент и не меняют
+ *   этот порог.
  */
 export function summarizeBlockTarget(
   slug: string,
@@ -156,6 +165,9 @@ export function summarizeBlockTarget(
   const k2MeanGlobalDelta = mean(
     runs.map((run) => run.k2.globalDelta),
   );
+  const k2VpMeanGlobalDelta = mean(
+    runs.map((run) => run.k2Vp.globalDelta),
+  );
   const k2Improved = runs.filter(
     (run) => run.k2.status === 'refined' && run.k2.globalDelta > 0,
   ).length;
@@ -164,14 +176,23 @@ export function summarizeBlockTarget(
     runs: runs.length,
     k1MeanGlobalDelta: mean(runs.map((run) => run.k1.globalDelta)),
     k2MeanGlobalDelta,
+    k2VpMeanGlobalDelta,
     meanPairGlobalDelta: mean(pair),
+    meanVpMinusK2: mean(runs.map((run) => run.vpMinusK2)),
+    meanVpMinusK1: mean(runs.map((run) => run.vpMinusK1)),
     medianPairGlobalDelta: quantile(pair, 0.5),
     sampleSdPairGlobalDelta: sampleSd(pair),
     k1Improved: runs.filter(
       (run) => run.k1.status === 'refined' && run.k1.globalDelta > 0,
     ).length,
     k2Improved,
+    k2VpImproved: runs.filter(
+      (run) =>
+        run.k2Vp.status === 'refined' && run.k2Vp.globalDelta > 0,
+    ).length,
     k2Wins: runs.filter((run) => run.pairGlobalDelta > 1e-9).length,
+    k2VpWinsAgainstK2: runs.filter((run) => run.vpMinusK2 > 1e-9)
+      .length,
     k2PassesScreen:
       runs.length === 4 &&
       k2MeanGlobalDelta >= 0.5 &&
@@ -198,7 +219,16 @@ async function saveModeArtifacts(arg: {
   return { patch, wav };
 }
 
-/** Запускает один режим и проверяет его канонический WAV. */
+/**
+ * Запускает один режим и проверяет его канонический WAV.
+ *
+ * @param arg - Общие параметры block pursuit и необязательный флаг VP
+ * @returns Результат поиска и его длительность в миллисекундах
+ * @remarks Без `variableProjection` выполняется стандартный K1/K2;
+ *   значение `true` передаётся в `pursueResidualBlocks` без
+ *   изменений.
+ * @throws Error если WAV не совпадает с каноническим рендером patch
+ */
 function executeBlockMode(arg: {
   patch: ArgCreateSynth;
   target: Int16Array;
@@ -207,6 +237,7 @@ function executeBlockMode(arg: {
   blockSize: PursuitBlockSize;
   maxBlocks: number;
   diverseShortlist: boolean;
+  variableProjection?: boolean;
 }): { result: BlockPursuitResult; durationMs: number } {
   const started = Date.now();
   const result = pursueResidualBlocks(arg);
@@ -220,7 +251,14 @@ function executeBlockMode(arg: {
   return { result, durationMs: Date.now() - started };
 }
 
-/** Строит DTO режима и измеряет характер итогового WAV. */
+/**
+ * Строит DTO режима и измеряет характер итогового WAV.
+ *
+ * @param arg - Результат, target, параметры режима и пути артефактов
+ * @returns Метрики global/J, характер, стоимость и аудит VP
+ * @remarks Полный `variableProjectionAudit` присутствует только при
+ *   включённом VP; для обычных K1/K2 это поле опускается.
+ */
 function createModeRunReport(arg: {
   result: BlockPursuitResult;
   target: Int16Array;
@@ -255,6 +293,10 @@ function createModeRunReport(arg: {
     exactEvaluations: result.exactEvaluations,
     basisRenders: result.basisRenders,
     slotSetsEvaluated: result.slotSetsEvaluated,
+    variableProjection: result.variableProjection !== undefined,
+    ...(result.variableProjection === undefined
+      ? {}
+      : { variableProjectionAudit: result.variableProjection }),
     character: compareCharacter(
       arg.target,
       result.samples,
@@ -286,7 +328,15 @@ async function saveModeAudit(arg: {
   });
 }
 
-/** Выполняет один режим и связывает его артефакты, отчёт и аудит. */
+/**
+ * Выполняет режим и сохраняет patch, WAV, отчёт и аудит.
+ *
+ * @param arg - Параметры поиска, флаг VP и каталог режима
+ * @returns DTO режима со ссылками на сохранённые артефакты
+ * @remarks Для K2-VP в `audit.json` попадают пошаговые записи и
+ *   сводка стоимости VP. Coordinate descent и production API здесь
+ *   не запускаются.
+ */
 async function processMode(arg: {
   patch: ArgCreateSynth;
   target: Int16Array;
@@ -295,6 +345,7 @@ async function processMode(arg: {
   blockSize: PursuitBlockSize;
   maxBlocks: number;
   diverseShortlist: boolean;
+  variableProjection?: boolean;
   directory: string;
 }): Promise<ModeRunReport> {
   const executed = executeBlockMode(arg);
@@ -370,13 +421,17 @@ async function loadVerifiedMatchRun(arg: {
 }
 
 /**
- * Запускает K1 и K2 от одного проверенного исходника.
+ * Запускает K1, K2 и K2-VP от одного проверенного исходника.
  *
- * @param arg - Координаты исходного match и общие параметры поиска
- * @returns Парный отчёт либо `null` для незавершённого исходного match
- * @remarks K1 получает вдвое больше блоков, чем K2. Поэтому оба режима
- *   могут заменить не более `2 * maxBlocks` слотов. Так сравнение
- *   получает равный предел замен при разном числе блоков.
+ * @param arg - Координаты match-сида, manifest и параметры screening
+ * @returns Отчёт трёх режимов или `null` для незавершённого match
+ * @remarks K1 получает двойной лимит одиночных блоков, а K2 и K2-VP —
+ *   один лимит пар, поэтому все режимы могут заменить одинаковое
+ *   число слотов. Обычный K2 не задаёт флаг VP и использует
+ *   значение по умолчанию `false`; третий режим явно включает VP.
+ *   Все режимы получают один проверенный patch и target.
+ * @throws Error если исходник противоречит WAV или режимы получили
+ *   разный baseline global/J
  */
 async function processPair(arg: {
   dataset: string;
@@ -413,13 +468,26 @@ async function processPair(arg: {
     blockSize: 2,
     directory: join(pairDir, 'k2'),
   });
+  const k2Vp = await processMode({
+    ...common,
+    maxBlocks: arg.maxBlocks,
+    blockSize: 2,
+    variableProjection: true,
+    directory: join(pairDir, 'k2-vp'),
+  });
   if (
     k1.baselineGlobalSuppressionPercent !==
       k2.baselineGlobalSuppressionPercent ||
     k1.baselineWindowedSuppressionPercent !==
-      k2.baselineWindowedSuppressionPercent
+      k2.baselineWindowedSuppressionPercent ||
+    k1.baselineGlobalSuppressionPercent !==
+      k2Vp.baselineGlobalSuppressionPercent ||
+    k1.baselineWindowedSuppressionPercent !==
+      k2Vp.baselineWindowedSuppressionPercent
   ) {
-    throw new Error(`K1 и K2 получили разные baseline в ${pairDir}`);
+    throw new Error(
+      `K1, K2 и K2-VP получили разные baseline в ${pairDir}`,
+    );
   }
   return {
     slug: arg.slug,
@@ -429,21 +497,27 @@ async function processPair(arg: {
       source.record.globalSuppressionPercent ?? null,
     k1,
     k2,
+    k2Vp,
     pairGlobalDelta:
       k2.globalSuppressionPercent - k1.globalSuppressionPercent,
+    vpMinusK2:
+      k2Vp.globalSuppressionPercent - k2.globalSuppressionPercent,
+    vpMinusK1:
+      k2Vp.globalSuppressionPercent - k1.globalSuppressionPercent,
   };
 }
 
 /**
- * Возвращает Markdown с абсолютными global и парной разницей K2−K1.
+ * Строит Markdown со значениями global трёх режимов и их разницами.
  *
- * @param runs - Парные результаты по таргетам и сидам
- * @param summaries - Сводки, рассчитанные по этим результатам
- * @param maxBlocks - Бюджет пар K2; K1 получает удвоенный бюджет блоков
- * @returns Текст отчёта с детальными строками и порогом продолжения
- * @remarks Отчёт фиксирует равный предел замен у K1 и K2. Он описывает
- *   offline-диагностику, не подключение к production и не доказательство
- *   закона T35.
+ * @param runs - Парные результаты по всем обработанным сидам
+ * @param summaries - Сводки по таргетам для тех же прогонов
+ * @param maxBlocks - Лимит пар K2/K2-VP;
+ *   K1 получает двойной лимит блоков
+ * @returns Таблицы прогонов и таргетов с пояснением порога screening
+ * @remarks Отчёт описывает offline-диагностику вне production. Порог
+ *   разрешает следующий эксперимент, но не доказывает закон T35 или
+ *   общий эффект VP и не показывает, что suppression достиг 98%.
  */
 export function renderBlockReportMarkdown(
   runs: PairedBlockRun[],
@@ -451,26 +525,26 @@ export function renderBlockReportMarkdown(
   maxBlocks: number,
 ): string {
   const lines = [
-    '# Screening совместного K=2 residual pursuit',
+    '# Screening K1, K2 и K2 с variable projection',
     '',
-    `K1 и K2 стартуют с одного match и используют один словарь v3. K1 выполняет до ${maxBlocks * 2} одиночных блоков, K2 — до ${maxBlocks} пар с общим МНК 4×4, поэтому оба могут заменить не более ${maxBlocks * 2} слотов. Оба проверяют несколько слотов и принимают только полный global/J guard. Это offline-диагностика, не закон T35 и не подключение к production.`,
+    `K1, K2 и K2-VP стартуют с одного match и используют один словарь v3. K1 выполняет до ${maxBlocks * 2} одиночных блоков, а K2 и K2-VP — до ${maxBlocks} пар с общим МНК 4×4, поэтому каждый режим может заменить не более ${maxBlocks * 2} слотов. K2-VP дополнительно делает пять проходов нелинейного уточнения выбранной пары и после каждого прохода проверяет полный global/J guard. Это offline-диагностика, не закон T35 и не подключение к production.`,
     '',
-    '| Таргет | Сид | Global до | K1 после | K1 Δ | K2 после | K2 Δ | K2−K1 | K1 с | K2 с |',
-    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    '| Таргет | Сид | Global до | K1 после | K1 Δ | K2 после | K2 Δ | K2−K1 | K2-VP после | K2-VP Δ | VP−K2 | VP−K1 | K1 с | K2 с | VP с |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
   ];
   for (const run of runs) {
     lines.push(
-      `| ${run.slug} | ${run.seed} | ${run.k1.baselineGlobalSuppressionPercent.toFixed(2)} | ${run.k1.globalSuppressionPercent.toFixed(2)} | ${run.k1.globalDelta.toFixed(3)} | ${run.k2.globalSuppressionPercent.toFixed(2)} | ${run.k2.globalDelta.toFixed(3)} | ${run.pairGlobalDelta.toFixed(3)} | ${(run.k1.durationMs / 1000).toFixed(1)} | ${(run.k2.durationMs / 1000).toFixed(1)} |`,
+      `| ${run.slug} | ${run.seed} | ${run.k1.baselineGlobalSuppressionPercent.toFixed(2)} | ${run.k1.globalSuppressionPercent.toFixed(2)} | ${run.k1.globalDelta.toFixed(3)} | ${run.k2.globalSuppressionPercent.toFixed(2)} | ${run.k2.globalDelta.toFixed(3)} | ${run.pairGlobalDelta.toFixed(3)} | ${run.k2Vp.globalSuppressionPercent.toFixed(2)} | ${run.k2Vp.globalDelta.toFixed(3)} | ${run.vpMinusK2.toFixed(3)} | ${run.vpMinusK1.toFixed(3)} | ${(run.k1.durationMs / 1000).toFixed(1)} | ${(run.k2.durationMs / 1000).toFixed(1)} | ${(run.k2Vp.durationMs / 1000).toFixed(1)} |`,
     );
   }
   lines.push(
     '',
-    '| Таргет | Прогонов | K1 среднее Δ | K2 среднее Δ | K2−K1 среднее | K1 улучшено | K2 улучшено | K2 выигрышей | K2 проходит screening |',
-    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
+    '| Таргет | Прогонов | K1 среднее Δ | K2 среднее Δ | K2-VP среднее Δ | K2−K1 среднее | VP−K2 среднее | VP−K1 среднее | K1 улучшено | K2 улучшено | VP улучшено | K2 выигрышей | VP выигрышей у K2 | K2 проходит screening |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
   );
   for (const summary of summaries) {
     lines.push(
-      `| ${summary.slug} | ${summary.runs} | ${summary.k1MeanGlobalDelta.toFixed(3)} | ${summary.k2MeanGlobalDelta.toFixed(3)} | ${summary.meanPairGlobalDelta.toFixed(3)} | ${summary.k1Improved} | ${summary.k2Improved} | ${summary.k2Wins} | ${summary.k2PassesScreen ? 'да' : 'нет'} |`,
+      `| ${summary.slug} | ${summary.runs} | ${summary.k1MeanGlobalDelta.toFixed(3)} | ${summary.k2MeanGlobalDelta.toFixed(3)} | ${summary.k2VpMeanGlobalDelta.toFixed(3)} | ${summary.meanPairGlobalDelta.toFixed(3)} | ${summary.meanVpMinusK2.toFixed(3)} | ${summary.meanVpMinusK1.toFixed(3)} | ${summary.k1Improved} | ${summary.k2Improved} | ${summary.k2VpImproved} | ${summary.k2Wins} | ${summary.k2VpWinsAgainstK2} | ${summary.k2PassesScreen ? 'да' : 'нет'} |`,
     );
   }
   lines.push(
@@ -619,9 +693,11 @@ async function runBlockScreening(
           console.log(
             `RESULT ${slug} seed=${seed} ` +
               `K1=${run.k1.globalDelta.toFixed(3)} K2=${run.k2.globalDelta.toFixed(3)} ` +
+              `K2VP=${run.k2Vp.globalDelta.toFixed(3)} ` +
               `pair=${run.pairGlobalDelta.toFixed(3)} ` +
-              `K1status=${run.k1.status} K2status=${run.k2.status} ` +
-              `seconds=${((run.k1.durationMs + run.k2.durationMs) / 1000).toFixed(1)}`,
+              `VP-K2=${run.vpMinusK2.toFixed(3)} VP-K1=${run.vpMinusK1.toFixed(3)} ` +
+              `K1status=${run.k1.status} K2status=${run.k2.status} VPstatus=${run.k2Vp.status} ` +
+              `seconds=${((run.k1.durationMs + run.k2.durationMs + run.k2Vp.durationMs) / 1000).toFixed(1)}`,
           );
         }
       } catch (error) {
@@ -659,9 +735,11 @@ function printBlockScreeningSummary(report: BlockReport): void {
     console.log(
       `SUMMARY ${summary.slug} runs=${summary.runs} ` +
         `K1=${summary.k1MeanGlobalDelta.toFixed(3)} K2=${summary.k2MeanGlobalDelta.toFixed(3)} ` +
+        `K2VP=${summary.k2VpMeanGlobalDelta.toFixed(3)} ` +
         `pair=${summary.meanPairGlobalDelta.toFixed(3)} ` +
-        `K1improved=${summary.k1Improved} K2improved=${summary.k2Improved} ` +
-        `pass=${summary.k2PassesScreen}`,
+        `VP-K2=${summary.meanVpMinusK2.toFixed(3)} VP-K1=${summary.meanVpMinusK1.toFixed(3)} ` +
+        `K1improved=${summary.k1Improved} K2improved=${summary.k2Improved} VPimproved=${summary.k2VpImproved} ` +
+        `VPwins=${summary.k2VpWinsAgainstK2} pass=${summary.k2PassesScreen}`,
     );
   }
   console.log(
