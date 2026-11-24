@@ -1207,29 +1207,18 @@ export interface FixedOffsetClipRefitResult {
   audit: ClipStartAudit;
 }
 
-/**
- * Уточняет четыре квадратуры пары при фиксированном внешнем вкладе.
- *
- * @param arg - Базисы пары, полный normalized target, внешний raw offset,
- *   стартовые коэффициенты bounded raw winner и предел итераций
- * @returns Прямые метрики полного сигнала и аудит одного E-старта
- * @remarks `fixedOffset` складывается с вкладами пары до hard clip. Поэтому
- *   solver минимизирует RSS полного сигнала против исходного target, а не
- *   клиппирует пару отдельно. Запускается только один старт от переданного
- *   raw fit; полный D/E, ridge и новые базисы здесь не вычисляются.
- */
-export function refitClippedQuadraturePair(arg: {
+interface FixedOffsetClipRefitInput {
   basis: Float64Array[];
   target: ArrayLike<number>;
   fixedOffset: ArrayLike<number>;
   initialCoefficients: ArrayLike<number>;
   maxIterations?: number;
-}): FixedOffsetClipRefitResult {
-  if (arg.basis.length !== 4) {
-    throw new Error(
-      'Clip-aware refit принимает ровно четыре квадратуры',
-    );
-  }
+}
+
+/** Общий одностартовый E для одного атома или независимой пары. */
+function refitClippedFixedOffsetBasis(
+  arg: FixedOffsetClipRefitInput,
+): FixedOffsetClipRefitResult {
   const maxIterations = arg.maxIterations ?? JOINT_E_ITERATIONS;
   if (
     !Number.isInteger(maxIterations) ||
@@ -1273,6 +1262,49 @@ export function refitClippedQuadraturePair(arg: {
     },
     audit,
   };
+}
+
+/**
+ * Уточняет две квадратуры одного атома при фиксированном внешнем вкладе.
+ *
+ * @param arg - Два базиса атома, полный normalized target, внешний raw
+ *   offset, стартовые коэффициенты bounded raw fit и предел итераций
+ * @returns Прямые метрики полного сигнала и аудит одного E-старта
+ * @remarks Атом не дублируется: basis содержит ровно его sine/cosine.
+ *   `fixedOffset` складывается с ним до hard clip, поэтому solver видит
+ *   полный сигнал. Полный D/E, ridge и новые базисы здесь не вычисляются.
+ */
+export function refitClippedQuadratureAtom(
+  arg: FixedOffsetClipRefitInput,
+): FixedOffsetClipRefitResult {
+  if (arg.basis.length !== 2) {
+    throw new Error(
+      'Clip-aware atom refit принимает ровно две квадратуры',
+    );
+  }
+  return refitClippedFixedOffsetBasis(arg);
+}
+
+/**
+ * Уточняет четыре квадратуры пары при фиксированном внешнем вкладе.
+ *
+ * @param arg - Базисы пары, полный normalized target, внешний raw offset,
+ *   стартовые коэффициенты bounded raw winner и предел итераций
+ * @returns Прямые метрики полного сигнала и аудит одного E-старта
+ * @remarks `fixedOffset` складывается с вкладами пары до hard clip. Поэтому
+ *   solver минимизирует RSS полного сигнала против исходного target, а не
+ *   клиппирует пару отдельно. Запускается только один старт от переданного
+ *   raw fit; полный D/E, ridge и новые базисы здесь не вычисляются.
+ */
+export function refitClippedQuadraturePair(
+  arg: FixedOffsetClipRefitInput,
+): FixedOffsetClipRefitResult {
+  if (arg.basis.length !== 4) {
+    throw new Error(
+      'Clip-aware refit принимает ровно четыре квадратуры',
+    );
+  }
+  return refitClippedFixedOffsetBasis(arg);
 }
 
 /**

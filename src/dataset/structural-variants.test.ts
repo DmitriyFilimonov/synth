@@ -26,6 +26,8 @@ const ALL_FIELDS: readonly OscField[] = [
   'ampEnv.endLevel',
   'ampEnv.duration',
   'ampEnv.slope',
+  'ampEnv.attack',
+  'ampEnv.hardStop',
 ];
 
 /**
@@ -67,6 +69,8 @@ function createTestPatch(): ArgCreateSynth {
           endLevel: 0.001,
           duration: 0.04,
           slope: 2,
+          attack: 0.002,
+          hardStop: true,
         },
       },
       {
@@ -258,6 +262,12 @@ function overwriteField(
     case 'ampEnv.slope':
       group.ampEnv.slope += 0.125;
       return group.ampEnv.slope;
+    case 'ampEnv.attack':
+      group.ampEnv.attack = 0.125;
+      return group.ampEnv.attack;
+    case 'ampEnv.hardStop':
+      group.ampEnv.hardStop = !group.ampEnv.hardStop;
+      return group.ampEnv.hardStop;
   }
 }
 
@@ -752,7 +762,7 @@ void test('invalid specs reject the whole variant without partial edits', () => 
   }
 });
 
-void test('manifest survives JSON round-trip and preserves null endLevel', () => {
+void test('manifest JSON round-trip preserves optional localized fields', () => {
   const source = createTestPatch();
   const result = createPartialBodyVariant(source);
   const serialized = JSON.stringify(result.manifest);
@@ -770,6 +780,24 @@ void test('manifest survives JSON round-trip and preserves null endLevel', () =>
     Object.prototype.hasOwnProperty.call(missingEndLevel, 'expected'),
     true,
   );
+  for (const field of [
+    'ampEnv.attack',
+    'ampEnv.hardStop',
+  ] as OscField[]) {
+    const missing = parsed.frozenFields.find(
+      (entry) => entry.oscillatorIndex === 2 && entry.field === field,
+    );
+    assert.ok(missing);
+    assert.equal(missing.expected, null);
+    const explicit = parsed.frozenFields.find(
+      (entry) => entry.oscillatorIndex === 1 && entry.field === field,
+    );
+    assert.ok(explicit);
+    assert.equal(
+      explicit.expected,
+      field === 'ampEnv.attack' ? 0.002 : true,
+    );
+  }
   assert.deepEqual(
     verifyStructuralVariant(source, result.patch, parsed),
     [],

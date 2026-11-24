@@ -219,7 +219,7 @@ function findResidualPeaks(
 }
 
 /** Банк огибающих зависит от окна поиска, но не от имени таргета. */
-function envelopeBank(window: SearchWindow): {
+export function envelopeBank(window: SearchWindow): {
   durations: number[];
   slopes: number[];
 } {

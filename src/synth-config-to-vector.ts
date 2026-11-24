@@ -17,8 +17,10 @@ import { validateFixedDelaySeconds } from './fixed-delay';
  * @remarks Непрерывные параметры переводятся в долю своего диапазона,
  *   включённый флаг становится 1. Выключенный осциллятор даёт слот из
  *   нулей. Позиции значений задаёт VECTOR_PARAM_OFFSETS.
- * @throws Error если хотя бы один осциллятор имеет ненулевой delay:
- *   десятипараметровый вектор не может сохранить это поле
+ * @throws Error если хотя бы один осциллятор имеет ненулевой delay,
+ *   ненулевой ampEnv.attack или hardStop=true: десятипараметровый вектор
+ *   не может сохранить эти поля. Проверка включает off-слоты, потому что
+ *   будущее включение не должно молча потерять localized-форму
  */
 export const mapSynthConfigToVector = (
   arg: ArgCreateSynth,
@@ -26,6 +28,17 @@ export const mapSynthConfigToVector = (
   if (arg.oscillators.some((group) => (group.osc.delay ?? 0) !== 0)) {
     throw new Error(
       'Delayed oscillator patches cannot be mapped to the 10-parameter optimizer vector',
+    );
+  }
+  if (
+    arg.oscillators.some(
+      (group) =>
+        (group.ampEnv.attack ?? 0) !== 0 ||
+        (group.ampEnv.hardStop ?? false),
+    )
+  ) {
+    throw new Error(
+      'Localized amplitude patches cannot be mapped to the 10-parameter optimizer vector',
     );
   }
   return arg.oscillators.flatMap<number>((osc) => {
@@ -100,11 +113,13 @@ export interface SynthConfigVectorWithFixedDelays {
  * @returns Нормализованный вектор прежней длины 10×N и массив из N
  *   задержек в исходном порядке осцилляторов
  * @throws Error если хотя бы одна задержка не конечна или выходит за
- *   диапазон 0–0.5 с
+ *   диапазон 0–0.5 с, либо любой слот содержит активные attack/hardStop
  * @remarks Старый mapSynthConfigToVector намеренно остаётся строгим и
  *   отклоняет ненулевой delay. Этот helper явно снимает delay только во
  *   временной копии, а оригинальные значения возвращает отдельно. Поэтому
  *   onset выключенного слота тоже сохраняется и восстановится при on/off.
+ *   Он не добавляет sidecar для attack/hardStop и заранее отклоняет такой
+ *   патч через строгий конвертер, включая потенциально включаемые off-слоты.
  */
 export const mapSynthConfigToVectorWithFixedDelays = (
   arg: ArgCreateSynth,

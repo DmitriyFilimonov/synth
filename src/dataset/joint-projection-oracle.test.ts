@@ -9,6 +9,7 @@ import {
   patchFromJointCoefficients,
   prepareJointProjectionProblem,
   projectRadialCoefficientPairs,
+  refitClippedQuadratureAtom,
   runJointProjectionOracle,
   solveJointProjectionProblem,
 } from './joint-projection-oracle';
@@ -296,6 +297,36 @@ test('clip mask is recomputed when a sample crosses the boundary', () => {
     ),
   );
   assert.ok(currentStart.maskRecomputations > 1);
+});
+
+test('two-quadrature atom refit includes an already saturated fixed offset', () => {
+  const shape = Float64Array.from([1, 0.5]);
+  const result = refitClippedQuadratureAtom({
+    basis: [shape, new Float64Array(2)],
+    target: [1, 0.75],
+    fixedOffset: [1.25, 0],
+    initialCoefficients: [0.1, 0],
+  });
+  const sine = result.objective.coefficients[0] ?? 0;
+  assert.ok(Math.abs(sine - 1) < 1e-4);
+  assert.equal(result.objective.coefficients.length, 2);
+  assert.equal(result.objective.saturatedSamples, 1);
+  assert.ok(Math.abs(result.objective.clippedRss - 0.0625) < 1e-8);
+  assert.throws(
+    () =>
+      refitClippedQuadratureAtom({
+        basis: [
+          shape,
+          new Float64Array(2),
+          shape,
+          new Float64Array(2),
+        ],
+        target: [1, 0.75],
+        fixedOffset: [1.25, 0],
+        initialCoefficients: [0.1, 0, 0.1, 0],
+      }),
+    /две квадратуры/,
+  );
 });
 
 test('backtracking is monotone, deterministic and bounded', () => {

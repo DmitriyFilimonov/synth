@@ -2,6 +2,26 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-24: localized transient прошёл адресный function-review fix
+
+`validHighSweep` теперь ограничивает и freqBase, и freqStart значением 16000 Гц из `LOCALIZED_TRANSIENT_LIMITS`, а не общим потолком synth 20 кГц. Boundary-тест принимает ровно 16000 и отклоняет превышение любой из двух частот. Модель, bounded solver и порядок candidate selection не менялись.
+
+`createOscillatorGroup` вызывает отдельный localized amplitude helper; default ветка по-прежнему возвращает исходную exponential-функцию. До рефакторинга зафиксированы SHA-256 PCM пресета: legacy `e1616a33ff5b73c348336377ef75ac53208a5e1722ea5de55d36c6b031e21005`, integral `1b1a825a219672d8b2011596c9f6011ba77e832fae1b475561a18f2a9c912819`. Они стали regression-тестом вместе с прежним legacy golden.
+
+Localized pipeline разделён на `selectHighResidualCells`, `prepareLocalizedContext`, `evaluateLocalizedCandidates` и `finalizeLocalizedCandidate`; exact и canonical используют общий proposal guard, а DTO/fallback собираются отдельно. Runner разделён на загрузку проверенной базы, diagnostics и run DTO. Порядок solver-вызовов и счётчики оценок сохранены, clipping на canonical отказе по-прежнему не вычисляется.
+
+Новые контроли покрывают rejected exact при непустом residual context, canonical отказ после accepted exact и две high-ячейки с двумя слотами при пределе 16 exact. Первый-winner fallback зафиксирован сознательно: если canonical guard отклоняет выбранного winner, источник сохраняется, а другой accepted proposal не продвигается. Это прежнее поведение, а не новый выбор. Проверки: 78/78 целевых тестов, TypeScript, Prettier, target ESLint и diff check. Реальные прогоны не запускались, Q4 и эффект на GrumU неизвестны.
+
+## 2026-11-24: подготовлен один localized high-only атом поверх A+B2
+
+`ArgAmpEnvConfig` получил optional `attack` и `hardStop`. Положительный attack задаёт sin²-нарастание, затем прежний экспоненциальный спад продолжается по локальному времени без атаки. Hard stop обнуляет сигнал с конца поддержки, а без него хвост остаётся на endLevel. Частотная огибающая не меняется. Missing/attack=0/hardStop=false сохраняют PCM обеих фаз; десятипараметровый vector и fixed-delay extraction отклоняют активные поля даже в off-слоте. T35 замораживает оба новых scalar-поля и различает отсутствие, ноль и false после JSON round-trip.
+
+`localized-transient.ts` и `localized-transient-run.ts` проверяют один high-only атом поверх `k2-vp-clip-seed-refit` из сохранённого A+B2. До двух high-ячеек дают локальные FFT-пики без prefix window; свободные слоты или активные слоты с freqBase не ниже 1 кГц ранжируются по потере global. Существующий envelope bank, bounded raw fit и общий clip solver работают с полным target и fixedOffset. Для K1 добавлен отдельный вход на две квадратуры без дублирования атома. На слот разрешены четыре raw и четыре clip-refit exact-оценки, на сид — не более 16 и один принятый атом. Счётчики onset/raw/clip/exact ограничивают стоимость без wall-clock условий.
+
+Accepted обязан поднять global, удержать J не ниже initial−0.05 и уменьшить selected high cell и total high RSS. Proposed raw/refit и saved canonical разделены, любой проигрыш сохраняет A+B2. Runner пишет patch/WAV/audit/report, clipping, character/bands и WARN при большем отклонении низа, f0 или decay. Gate продолжения заранее требует четыре сида, mean saved не менее +0.5 п.п. и минимум два улучшенных сида. Q4 PASS не выставляется.
+
+Known-answer покрывают нулевые default-поля, onset 221 с attack 22 и точным концом поддержки, chirp с 9000 до 3000 Гц с global выше 99% в integral, нулевые onset/sweep controls, насыщенный fixed offset, отказ при росте selected high RSS и canonical fallback/round-trip. Целевые synth/fixed-delay/structural/joint/localized тесты, TypeScript, Prettier и lint проходят. Реальные A/B/CD не запускались: это гипотеза и проверенная механика, а не измеренный результат на GrumU.
+
 ## 2026-11-24: frozen-delay CD screening не показал роста
 
 `delayed-cd-bog5` завершил четыре пары без errors/skips. Delayed получил +0.000, +0.000, +0.020 и +0.022 п.п. global от source, среднее +0.011; control дал почти ноль. Delayed сохраняет преимущество +7.365 п.п. над control, но оно отражает прежний onset, а не дополнительный CD. Финальные canonical patch/WAV сохраняют onset, бюджет итераций совпадает. Screening не поддержал увеличение бюджета; следующий эксперимент — один localized high/transient-атом поверх A+B2.

@@ -27,9 +27,11 @@ export type OscField =
   | 'ampEnv.startLevel'
   | 'ampEnv.endLevel'
   | 'ampEnv.duration'
-  | 'ampEnv.slope';
+  | 'ampEnv.slope'
+  | 'ampEnv.attack'
+  | 'ampEnv.hardStop';
 
-/** Значение scalar-поля; null обозначает отсутствующий endLevel или delay. */
+/** Значение scalar-поля; null обозначает отсутствующее optional-поле. */
 export type ScalarValue = number | boolean | null;
 
 /** Связь одной attack-компоненты с перестройкой мембраны. */
@@ -141,6 +143,8 @@ const FIELD_ORDER: readonly OscField[] = [
   'ampEnv.endLevel',
   'ampEnv.duration',
   'ampEnv.slope',
+  'ampEnv.attack',
+  'ampEnv.hardStop',
 ];
 
 const FREQUENCY_FIELDS: readonly FrequencyField[] = [
@@ -173,11 +177,11 @@ function canonicalNumber(value: number): number {
  * @param patch - Патч, из которого читается поле
  * @param oscillatorIndex - Нулевой индекс осциллятора
  * @param field - Имя scalar-поля
- * @returns Точное значение поля; отсутствующий осциллятор, `endLevel`
- *   или `delay` дают `null`
- * @remarks Все числовые нули становятся +0, включая исходный -0. Явный
- *   `osc.delay: 0` остаётся числом, поэтому verifier отличает его от
- *   отсутствующего поля.
+ * @returns Точное значение поля; отсутствующий осциллятор или optional
+ *   `endLevel`, `delay`, `attack`, `hardStop` дают `null`
+ * @remarks Все числовые нули становятся +0, включая исходный -0. Явные
+ *   `osc.delay: 0`, `ampEnv.attack: 0` и `ampEnv.hardStop: false`
+ *   остаются значениями, поэтому verifier отличает их от отсутствия поля.
  */
 function readField(
   patch: ArgCreateSynth,
@@ -215,6 +219,12 @@ function readField(
       return canonicalNumber(group.ampEnv.duration);
     case 'ampEnv.slope':
       return canonicalNumber(group.ampEnv.slope);
+    case 'ampEnv.attack':
+      return group.ampEnv.attack === undefined
+        ? null
+        : canonicalNumber(group.ampEnv.attack);
+    case 'ampEnv.hardStop':
+      return group.ampEnv.hardStop ?? null;
     default:
       return null;
   }
@@ -586,9 +596,10 @@ function collectActualEdits(
  *   перестраивает все активные осцилляторы. Выход любой новой частоты
  *   за нормы отклоняет весь вариант без обрезки значений. При
  *   `frequencyRatio = 1` planned edits остаются в манифесте, но патч
- *   совпадает с исходником, а `actualEdits` пуст. Поле `osc.delay`
- *   всегда заморожено: verifier различает отсутствующее значение и
- *   явный ноль. Входной `spec` также остаётся неизменным.
+ *   совпадает с исходником, а `actualEdits` пуст. Поля `osc.delay`,
+ *   `ampEnv.attack` и `ampEnv.hardStop` всегда заморожены: verifier
+ *   различает отсутствующее значение, явный ноль и false. Входной `spec`
+ *   также остаётся неизменным.
  */
 export function makeStructuralVariant(
   source: ArgCreateSynth,

@@ -142,6 +142,17 @@ export function assertStructuralPatch(patch: ArgCreateSynth): void {
     if (ampEnv.endLevel !== undefined) {
       numericFields.push(['ampEnv.endLevel', ampEnv.endLevel]);
     }
+    if (ampEnv.attack !== undefined) {
+      numericFields.push(['ampEnv.attack', ampEnv.attack]);
+    }
+    if (
+      ampEnv.hardStop !== undefined &&
+      typeof ampEnv.hardStop !== 'boolean'
+    ) {
+      throw new Error(
+        `osc[${index}].ampEnv.hardStop должен быть boolean`,
+      );
+    }
     for (const [field, value] of numericFields) {
       if (typeof value !== 'number' || !Number.isFinite(value)) {
         throw new Error(

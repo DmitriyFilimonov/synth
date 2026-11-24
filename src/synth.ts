@@ -95,11 +95,15 @@ export const oscConfigNormales: OscConfigNormales = {
   },
 };
 
-interface ArgAmpEnvConfig {
+export interface ArgAmpEnvConfig {
   startLevel: number;
   endLevel?: number;
   duration: number;
   slope: number;
+  /** Длительность sin²-нарастания в секундах до экспоненциального спада. */
+  attack?: number;
+  /** Обнуляет сигнал после attack + duration вместо сохранения хвоста. */
+  hardStop?: boolean;
 }
 
 type AmpEnvConfigNormales = Required<{
@@ -124,6 +128,14 @@ export const ampEnvConfigNormales: AmpEnvConfigNormales = {
   },
   endLevel: {
     min: MIN,
+    max: 1,
+  },
+  attack: {
+    min: 0,
+    max: 0.5,
+  },
+  hardStop: {
+    min: 0,
     max: 1,
   },
 };
@@ -224,18 +236,82 @@ export const createCyclePhase = (
 };
 
 /**
+ * Создаёт амплитудную огибающую с необязательной localized-формой.
+ *
+ * @param config - Уровни, спад, attack и hardStop одного осциллятора
+ * @returns Функция локального времени в амплитуду
+ * @throws Error если attack не конечен или вне 0–0.5 с, либо hardStop не
+ *   boolean
+ * @remarks При отсутствующих полях, attack=0 и hardStop=false возвращается
+ *   исходная exponential-функция без дополнительного вызова или округления.
+ *   Поэтому default PCM не зависит от выделения этого helper. Для localized
+ *   формы support end сравнивается с допуском нескольких ulp только ради
+ *   точного нуля на целой границе отсчётов.
+ */
+const createLocalizedAmplitudeEnvelope = (
+  config: ArgAmpEnvConfig,
+): ((arg: { x: number }) => number) => {
+  const amplitudeEnvelope = envelopeCreator({
+    duration: config.duration,
+    max: config.startLevel,
+    min: config.endLevel,
+    slope: config.slope,
+  });
+  const attack = config.attack ?? 0;
+  const hardStop = config.hardStop ?? false;
+  if (
+    !Number.isFinite(attack) ||
+    attack < ampEnvConfigNormales.attack.min ||
+    attack > ampEnvConfigNormales.attack.max
+  ) {
+    throw new Error(
+      `Attack must be finite and within [${ampEnvConfigNormales.attack.min}, ${ampEnvConfigNormales.attack.max}] seconds`,
+    );
+  }
+  if (typeof hardStop !== 'boolean') {
+    throw new Error('HardStop must be boolean');
+  }
+  const supportEnd = attack + config.duration;
+  const supportTolerance =
+    4 * Number.EPSILON * Math.max(1, Math.abs(supportEnd));
+  const localizedAmplitude = ({ x }: { x: number }): number => {
+    if (!Number.isFinite(x) || x < 0) {
+      return 0;
+    }
+    if (hardStop && x + supportTolerance >= supportEnd) {
+      return 0;
+    }
+    if (attack > 0 && x < attack) {
+      return (
+        config.startLevel *
+        Math.sin((Math.PI * x) / (2 * attack)) ** 2
+      );
+    }
+    return amplitudeEnvelope({ x: x - attack });
+  };
+  return attack === 0 && !hardStop
+    ? amplitudeEnvelope
+    : localizedAmplitude;
+};
+
+/**
  * Создаёт функцию одного осциллятора с двумя огибающими.
  *
  * @param config - Параметры осциллятора и его огибающих
  * @param options - Модель фазы; по умолчанию используется `legacy`
  * @returns Функция, которая принимает время в секундах и возвращает
  *   нормированный отсчёт
- * @throws Error если `osc.delay` не конечен или выходит за диапазон
- *   0–0.5 секунды
+ * @throws Error если `osc.delay` или `ampEnv.attack` не конечны или
+ *   выходят за диапазон 0–0.5 секунды, либо `hardStop` не boolean
  * @remarks Отсутствующий или нулевой `osc.delay` сохраняет прежний
  *   рендер без сдвига. При положительной задержке функция выдаёт нули
  *   до onset, а затем вычисляет фазу и обе огибающие по локальному
- *   времени `x - delay`. Нефинитное `x` у отложенной группы даёт 0.
+ *   времени `x - delay`. Отсутствующие `attack` и `hardStop`, явный
+ *   нулевой attack и `hardStop: false` сохраняют прежнюю амплитуду.
+ *   Положительный attack добавляет sin²-нарастание, а спад начинается
+ *   после него с прежнего startLevel. `hardStop: true` возвращает точный
+ *   ноль с конца support; без него огибающая сохраняет прежний хвост на
+ *   endLevel. Нефинитное `x` у отложенной группы даёт 0.
  */
 export const createOscillatorGroup = (
   config: OscillatorGroup,
@@ -253,12 +329,7 @@ export const createOscillatorGroup = (
     slope: config.osc.slope,
   });
 
-  const amplitudeEnvelope = envelopeCreator({
-    duration: config.ampEnv.duration,
-    max: config.ampEnv.startLevel,
-    min: config.ampEnv.endLevel,
-    slope: config.ampEnv.slope,
-  });
+  const amplitudeAt = createLocalizedAmplitudeEnvelope(config.ampEnv);
 
   const cyclesAt =
     options.phaseModel === 'integral'
@@ -273,12 +344,12 @@ export const createOscillatorGroup = (
           return (
             Math.sin(
               2 * Math.PI * (cyclesAt?.(x) ?? 0) + config.osc.phase,
-            ) * amplitudeEnvelope({ x })
+            ) * amplitudeAt({ x })
           );
         }
       : ({ x }: { x: number }): number => {
           return osc({
-            amplitude: amplitudeEnvelope({ x }),
+            amplitude: amplitudeAt({ x }),
             frequency: frequencyEnvelop({ x }),
             x,
           });
