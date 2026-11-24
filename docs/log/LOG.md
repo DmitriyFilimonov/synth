@@ -2,6 +2,20 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-24: реализован offline core full-patch VP
+
+`full-patch-vp.ts` работает прямо с `ArgCreateSynth`. LM меняет семь log-форм каждого активного слота. На текущей clip-маске normalized Gram внутреннего basis строит projected Kaufman `(I−BB+)J`; активная radial граница оставляет только tangent пары. Затем MGS отсекает зависимые столбцы до damped dense solve с partial pivoting. Внутренний solver строит normalized Gram по ненасыщенным отсчётам, совместно решает все квадратуры и соблюдает радиальные границы 0.001–1 с общей ulp-канонизацией. Каждая проба заново применяет clip и квантование; raw-only accept отсутствует.
+
+Каждый outer trial проходит canonical render и сохраняет inner/RSS/saturation одной backtrack-пробы, поэтому изменение support при hardStop не использует старый WAV, а данные разных проб не смешиваются. Stationary и quantized plateau с ненулевым RSS допускают outer LM. Нулевой rank останавливает поиск, dense/non-descent отказ повышает lambda. Все input guards завершаются до initial render, включая maxOuter=0. Лучший proposed выбирается по global и затем J отдельно от saved. Финальная побайтовая проверка и global/J guard возвращают исходные patch/WAV при любом отказе. Явные maxOuter/maxInner/maxBacktracks ограничивают работу без часов; счётчики записывают N-проходы synth, basis, Jacobian, Gram и metric. Gram-учёт включает нормировку Jacobian columns, вычитание проекций в обоих MGS passes и нормировку independent basis. Матрица N×N не строится.
+
+В Jacobian `duplicateOf` теперь сравнивает сохранённые исходные normalized columns, а не MGS residual. Добавлен повтор позднего независимого неортогонального столбца; rank-семантика не изменилась.
+
+Тринадцать synthetic core known-answer проверяют постоянный тон в обеих фазовых моделях, три испорченные формы с delayed localized hardStop, clip trap raw 1.1 против clipped 1.5, отличие projected Kaufman от fixed-coefficient Jacobian, radial boundary, вырожденный и нулевой support, stationary initial с ненулевым RSS, атомарный trial, input guards, восстановление после rejected шага, J-floor fallback при росте global, no-op, canonical roundtrip, proposed/saved и отсутствие мутации входа. Known-count на восьми отсчётах фиксирует Gram 63N и полный sampleWork 128N, включая Kaufman и все векторные проходы outer navigation. Реальные A/B/CD не запускались; runner и character/bands отложены следующему этапу. Это не результат на реальных таргетах и не production-изменение.
+
+Парный synthetic A/B на том же mixed входе сравнил прежний fixed-coefficient LM и projected Kaufman. Global вырос с 99.635031% до 99.896808%, J — с 98.614260% до 98.826098%, PCM RSS уменьшился с 277370 до 22174. Accepted/attempts: 61/72 против 23/51. WAV SHA-256 изменился с `c998e2929e110314a750468a92ff590d83a0447096d7b0432be609b5e26e100e` на `3475a1f5f48520cbd17ac808236850ec2d4df34470dbd42d881c380597d162ca`; patch SHA-256 — с `debb41bd5363fabc08b7e7b27669988505ca12c33ff62143f72878595518e666` на `9b2eea6c1a73dc3f6d26b0f8932acb23344d90f09ea97e0fe4e03b5ca21740e7`. Total sampleWork вырос с 371934156 до 804065724. Это численное свидетельство только для synthetic known-answer, не реальный A/B.
+
+Проверки: 21/21 full-patch и 34/34 D/E/localized, всего 55/55. TypeScript, Prettier, target ESLint и diff check проходят.
+
 ## 2026-11-24: подготовлен аналитический Jacobian full-patch VP
 
 `full-patch-jacobian.ts` работает прямо с `ArgCreateSynth` и держит квадратуры неподвижными. Для каждого активного слота он возвращает canonical contribution и семь производных по натуральным логарифмам `freqBase`, `freqStart`, обеих частотных форм и трёх амплитудных форм. Физические границы опубликованы также в log-шкале. On/off, delay, attack, hardStop и остальные поля не меняются.

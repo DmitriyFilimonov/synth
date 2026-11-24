@@ -528,6 +528,43 @@ test('rank diagnostics mark duplicates, zero support and near collinearity', () 
   }
 });
 
+test('duplicateOf finds a late copy of a nonorthogonal independent column', () => {
+  const first = tone();
+  first.osc.freqBase = 73;
+  first.osc.freqStart = 91;
+  first.ampEnv.duration = 0.021;
+  const second = tone();
+  second.osc.freqBase = 131;
+  second.osc.freqStart = 260;
+  second.osc.duration = 0.009;
+  second.ampEnv.duration = 0.013;
+  second.ampEnv.slope = 0.7;
+  const patch: ArgCreateSynth = {
+    oscillators: [first, second, structuredClone(second)],
+  };
+  const result = buildFullPatchJacobian({
+    patch,
+    coefficients: coefficientsFor(patch),
+    sampleCount: 512,
+    phaseModel: 'integral',
+  });
+  const diagnostics = result.diagnostics;
+  assert.ok(diagnostics !== null);
+  const source = diagnostics.columns[7];
+  const duplicate = diagnostics.columns[14];
+  assert.ok(source !== undefined);
+  assert.ok(duplicate !== undefined);
+  assert.equal(source.field, 'freqBase');
+  assert.equal(source.dependent, false);
+  assert.equal(duplicate.field, 'freqBase');
+  assert.equal(duplicate.dependent, true);
+  assert.equal(duplicate.duplicateOf, 7);
+  assert.equal(
+    diagnostics.rank,
+    diagnostics.columnCount - diagnostics.dependentColumns.length,
+  );
+});
+
 test('finite guards and explicit log bounds reject ambiguous solver input', () => {
   const patch: ArgCreateSynth = { oscillators: [tone()] };
   const coefficients = coefficientsFor(patch);

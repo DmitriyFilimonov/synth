@@ -184,6 +184,7 @@ interface PreparedColumn {
 interface BasisColumn {
   column: number;
   values: Float64Array;
+  originalNormalized: Float64Array;
 }
 
 const TWO_PI = 2 * Math.PI;
@@ -611,19 +612,21 @@ function prepareColumns(
   return prepared;
 }
 
-/** Ищет прежний базисный столбец, который почти совпадает по направлению. */
+/** Ищет повтор среди сохранённых исходных, а не MGS-остатков. */
 function duplicateSource(
-  projections: number[],
+  normalized: Float64Array,
   basis: BasisColumn[],
   duplicateTolerance: number,
 ): number | null {
   let largest = 0;
   let source: number | null = null;
-  for (let index = 0; index < projections.length; index += 1) {
-    const magnitude = Math.abs(projections[index] ?? 0);
+  for (const previous of basis) {
+    const magnitude = Math.abs(
+      dot(normalized, previous.originalNormalized),
+    );
     if (magnitude > largest) {
       largest = magnitude;
-      source = basis[index]?.column ?? null;
+      source = previous.column;
     }
   }
   return largest >= 1 - duplicateTolerance ? source : null;
@@ -660,7 +663,6 @@ function diagnoseRank(
       continue;
     }
     const residual = new Float64Array(current.normalized);
-    const projections: number[] = [];
     for (let pass = 0; pass < 2; pass += 1) {
       for (
         let basisIndex = 0;
@@ -675,9 +677,6 @@ function diagnoseRank(
           pass === 0 ? current.normalized : residual,
           basisValues,
         );
-        if (pass === 0) {
-          projections.push(projection);
-        }
         for (let index = 0; index < residual.length; index += 1) {
           residual[index] =
             (residual[index] ?? 0) -
@@ -689,7 +688,11 @@ function diagnoseRank(
     const dependent = residualRatio <= rankTolerance;
     const duplicateOf =
       dependent && residualRatio <= duplicateTolerance
-        ? duplicateSource(projections, basis, duplicateTolerance)
+        ? duplicateSource(
+            current.normalized,
+            basis,
+            duplicateTolerance,
+          )
         : null;
     if (dependent) {
       dependentColumns.push(current.column);
@@ -697,6 +700,7 @@ function diagnoseRank(
       basis.push({
         column: current.column,
         values: normalizedColumn(residual, residualRatio),
+        originalNormalized: current.normalized,
       });
     }
     columns.push({
@@ -751,8 +755,9 @@ function diagnoseRank(
  *   solver здесь не моделируется.
  *
  *   Rank вычисляется для нормированных столбцов двумя проходами MGS.
- *   `duplicateTolerance` помечает почти точные повторы одного прежнего
- *   направления, `rankTolerance` — общую линейную зависимость. Диагностика
+ *   `duplicateTolerance` сравнивает исходные нормированные столбцы и
+ *   помечает почти точные повторы независимо от MGS-остатков;
+ *   `rankTolerance` — общую линейную зависимость. Диагностика
  *   стоит O(sampleCount·columnCount²); будущий горячий solver может отключить
  *   её через `rankDiagnostics: false`. Это фундамент гипотезы T36, а не
  *   измеренный выигрыш, закон качества или production-поведение.

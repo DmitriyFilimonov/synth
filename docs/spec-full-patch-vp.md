@@ -2,9 +2,12 @@
 
 ## Статус
 
-Это спецификация следующего эксперимента, а не результат. Текущие CD,
-slot-post-pass, frozen-delay и localized-контролы не достигли 98%.
-Производственный match, enhance и API этот документ не подключает.
+Core `src/dataset/full-patch-vp.ts` реализован, но реальный эксперимент ещё
+не запускался. Текущие CD, slot-post-pass, frozen-delay и
+localized-контролы не достигли 98%. Производственный match, enhance и API
+этот документ не подключает. Runner, character/bands и A/B остаются
+следующим этапом; synthetic known-answer не является результатом на
+реальных таргетах.
 
 ## Что проверяем
 
@@ -79,14 +82,22 @@ backtracking обязательны. Truncated ridge остаётся диагн
 называется upper bound.
 
 Сбой inner solve, NaN, нарушение границ или исчерпание численного
-предела отклоняет outer candidate. Такой fit нельзя считать успешной
-variable projection.
+предела отклоняет outer candidate. Quantized plateau и stationary fit с
+ненулевым RSS не считаются сбоем и допускают outer LM. Backtrack-limit
+означает, что направление ещё имело raw gain, но разрешённые пробы не дали
+ни PCM decrease, ни plateau, ни stationary RSS. Такой fit нельзя считать
+успешной variable projection.
 
 ## LM outer step
 
-Для остатка `r` и аналитического `J` направление решается из
-`(JᵀJ + λD)δ = -g`. Столбцы нормируются, вырожденные оси отсекаются.
-Damping не заменяет rank guard.
+Для остатка `r` сначала строится projected Kaufman Jacobian
+`J_K = (I − BB+)J` на текущей clip-маске. `B` — текущий внутренний basis;
+normalized Gram и retained eigenvectors задают `B+` без матрицы N×N. На
+активной радиальной границе квадратурная пара даёт только tangent-направление.
+Затем направление решается из `(J_KᵀJ_K + λD)δ = -g`. Нормировка и MGS
+отсекают вырожденные оси уже после проекции и не заменяют её. Нулевой rank
+останавливает поиск; dense/non-descent отказ повышает lambda и продолжает
+работу до maxOuter или численного потолка.
 
 Каждый trial:
 
@@ -97,9 +108,42 @@ Damping не заменяет rank guard.
    backtracking;
 5. отдельно проходит canonical global/J guard.
 
-В первой версии используется Kaufman-вариант без производной квадратур
-по формам. Exact backtracking остаётся обязательным защитником от
-ошибки квадратичной модели.
+Используется Kaufman-вариант без отдельной производной квадратур по формам:
+их влияние удаляет проекция на orthogonal complement. Exact backtracking
+остаётся обязательным защитником от ошибки квадратичной модели. Аудит inner,
+RSS и saturation относится к одной атомарной backtrack-пробе.
+
+## Реализованный core API
+
+`runFullPatchVariableProjection` принимает `ArgCreateSynth`, target PCM,
+модель фазы и пределы `maxOuter`, `maxInner`, `maxBacktracks`. По умолчанию
+они равны 24, 12 и 16. Остановка по wall clock отсутствует. Отдельный
+`solveFullPatchClipAwareBasis` вызывает тот же inner solve для
+низкоуровневых known-answer; основной patch-native путь не использует
+vector converter или `groupFromAtom`. До первого render проверяются лимит
+50 слотов, бюджеты, target, active outer/fixed/phase fields. Основная функция
+разделена на validate, initial state, outer navigation, outer attempt и
+finalization; inner backtracking и MGS также выделены.
+
+Отдельный `projectFullPatchKaufmanColumns` проверяет `(I − BB+)J` на маленьких
+базисах без запуска solver. Результат разделяет `proposed` и saved `patch/samples`. В историю входят
+rank, число saturated samples, смены clip-маски, backtracking и inner
+failures. `cost.sampleWork` считает проходы длины N по категориям synth,
+basis, Jacobian, Gram/dot и metric. В Gram входят нормировка Jacobian
+columns, вычитание проекций в обоих MGS passes и нормировка independent
+basis. На буфере из восьми отсчётов known-count фиксирует Gram 63N и
+полный sampleWork 128N, включая Kaufman-проекцию. Также сохраняются числа
+вызовов. Используются массивы N×P и dense P×P,
+но не N×N. Финальный candidate заново проходит canonical render,
+побайтовую проверку patch/WAV и общий global/J guard.
+
+Синтетические тесты покрывают обе фазовые модели, три испорченные формы,
+включая delayed localized с hardStop, clip trap 1.1 против 1.5, отличие
+projected Kaufman от fixed-coefficient Jacobian, radial boundary, rank,
+stationary initial с ненулевым RSS, атомарный trial-аудит, input guards,
+восстановление после rejected шага, J-floor fallback, no-op, canonical
+roundtrip и известную стоимость. Они подтверждают только механику core.
+Реального результата пока нет.
 
 ## Артефакты и guards
 
