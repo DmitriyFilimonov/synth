@@ -18,6 +18,7 @@
 - Диагностика WAV по атаке, телу и хвосту, f0 и спаду до −20 дБ: `npx tsx src/audio-inspect.ts a.wav --compare b.wav`; это мера характера, не готовый закон качества
 - Кандидаты допусков Q4 по разбросу сидов: `npx tsx src/dataset/character-tolerances.ts --dataset datasets/reference-integral`; отчёт не назначает пороги автоматически
 - Проверка биения низа на всех исходниках: `npx tsx src/dataset/beat-report.ts --targets targets --out datasets/beat-report`; водные добавляются через `--extra raw/water_12_kick.wav,raw/water_15_kick.wav`
+- Слепая проверка water_15: `datasets/water15-blind/README.md`; четыре пары исходник/match на независимых 300-итерационных сидах. Не открывайте `mapping.json` до голосования
 - Вмешательство Q2: `npx tsx src/dataset/beat-interventions.ts --report datasets/beat-report/beat-report.json --out datasets/beat-interventions`; текущий контроль — 4/4 повторных отклонений среди исходно принятых кандидатов
 - Сравнение биения в match и исходниках: `npx tsx src/dataset/beat-seed-report.ts --dataset datasets/reference-integral`; на завершённых 32 прогонах — 10 preserved, 6 lost, 6 introduced и 10 absent
 - Выбор лучшего preserved-сида без изменения патча: `npx tsx src/dataset/beat-select.ts --dataset datasets/reference-integral --out datasets/beat-selected`; выбраны Friend seed 3 (global 93.62%), GrumU seed 4 (86.84%), Jenry seed 3 (88.56%) и SpaceR seed 3 (90.66%), introduced/lost исключены
