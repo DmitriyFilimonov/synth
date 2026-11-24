@@ -2,6 +2,12 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-24: реальный screening нашёл ошибку log-границы
+
+Запущены GrumU A+B2 и BOg delayed на сидах 1–4 с `maxOuter=4`, `maxInner=12` и `maxBacktracks=16`. BOg seeds 1/2 отклонились после первого принятого outer-шага: `Math.exp(Math.log(20))` дал `19.999999999999996`, и следующий `outerLogs` принял округление за выход за норму. `canonicalFullPatchOuterValue` теперь записывает точные нативные min/max на log-границе, а внутри диапазона использует экспоненту и нативный clamp. Направление LM и canonical guards не изменились. Known-answer покрывает обе границы и interior; полный набор прошёл 309/309. BOg будет повторён исправленным кодом, итог gate пока не получен.
+
+Первый GrumU seed 1 завершил VP и control. VP proposed добавил 0.126446 п.п. global, но потерял 0.263946 п.п. J, поэтому saved guard вернул исходник с global 86.914457%. Control выполнил 29 целых итераций, не превысил W и тоже сохранил исходник. Это один сид, а не итоговый NO GO.
+
 ## 2026-11-24: full-patch runner и equal-work CD готовы
 
 `full-patch-vp-run.ts` проверяет canonical GrumU A+B2 и BOg delayed до solver, сохраняет VP/no-op/control patch/WAV, атомарные чекпоинты, proposed/saved global/J, residual reduction, character/bands и видимые warnings. Control получает фактический VP work-бюджет через optional `maxSampleWork`; обе ветки учитывают одинаковые 6N canonical-работы. Runner независимо измеряет сохранённые PCM, а solver metrics хранит отдельно.

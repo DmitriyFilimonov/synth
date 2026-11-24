@@ -3,7 +3,9 @@ import { test } from 'node:test';
 import { SAMPLE_RATE } from '../consts';
 import type { ArgCreateSynth, PhaseModel } from '../synth';
 import { assertPatchMatchesWav } from './beat-transfer-run';
+import { FULL_PATCH_OUTER_BOUNDS } from './full-patch-jacobian';
 import {
+  canonicalFullPatchOuterValue,
   FULL_PATCH_FINALIZATION_SAMPLE_PASSES,
   passesFullPatchCanonicalGuard,
   projectFullPatchKaufmanColumns,
@@ -548,6 +550,31 @@ test('outer audit never mixes inner and canonical data across backtracks', () =>
       assert.equal(entry.rssAfter, inner.finalClippedPcmRss);
     }
   }
+});
+
+test('outer log round-trip preserves exact synth boundaries', () => {
+  const bound = FULL_PATCH_OUTER_BOUNDS[0];
+  assert.ok(bound !== undefined);
+  assert.equal(bound.nativeMinimum, 20);
+  assert.ok(Math.exp(Math.log(bound.nativeMinimum)) < 20);
+  assert.equal(
+    canonicalFullPatchOuterValue(
+      bound,
+      Math.log(bound.nativeMinimum) - 1,
+    ),
+    bound.nativeMinimum,
+  );
+  assert.equal(
+    canonicalFullPatchOuterValue(
+      bound,
+      Math.log(bound.nativeMaximum) + 1,
+    ),
+    bound.nativeMaximum,
+  );
+  assert.equal(
+    canonicalFullPatchOuterValue(bound, Math.log(73)),
+    Math.exp(Math.log(73)),
+  );
 });
 
 test('input guards reject invalid patches even with zero outer budget', () => {

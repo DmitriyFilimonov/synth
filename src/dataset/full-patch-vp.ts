@@ -20,6 +20,7 @@ import {
   buildFullPatchJacobian,
   FULL_PATCH_OUTER_BOUNDS,
   FULL_PATCH_OUTER_FIELDS,
+  type FullPatchOuterBound,
   type FullPatchOuterField,
   type FullPatchQuadratureCoefficients,
 } from './full-patch-jacobian';
@@ -1416,6 +1417,40 @@ function outerLogs(
   return logs;
 }
 
+/**
+ * Переводит натуральный логарифм наружного параметра в значение
+ * внутри границ синтезатора.
+ *
+ * @param bound - Границы поля в исходной и логарифмической шкалах
+ * @param log - Натуральный логарифм значения
+ * @returns Значение в исходной шкале в пределах нативных границ
+ * @remarks Сначала ограничивает `log` логарифмическими границами.
+ *   На минимуме и максимуме возвращает нативные границы напрямую,
+ *   чтобы округление `exp(log(20))` до `19.999999999999996` не
+ *   заставило следующий outer-шаг отклонить принятый patch.
+ *   Внутри диапазона применяет `Math.exp` и ограничивает результат
+ *   нативными границами.
+ */
+export function canonicalFullPatchOuterValue(
+  bound: FullPatchOuterBound,
+  log: number,
+): number {
+  const clampedLog = Math.max(
+    bound.logMinimum,
+    Math.min(bound.logMaximum, log),
+  );
+  if (clampedLog === bound.logMinimum) {
+    return bound.nativeMinimum;
+  }
+  if (clampedLog === bound.logMaximum) {
+    return bound.nativeMaximum;
+  }
+  return Math.max(
+    bound.nativeMinimum,
+    Math.min(bound.nativeMaximum, Math.exp(clampedLog)),
+  );
+}
+
 /** Пишет только семь разрешённых полей активных слотов. */
 function patchFromOuterLogs(
   currentPatch: ArgCreateSynth,
@@ -1444,11 +1479,11 @@ function patchFromOuterLogs(
       if (bound === undefined || log === undefined) {
         throw new Error('Incomplete full-patch outer coordinates');
       }
-      const clamped = Math.max(
-        bound.logMinimum,
-        Math.min(bound.logMaximum, log),
+      writeOuterField(
+        group,
+        bound.field,
+        canonicalFullPatchOuterValue(bound, log),
       );
-      writeOuterField(group, bound.field, Math.exp(clamped));
     }
   }
   return patch;
