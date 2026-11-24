@@ -149,6 +149,24 @@ export interface VariableProjectionSummary {
   attempts: VariableProjectionAttemptAudit[];
 }
 
+/** Одна K2-пара, отобранная clip-aware ранжированием в exact top-8. */
+export interface ClipSeedPairAudit {
+  atomIndices: number[];
+  shapeKey: string;
+  rawGain: number;
+  clippedRss: number | null;
+  rawRank: number;
+  clipRank: number;
+}
+
+/** Clip-aware отбор пар одного набора слотов до точных проверок. */
+export interface ClipSeedSelectionAudit {
+  step: number;
+  slotSetRank: number;
+  slots: number[];
+  selectedPairs: ClipSeedPairAudit[];
+}
+
 /** Итог поиска; unchanged всегда возвращает исходный patch и WAV. */
 export interface BlockPursuitResult {
   status: 'refined' | 'unchanged';
@@ -163,6 +181,8 @@ export interface BlockPursuitResult {
   basisRenders: number;
   slotSetsEvaluated: number;
   replacementCount: number;
+  clipSeedObjectiveEvaluations?: number;
+  clipSeedSelections?: ClipSeedSelectionAudit[];
   variableProjection?: VariableProjectionSummary;
 }
 
@@ -190,6 +210,20 @@ interface PreparedAtom {
 interface JointFit {
   fits: QuadratureFit[];
   gain: number;
+}
+
+interface PreparedPairCombination {
+  atoms: PreparedAtom[];
+  atomIndices: number[];
+  fit: JointFit | null;
+}
+
+interface ClipSeedRankedPair {
+  combination: PreparedPairCombination;
+  originalIndex: number;
+  clippedRss: number | null;
+  rawRank: number;
+  clipRank: number;
 }
 
 interface BlockCandidate {
@@ -645,7 +679,7 @@ function renderBlockRawSum(arg: {
  * Считает RSS полного клиппированного PCM против исходного target.
  * Использует тот же raw-sum, что и exact render.
  */
-function computeVariableProjectionClipObjective(arg: {
+function computeBlockClipObjective(arg: {
   choice: SlotSetChoice;
   atoms: PreparedAtom[];
   fits: QuadratureFit[];
@@ -807,7 +841,7 @@ function refitVariableProjectionWinner(arg: {
       'Clip-aware refit вернул недопустимые квадратуры',
     );
   }
-  const clippedRss = computeVariableProjectionClipObjective({
+  const clippedRss = computeBlockClipObjective({
     choice: arg.choice,
     atoms: arg.winner.atoms,
     fits,
@@ -1109,7 +1143,7 @@ function createVariableProjectionEvaluator(arg: {
     const fit = fitPreparedAtoms(atoms);
     const clippedRss =
       arg.clipAwareNavigation && fit !== null
-        ? computeVariableProjectionClipObjective({
+        ? computeBlockClipObjective({
             choice: arg.choice,
             atoms,
             fits: fit.fits,
@@ -1451,7 +1485,7 @@ function refineVariableProjection(arg: {
     };
   }
   const seedClippedRss = arg.clipAwareNavigation
-    ? computeVariableProjectionClipObjective({
+    ? computeBlockClipObjective({
         choice: arg.seed.choice,
         atoms: arg.seed.atoms,
         fits: seedFit.fits,
@@ -1584,6 +1618,144 @@ function prepareSlotSet(arg: {
   };
 }
 
+/**
+ * Ранжирует все решённые K2-пары по RSS полного PCM до отбора top-8.
+ * При равном clipped RSS сохраняет raw gain и исходный порядок пары.
+ * Ранги живут только во временных wrappers: входные fitted-пары и их
+ * атомы не получают новых полей и не мутируют.
+ */
+function rankClipAwareSeedPairs(arg: {
+  step: number;
+  slotSetRank: number;
+  choice: SlotSetChoice;
+  combinations: PreparedPairCombination[];
+  target: number[];
+}): {
+  combinations: PreparedPairCombination[];
+  objectiveEvaluations: number;
+  audit: ClipSeedSelectionAudit;
+} {
+  let objectiveEvaluations = 0;
+  const rankedPairs: ClipSeedRankedPair[] = arg.combinations.map(
+    (combination, originalIndex) => {
+      const clippedRss = computeBlockClipObjective({
+        choice: arg.choice,
+        atoms: combination.atoms,
+        fits: combination.fit?.fits ?? [],
+        target: arg.target,
+      });
+      objectiveEvaluations += 1;
+      return {
+        combination,
+        originalIndex,
+        clippedRss,
+        rawRank: 0,
+        clipRank: 0,
+      };
+    },
+  );
+  const rawOrder = [...rankedPairs];
+  rawOrder.sort(
+    (a, b) =>
+      (b.combination.fit?.gain ?? -Infinity) -
+        (a.combination.fit?.gain ?? -Infinity) ||
+      a.originalIndex - b.originalIndex,
+  );
+  for (let index = 0; index < rawOrder.length; index += 1) {
+    const pair = rawOrder[index];
+    if (pair !== undefined) {
+      pair.rawRank = index + 1;
+    }
+  }
+  const clipOrder = [...rankedPairs];
+  clipOrder.sort((a, b) => {
+    const aRss = a.clippedRss ?? Number.POSITIVE_INFINITY;
+    const bRss = b.clippedRss ?? Number.POSITIVE_INFINITY;
+    if (aRss !== bRss) {
+      return aRss - bRss;
+    }
+    return a.rawRank - b.rawRank;
+  });
+  for (let index = 0; index < clipOrder.length; index += 1) {
+    const pair = clipOrder[index];
+    if (pair !== undefined) {
+      pair.clipRank = index + 1;
+    }
+  }
+  const selectedPairs = clipOrder.slice(0, EXACT_PAIRS_PER_SLOT_SET);
+  const combinations = selectedPairs.map((pair) => pair.combination);
+  return {
+    combinations,
+    objectiveEvaluations,
+    audit: {
+      step: arg.step,
+      slotSetRank: arg.slotSetRank,
+      slots: [...arg.choice.slots],
+      selectedPairs: selectedPairs.map((pair) => ({
+        atomIndices: [...pair.combination.atomIndices],
+        shapeKey: variableProjectionShapeKey(
+          pair.combination.atoms.map((atom) => atom.description),
+        ),
+        rawGain:
+          pair.combination.fit?.gain ?? Number.NEGATIVE_INFINITY,
+        clippedRss: pair.clippedRss,
+        rawRank: pair.rawRank,
+        clipRank: pair.clipRank,
+      })),
+    },
+  };
+}
+
+/**
+ * Выбирает не более восьми K2-сидов по raw gain или полному clipped RSS.
+ * Выключенный clip-aware флаг сохраняет прежнюю сортировку и не создаёт аудит.
+ * Оба режима возвращают исходные fitted-пары без их мутации.
+ */
+export function selectPreparedPairSeeds(arg: {
+  step: number;
+  slotSetRank: number;
+  choice: SlotSetChoice;
+  combinations: PreparedPairCombination[];
+  target: number[];
+  clipAwareSeedSelection: boolean;
+}): {
+  combinations: PreparedPairCombination[];
+  objectiveEvaluations?: number;
+  audit?: ClipSeedSelectionAudit;
+} {
+  if (arg.clipAwareSeedSelection) {
+    return rankClipAwareSeedPairs(arg);
+  }
+  const combinations = [...arg.combinations];
+  combinations.sort(
+    (a, b) => (b.fit?.gain ?? -Infinity) - (a.fit?.gain ?? -Infinity),
+  );
+  combinations.splice(EXACT_PAIRS_PER_SLOT_SET);
+  return { combinations };
+}
+
+/**
+ * Вызывает exact-оценку каждого fitted-сида в порядке shortlist.
+ * Не меняет входные пары; вырожденные пары без fit пропускает.
+ */
+export function evaluatePreparedBlockSeeds(arg: {
+  combinations: PreparedPairCombination[];
+  evaluate: (
+    combination: PreparedPairCombination,
+    fit: JointFit,
+  ) => void;
+}): number {
+  let exactEvaluations = 0;
+  for (const combination of arg.combinations) {
+    if (combination.fit === null) {
+      continue;
+    }
+    arg.evaluate(combination, combination.fit);
+    exactEvaluations += 1;
+  }
+  return exactEvaluations;
+}
+
 /** Точно проверяет одиночные атомы или восемь лучших совместных пар. */
 function searchPreparedSlotSet(arg: {
   state: RenderState;
@@ -1594,22 +1766,30 @@ function searchPreparedSlotSet(arg: {
   sampleRate: number;
   zone: UsefulZone;
   windowedFloor: number;
+  step: number;
+  slotSetRank: number;
+  clipAwareSeedSelection: boolean;
 }): {
   bestAccepted: BlockCandidate | null;
   bestAny: BlockCandidate | null;
   exactEvaluations: number;
   jointEvaluations: number;
+  clipSeedObjectiveEvaluations?: number;
+  clipSeedSelection?: ClipSeedSelectionAudit;
 } {
-  const combinations: {
-    atoms: PreparedAtom[];
-    fit: JointFit | null;
-  }[] = [];
+  const combinations: PreparedPairCombination[] = [];
   let jointEvaluations = 0;
+  let clipSeedObjectiveEvaluations: number | undefined;
+  let clipSeedSelection: ClipSeedSelectionAudit | undefined;
   if (arg.blockSize === 1) {
-    for (const atom of arg.atoms) {
+    for (const [atomIndex, atom] of arg.atoms.entries()) {
       const fit = fitPreparedAtoms([atom]);
       jointEvaluations += 1;
-      combinations.push({ atoms: [atom], fit });
+      combinations.push({
+        atoms: [atom],
+        atomIndices: [atomIndex],
+        fit,
+      });
     }
   } else {
     for (let first = 0; first < arg.atoms.length; first += 1) {
@@ -1627,55 +1807,71 @@ function searchPreparedSlotSet(arg: {
         const fit = fitPreparedAtoms(atoms);
         jointEvaluations += 1;
         if (fit !== null) {
-          combinations.push({ atoms, fit });
+          combinations.push({
+            atoms,
+            atomIndices: [first, second],
+            fit,
+          });
         }
       }
     }
-    combinations.sort(
-      (a, b) =>
-        (b.fit?.gain ?? -Infinity) - (a.fit?.gain ?? -Infinity),
+    const selected = selectPreparedPairSeeds({
+      step: arg.step,
+      slotSetRank: arg.slotSetRank,
+      choice: arg.choice,
+      combinations,
+      target: arg.target,
+      clipAwareSeedSelection: arg.clipAwareSeedSelection,
+    });
+    combinations.splice(
+      0,
+      combinations.length,
+      ...selected.combinations,
     );
-    combinations.splice(EXACT_PAIRS_PER_SLOT_SET);
+    clipSeedObjectiveEvaluations = selected.objectiveEvaluations;
+    clipSeedSelection = selected.audit;
   }
   let bestAccepted: BlockCandidate | null = null;
   let bestAny: BlockCandidate | null = null;
-  let exactEvaluations = 0;
-  for (const combination of combinations) {
-    if (combination.fit === null) {
-      continue;
-    }
-    const candidate = renderBlockCandidate({
-      state: arg.state,
-      choice: arg.choice,
-      atoms: combination.atoms,
-      fits: combination.fit.fits,
-      target: arg.target,
-      sampleRate: arg.sampleRate,
-      zone: arg.zone,
-    });
-    exactEvaluations += 1;
-    if (candidate === null) {
-      continue;
-    }
-    if (betterCandidate(candidate, bestAny)) {
-      bestAny = candidate;
-    }
-    if (
-      acceptsCandidate({
-        current: arg.state.metrics,
-        candidate: candidate.state.metrics,
-        windowedFloor: arg.windowedFloor,
-      }) &&
-      betterCandidate(candidate, bestAccepted)
-    ) {
-      bestAccepted = candidate;
-    }
-  }
+  const exactEvaluations = evaluatePreparedBlockSeeds({
+    combinations,
+    evaluate: (combination, fit) => {
+      const candidate = renderBlockCandidate({
+        state: arg.state,
+        choice: arg.choice,
+        atoms: combination.atoms,
+        fits: fit.fits,
+        target: arg.target,
+        sampleRate: arg.sampleRate,
+        zone: arg.zone,
+      });
+      if (candidate === null) {
+        return;
+      }
+      if (betterCandidate(candidate, bestAny)) {
+        bestAny = candidate;
+      }
+      if (
+        acceptsCandidate({
+          current: arg.state.metrics,
+          candidate: candidate.state.metrics,
+          windowedFloor: arg.windowedFloor,
+        }) &&
+        betterCandidate(candidate, bestAccepted)
+      ) {
+        bestAccepted = candidate;
+      }
+    },
+  });
   return {
     bestAccepted,
     bestAny,
     exactEvaluations,
     jointEvaluations,
+    ...(clipSeedObjectiveEvaluations === undefined
+      ? {}
+      : { clipSeedObjectiveEvaluations }),
+    ...(clipSeedSelection === undefined ? {} : { clipSeedSelection }),
   };
 }
 
@@ -1772,9 +1968,12 @@ function pursueOneBlock(arg: {
   variableProjection: boolean;
   clipAwareNavigation: boolean;
   clipAwareRefit: boolean;
+  clipAwareSeedSelection: boolean;
 }): {
   accepted: AcceptedBlock | null;
   counters: AttemptCounters;
+  clipSeedObjectiveEvaluations?: number;
+  clipSeedSelections?: ClipSeedSelectionAudit[];
   variableProjection?: VariableProjectionAttemptAudit;
 } {
   const counters: AttemptCounters = {
@@ -1784,6 +1983,15 @@ function pursueOneBlock(arg: {
     basisRenders: 0,
     slotSetsEvaluated: 0,
   };
+  let clipSeedObjectiveEvaluations = 0;
+  const clipSeedSelections: ClipSeedSelectionAudit[] = [];
+  const clipSeedAudit = (): {
+    clipSeedObjectiveEvaluations?: number;
+    clipSeedSelections?: ClipSeedSelectionAudit[];
+  } =>
+    arg.clipAwareSeedSelection
+      ? { clipSeedObjectiveEvaluations, clipSeedSelections }
+      : {};
   const choices = rankSlotSets({
     state: arg.state,
     contributions: arg.contributions,
@@ -1793,7 +2001,7 @@ function pursueOneBlock(arg: {
   });
   let bestAccepted: BlockCandidate | null = null;
   let bestAny: BlockCandidate | null = null;
-  for (const choice of choices) {
+  for (const [choiceIndex, choice] of choices.entries()) {
     counters.slotSetsEvaluated += 1;
     const prepared = prepareSlotSet({
       state: arg.state,
@@ -1814,9 +2022,17 @@ function pursueOneBlock(arg: {
       sampleRate: arg.sampleRate,
       zone: arg.zone,
       windowedFloor: arg.windowedFloor,
+      step: arg.step,
+      slotSetRank: choiceIndex + 1,
+      clipAwareSeedSelection: arg.clipAwareSeedSelection,
     });
     counters.exactEvaluations += searched.exactEvaluations;
     counters.jointEvaluations += searched.jointEvaluations;
+    clipSeedObjectiveEvaluations +=
+      searched.clipSeedObjectiveEvaluations ?? 0;
+    if (searched.clipSeedSelection !== undefined) {
+      clipSeedSelections.push(searched.clipSeedSelection);
+    }
     if (
       searched.bestAccepted !== null &&
       betterCandidate(searched.bestAccepted, bestAccepted)
@@ -1832,7 +2048,7 @@ function pursueOneBlock(arg: {
   }
   if (!arg.variableProjection || arg.blockSize !== 2) {
     if (bestAccepted === null) {
-      return { accepted: null, counters };
+      return { accepted: null, counters, ...clipSeedAudit() };
     }
     const audit: BlockPursuitStep = {
       step: arg.step,
@@ -1858,6 +2074,7 @@ function pursueOneBlock(arg: {
         audit,
       },
       counters,
+      ...clipSeedAudit(),
     };
   }
   const seedAccepted = bestAccepted !== null;
@@ -1866,6 +2083,7 @@ function pursueOneBlock(arg: {
     return {
       accepted: null,
       counters,
+      ...clipSeedAudit(),
       variableProjection: {
         step: arg.step,
         seedAccepted: false,
@@ -1940,7 +2158,12 @@ function pursueOneBlock(arg: {
     passes: refined.passes,
   };
   if (best === null) {
-    return { accepted: null, counters, variableProjection };
+    return {
+      accepted: null,
+      counters,
+      ...clipSeedAudit(),
+      variableProjection,
+    };
   }
   const audit: BlockPursuitStep = {
     step: arg.step,
@@ -1967,6 +2190,7 @@ function pursueOneBlock(arg: {
       audit,
     },
     counters,
+    ...clipSeedAudit(),
     variableProjection,
   };
 }
@@ -2057,6 +2281,8 @@ function unchangedResult(arg: {
   patch: ArgCreateSynth;
   initial: RenderState;
   counters: AttemptCounters;
+  clipSeedObjectiveEvaluations?: number;
+  clipSeedSelections?: ClipSeedSelectionAudit[];
   variableProjection?: VariableProjectionSummary;
 }): BlockPursuitResult {
   return {
@@ -2068,6 +2294,13 @@ function unchangedResult(arg: {
     steps: [],
     ...arg.counters,
     replacementCount: 0,
+    ...(arg.clipSeedObjectiveEvaluations === undefined
+      ? {}
+      : {
+          clipSeedObjectiveEvaluations:
+            arg.clipSeedObjectiveEvaluations,
+          clipSeedSelections: arg.clipSeedSelections ?? [],
+        }),
     ...(arg.variableProjection === undefined
       ? {}
       : { variableProjection: arg.variableProjection }),
@@ -2078,8 +2311,7 @@ function unchangedResult(arg: {
  * Выполняет не более `maxBlocks` жадных одиночных или парных замен.
  *
  * @param arg - Match, target PCM, размер блока и опции поиска;
- *   `variableProjection`, `clipAwareNavigation` и `clipAwareRefit`
- *   по умолчанию равны `false`
+ *   `variableProjection`, clip-aware флаги по умолчанию равны `false`
  * @returns Лучший patch/WAV и аудит; при неудаче — исходник
  * @remarks K1 и K2 используют общий словарь и проверяют до двух
  *   наборов слотов на шаг. K2 ранжирует пары совместным МНК 4×4 и
@@ -2096,6 +2328,12 @@ function unchangedResult(arg: {
  *   квантования, включая центр. Число exact render, базисов и правила
  *   принятия не меняются, а `clipObjectiveEvaluations` считает только
  *   новые clip-оценки. Без этого флага clip-объектив не вычисляется.
+ *   `clipAwareSeedSelection=true` действует только в K2: все уже решённые
+ *   пары получают RSS полного квантованного PCM с `rawWithout`, после чего
+ *   top-8 выбирается по меньшему RSS. При tie решает прежний raw rank.
+ *   Это добавляет O(N) на пару, но не меняет словарь, solver, слоты, число
+ *   exact-кандидатов, навигацию VP или guard. По умолчанию raw top-8 и
+ *   объект результата сохраняются без новых полей.
  *   `clipAwareRefit=true` действует только вместе с clip-aware K2-VP.
  *   После выбора raw-победителя один E-старт уточняет четыре квадратуры
  *   при фиксированных слотах, базисах и `rawWithout`; полный сигнал
@@ -2122,6 +2360,7 @@ export function pursueResidualBlocks(arg: {
   variableProjection?: boolean;
   clipAwareNavigation?: boolean;
   clipAwareRefit?: boolean;
+  clipAwareSeedSelection?: boolean;
 }): BlockPursuitResult {
   const sampleRate = arg.sampleRate ?? SAMPLE_RATE;
   const phaseModel = arg.phaseModel ?? 'legacy';
@@ -2167,6 +2406,10 @@ export function pursueResidualBlocks(arg: {
     variableProjectionEnabled && (arg.clipAwareNavigation ?? false);
   const clipAwareRefitEnabled =
     clipAwareNavigationEnabled && (arg.clipAwareRefit ?? false);
+  const clipAwareSeedSelectionEnabled =
+    arg.blockSize === 2 && (arg.clipAwareSeedSelection ?? false);
+  let clipSeedObjectiveEvaluations = 0;
+  const clipSeedSelections: ClipSeedSelectionAudit[] = [];
   const variableProjectionAttempts: VariableProjectionAttemptAudit[] =
     [];
   const counters: AttemptCounters = {
@@ -2195,7 +2438,13 @@ export function pursueResidualBlocks(arg: {
       variableProjection: variableProjectionEnabled,
       clipAwareNavigation: clipAwareNavigationEnabled,
       clipAwareRefit: clipAwareRefitEnabled,
+      clipAwareSeedSelection: clipAwareSeedSelectionEnabled,
     });
+    clipSeedObjectiveEvaluations +=
+      attempt.clipSeedObjectiveEvaluations ?? 0;
+    if (attempt.clipSeedSelections !== undefined) {
+      clipSeedSelections.push(...attempt.clipSeedSelections);
+    }
     if (attempt.variableProjection !== undefined) {
       variableProjectionAttempts.push(attempt.variableProjection);
     }
@@ -2221,11 +2470,15 @@ export function pursueResidualBlocks(arg: {
         clipAwareRefitEnabled,
       )
     : undefined;
+  const clipSeedAudit = clipAwareSeedSelectionEnabled
+    ? { clipSeedObjectiveEvaluations, clipSeedSelections }
+    : {};
   if (steps.length === 0) {
     return unchangedResult({
       patch: arg.patch,
       initial,
       counters,
+      ...clipSeedAudit,
       variableProjection,
     });
   }
@@ -2255,6 +2508,7 @@ export function pursueResidualBlocks(arg: {
       patch: arg.patch,
       initial,
       counters,
+      ...clipSeedAudit,
       variableProjection,
     });
   }
@@ -2270,6 +2524,7 @@ export function pursueResidualBlocks(arg: {
       (sum, step) => sum + step.atoms.length,
       0,
     ),
+    ...clipSeedAudit,
     ...(variableProjection === undefined
       ? {}
       : { variableProjection }),

@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 /**
- * Парный screening K1, K2, K2-VP, clip-aware K2-VP и clip-aware refit
- * на готовых match-прогонах. Все пять режимов стартуют с одного patch
+ * Парный screening K1/K2/VP, clip-aware навигации, refit и отбора сидов
+ * на готовых match-прогонах. Все шесть режимов стартуют с одного patch
  * и используют один словарь.
  * Новый coordinate descent не запускается, production-сервис не меняется.
  *
@@ -20,6 +20,7 @@ import {
   MAX_BLOCKS,
   pursueResidualBlocks,
   type BlockPursuitResult,
+  type ClipSeedSelectionAudit,
   type PursuitBlockSize,
 } from './block-pursuit';
 import { withAttackBoost } from './quadrature-refit-run';
@@ -110,7 +111,10 @@ interface ModeRunReport {
   variableProjection: boolean;
   clipAwareNavigation: boolean;
   clipAwareRefit: boolean;
+  clipAwareSeedSelection: boolean;
   clipObjectiveEvaluations: number;
+  clipSeedObjectiveEvaluations: number;
+  clipSeedSelections?: ClipSeedSelectionAudit[];
   refitObjectiveEvaluations: number;
   refitBacktracks: number;
   refitIterations: number;
@@ -134,6 +138,7 @@ interface PairedBlockRun {
   k2Vp: ModeRunReport;
   k2VpClip: ModeRunReport;
   k2VpClipRefit: ModeRunReport;
+  k2VpClipSeedRefit: ModeRunReport;
   pairGlobalDelta: number;
   vpMinusK2: number;
   vpMinusK1: number;
@@ -145,6 +150,12 @@ interface PairedBlockRun {
   clipRefitRawMinusRefitProposedWindowed: number | null;
   clipRefitRawMinusRefitSavedGlobal: number;
   clipRefitRawMinusRefitSavedWindowed: number;
+  clipSeedRefitMinusClipRefitProposedRawGlobal: number | null;
+  clipSeedRefitMinusClipRefitProposedRawWindowed: number | null;
+  clipSeedRefitMinusClipRefitProposedRefitGlobal: number | null;
+  clipSeedRefitMinusClipRefitProposedRefitWindowed: number | null;
+  clipSeedRefitMinusClipRefitSavedGlobal: number;
+  clipSeedRefitMinusClipRefitSavedWindowed: number;
 }
 
 interface BlockTargetSummary {
@@ -155,8 +166,10 @@ interface BlockTargetSummary {
   k2VpMeanGlobalDelta: number;
   k2VpClipMeanGlobalDelta: number;
   k2VpClipRefitMeanGlobalDelta: number;
+  k2VpClipSeedRefitMeanGlobalDelta: number;
   meanRawVpMinusClipVpSavedGlobal: number;
   meanClipRefitRawMinusRefitSavedGlobal: number;
+  meanClipSeedRefitMinusClipRefitSavedGlobal: number;
   meanPairGlobalDelta: number;
   meanVpMinusK2: number;
   meanVpMinusK1: number;
@@ -167,6 +180,7 @@ interface BlockTargetSummary {
   k2VpImproved: number;
   k2VpClipImproved: number;
   k2VpClipRefitImproved: number;
+  k2VpClipSeedRefitImproved: number;
   k2Wins: number;
   k2VpWinsAgainstK2: number;
   k2PassesScreen: boolean;
@@ -243,11 +257,17 @@ export function summarizeBlockTarget(
     k2VpClipRefitMeanGlobalDelta: mean(
       runs.map((run) => run.k2VpClipRefit.globalDelta),
     ),
+    k2VpClipSeedRefitMeanGlobalDelta: mean(
+      runs.map((run) => run.k2VpClipSeedRefit.globalDelta),
+    ),
     meanRawVpMinusClipVpSavedGlobal: mean(
       runs.map((run) => run.rawVpMinusClipVpSavedGlobal),
     ),
     meanClipRefitRawMinusRefitSavedGlobal: mean(
       runs.map((run) => run.clipRefitRawMinusRefitSavedGlobal),
+    ),
+    meanClipSeedRefitMinusClipRefitSavedGlobal: mean(
+      runs.map((run) => run.clipSeedRefitMinusClipRefitSavedGlobal),
     ),
     meanPairGlobalDelta: mean(pair),
     meanVpMinusK2: mean(runs.map((run) => run.vpMinusK2)),
@@ -271,6 +291,11 @@ export function summarizeBlockTarget(
       (run) =>
         run.k2VpClipRefit.status === 'refined' &&
         run.k2VpClipRefit.globalDelta > 0,
+    ).length,
+    k2VpClipSeedRefitImproved: runs.filter(
+      (run) =>
+        run.k2VpClipSeedRefit.status === 'refined' &&
+        run.k2VpClipSeedRefit.globalDelta > 0,
     ).length,
     k2Wins: runs.filter((run) => run.pairGlobalDelta > 1e-9).length,
     k2VpWinsAgainstK2: runs.filter((run) => run.vpMinusK2 > 1e-9)
@@ -308,8 +333,8 @@ async function saveModeArtifacts(arg: {
  *   clip-aware навигации и refit
  * @returns Результат поиска и его длительность в миллисекундах
  * @remarks Без `variableProjection` выполняется стандартный K1/K2.
- *   Clip-флаг задаёт четвёртый режим, а оба clip-флага — пятый;
- *   canonical assert одинаков для всех режимов.
+ *   Clip-флаг задаёт четвёртый режим, refit — пятый, а отбор сидов
+ *   вместе с ними — шестой; canonical assert одинаков для всех режимов.
  * @throws Error если WAV не совпадает с каноническим рендером patch
  */
 function executeBlockMode(arg: {
@@ -323,6 +348,7 @@ function executeBlockMode(arg: {
   variableProjection?: boolean;
   clipAwareNavigation?: boolean;
   clipAwareRefit?: boolean;
+  clipAwareSeedSelection?: boolean;
 }): { result: BlockPursuitResult; durationMs: number } {
   const started = Date.now();
   const result = pursueResidualBlocks(arg);
@@ -502,6 +528,7 @@ function createModeRunReport(arg: {
   durationMs: number;
   clipAwareNavigation: boolean;
   clipAwareRefit: boolean;
+  clipAwareSeedSelection: boolean;
   artifacts: { patch: string; wav: string };
 }): ModeRunReport {
   const { result } = arg;
@@ -559,7 +586,13 @@ function createModeRunReport(arg: {
     variableProjection: result.variableProjection !== undefined,
     clipAwareNavigation: arg.clipAwareNavigation,
     clipAwareRefit: arg.clipAwareRefit,
+    clipAwareSeedSelection: arg.clipAwareSeedSelection,
     clipObjectiveEvaluations,
+    clipSeedObjectiveEvaluations:
+      result.clipSeedObjectiveEvaluations ?? 0,
+    ...(result.clipSeedSelections === undefined
+      ? {}
+      : { clipSeedSelections: result.clipSeedSelections }),
     refitObjectiveEvaluations:
       result.variableProjection?.refitObjectiveEvaluations ?? 0,
     refitBacktracks: result.variableProjection?.refitBacktracks ?? 0,
@@ -626,6 +659,7 @@ async function processMode(arg: {
   variableProjection?: boolean;
   clipAwareNavigation?: boolean;
   clipAwareRefit?: boolean;
+  clipAwareSeedSelection?: boolean;
   directory: string;
 }): Promise<ModeRunReport> {
   const executed = executeBlockMode(arg);
@@ -642,6 +676,7 @@ async function processMode(arg: {
     durationMs: executed.durationMs,
     clipAwareNavigation: arg.clipAwareNavigation ?? false,
     clipAwareRefit: arg.clipAwareRefit ?? false,
+    clipAwareSeedSelection: arg.clipAwareSeedSelection ?? false,
     artifacts,
   });
   await saveModeAudit({
@@ -703,17 +738,19 @@ async function loadVerifiedMatchRun(arg: {
 }
 
 /**
- * Запускает пять равнобюджетных режимов от проверенного исходника.
+ * Запускает шесть равнобюджетных режимов от проверенного исходника.
  *
  * @param arg - Координаты match-сида, manifest и параметры screening
- * @returns Отчёт пяти режимов или `null` для незавершённого match
+ * @returns Отчёт шести режимов или `null` для незавершённого match
  * @remarks K1 получает двойной лимит одиночных блоков, а остальные
  *   режимы — один лимит пар, поэтому все режимы могут заменить
  *   одинаковое число слотов. Третий режим включает VP, четвёртый
  *   дополнительно включает clip-aware навигацию, пятый добавляет refit
- *   четырёх квадратур без изменения навигации. Парные поля разделяют
- *   raw VP против clip VP и raw/refit внутри пятого режима. Все режимы
- *   получают один проверенный patch и target.
+ *   четырёх квадратур без изменения навигации. Шестой добавляет к пятому
+ *   только clip-aware отбор исходных пар до top-8. Парные поля разделяют
+ *   raw VP против clip VP, raw/refit внутри B и A+B против B отдельно
+ *   для proposed raw, proposed refit и saved. Все режимы получают один
+ *   проверенный patch и target.
  * @throws Error если исходник противоречит WAV или режимы получили
  *   разный baseline global/J
  */
@@ -776,6 +813,16 @@ async function processPair(arg: {
     clipAwareRefit: true,
     directory: join(pairDir, 'k2-vp-clip-refit'),
   });
+  const k2VpClipSeedRefit = await processMode({
+    ...common,
+    maxBlocks: arg.maxBlocks,
+    blockSize: 2,
+    variableProjection: true,
+    clipAwareNavigation: true,
+    clipAwareRefit: true,
+    clipAwareSeedSelection: true,
+    directory: join(pairDir, 'k2-vp-clip-seed-refit'),
+  });
   if (
     k1.baselineGlobalSuppressionPercent !==
       k2.baselineGlobalSuppressionPercent ||
@@ -792,10 +839,14 @@ async function processPair(arg: {
     k1.baselineGlobalSuppressionPercent !==
       k2VpClipRefit.baselineGlobalSuppressionPercent ||
     k1.baselineWindowedSuppressionPercent !==
-      k2VpClipRefit.baselineWindowedSuppressionPercent
+      k2VpClipRefit.baselineWindowedSuppressionPercent ||
+    k1.baselineGlobalSuppressionPercent !==
+      k2VpClipSeedRefit.baselineGlobalSuppressionPercent ||
+    k1.baselineWindowedSuppressionPercent !==
+      k2VpClipSeedRefit.baselineWindowedSuppressionPercent
   ) {
     throw new Error(
-      `Пять режимов block pursuit получили разные baseline в ${pairDir}`,
+      `Шесть режимов block pursuit получили разные baseline в ${pairDir}`,
     );
   }
   const proposedGlobal =
@@ -820,6 +871,30 @@ async function processPair(arg: {
       ? null
       : k2VpClipRefit.proposedRaw.windowedSuppressionPercent -
         k2VpClipRefit.proposedRefit.windowedSuppressionPercent;
+  const clipSeedRawGlobal =
+    k2VpClipRefit.proposedRaw === null ||
+    k2VpClipSeedRefit.proposedRaw === null
+      ? null
+      : k2VpClipSeedRefit.proposedRaw.globalSuppressionPercent -
+        k2VpClipRefit.proposedRaw.globalSuppressionPercent;
+  const clipSeedRawWindowed =
+    k2VpClipRefit.proposedRaw === null ||
+    k2VpClipSeedRefit.proposedRaw === null
+      ? null
+      : k2VpClipSeedRefit.proposedRaw.windowedSuppressionPercent -
+        k2VpClipRefit.proposedRaw.windowedSuppressionPercent;
+  const clipSeedRefitGlobal =
+    k2VpClipRefit.proposedRefit === null ||
+    k2VpClipSeedRefit.proposedRefit === null
+      ? null
+      : k2VpClipSeedRefit.proposedRefit.globalSuppressionPercent -
+        k2VpClipRefit.proposedRefit.globalSuppressionPercent;
+  const clipSeedRefitWindowed =
+    k2VpClipRefit.proposedRefit === null ||
+    k2VpClipSeedRefit.proposedRefit === null
+      ? null
+      : k2VpClipSeedRefit.proposedRefit.windowedSuppressionPercent -
+        k2VpClipRefit.proposedRefit.windowedSuppressionPercent;
   return {
     slug: arg.slug,
     seed: arg.seed,
@@ -831,6 +906,7 @@ async function processPair(arg: {
     k2Vp,
     k2VpClip,
     k2VpClipRefit,
+    k2VpClipSeedRefit,
     pairGlobalDelta:
       k2.globalSuppressionPercent - k1.globalSuppressionPercent,
     vpMinusK2:
@@ -853,11 +929,24 @@ async function processPair(arg: {
     clipRefitRawMinusRefitSavedWindowed:
       k2VpClip.saved.windowedSuppressionPercent -
       k2VpClipRefit.saved.windowedSuppressionPercent,
+    clipSeedRefitMinusClipRefitProposedRawGlobal: clipSeedRawGlobal,
+    clipSeedRefitMinusClipRefitProposedRawWindowed:
+      clipSeedRawWindowed,
+    clipSeedRefitMinusClipRefitProposedRefitGlobal:
+      clipSeedRefitGlobal,
+    clipSeedRefitMinusClipRefitProposedRefitWindowed:
+      clipSeedRefitWindowed,
+    clipSeedRefitMinusClipRefitSavedGlobal:
+      k2VpClipSeedRefit.saved.globalSuppressionPercent -
+      k2VpClipRefit.saved.globalSuppressionPercent,
+    clipSeedRefitMinusClipRefitSavedWindowed:
+      k2VpClipSeedRefit.saved.windowedSuppressionPercent -
+      k2VpClipRefit.saved.windowedSuppressionPercent,
   };
 }
 
 /**
- * Строит Markdown с пятью режимами и раздельными raw/refit-сводками.
+ * Строит Markdown с шестью режимами и раздельными proposed/saved-сводками.
  *
  * @param runs - Парные результаты по всем обработанным сидам
  * @param summaries - Сводки по таргетам для тех же прогонов
@@ -874,9 +963,9 @@ export function renderBlockReportMarkdown(
   maxBlocks: number,
 ): string {
   const lines = [
-    '# Screening K1, K2, K2-VP, clip-aware K2-VP и clip refit',
+    '# Screening K1/K2/VP, clip navigation, refit и clip seed selection',
     '',
-    `Пять режимов стартуют с одного match и используют один словарь v3. K1 выполняет до ${maxBlocks * 2} одиночных блоков, а остальные режимы — до ${maxBlocks} пар с общим МНК 4×4, поэтому каждый режим может заменить не более ${maxBlocks * 2} слотов. VP-режимы делают пять проходов нелинейного уточнения выбранной пары. Clip-режим выбирает направление и победителя по RSS полного клиппированного PCM. Пятый режим дополнительно уточняет четыре квадратуры уже выбранного победителя, но не меняет навигацию. Оба варианта проходят прежний global/J guard; refit добавляет не более 25 принятых итераций и backtracking на проход, а также второй exact-кандидат. Это offline-диагностика, не закон T35 и не подключение к production.`,
+    `Шесть режимов стартуют с одного match и используют один словарь v3. K1 выполняет до ${maxBlocks * 2} одиночных блоков, а остальные режимы — до ${maxBlocks} пар с общим МНК 4×4, поэтому каждый режим может заменить не более ${maxBlocks * 2} слотов. VP-режимы делают пять проходов нелинейного уточнения выбранной пары. Clip-режим выбирает направление и победителя по RSS полного клиппированного PCM. Пятый режим дополнительно уточняет четыре квадратуры уже выбранного победителя, но не меняет навигацию. Шестой добавляет к пятому clip-aware отбор исходных пар до top-8. Все варианты проходят прежний global/J guard; refit добавляет не более 25 принятых итераций и backtracking на проход, а также второй exact-кандидат. Это offline-диагностика, не закон T35 и не подключение к production.`,
     '',
     '| Таргет | Сид | Global до | K1 после | K1 Δ | K2 после | K2 Δ | K2−K1 | K2-VP после | K2-VP Δ | VP−K2 | VP−K1 | K1 с | K2 с | VP с |',
     '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
@@ -933,12 +1022,28 @@ export function renderBlockReportMarkdown(
   }
   lines.push(
     '',
-    '| Таргет | Прогонов | K1 среднее Δ | K2 среднее Δ | K2-VP среднее Δ | Clip-VP среднее Δ | Refit среднее Δ | VP−clip saved среднее | Raw−refit saved среднее | K2−K1 среднее | VP−K2 среднее | VP−K1 среднее | K1 улучшено | K2 улучшено | VP улучшено | Clip улучшено | Refit улучшено | K2 выигрышей | VP выигрышей у K2 | K2 проходит screening |',
-    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
+    '### A+B против B: только отбор исходных пар',
+    '',
+    'Шестой режим добавляет clip-aware seed selection к пятому. Все дельты здесь равны A+B минус B. Proposed raw, proposed refit и saved показаны раздельно: их нельзя складывать или заменять друг другом. Полный JSON для шестого режима содержит выбранные top-8 пары с atomIndices, shapeKey, raw/clip rank и clipped RSS.',
+    '',
+    '| Таргет | Сид | B proposed raw | A+B proposed raw | Δ raw global | Δ raw J | B proposed refit | A+B proposed refit | Δ refit global | Δ refit J | B saved | A+B saved | Δ saved global | Δ saved J | Seed objective | A+B с |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+  );
+  for (const run of runs) {
+    const b = run.k2VpClipRefit;
+    const ab = run.k2VpClipSeedRefit;
+    lines.push(
+      `| ${run.slug} | ${run.seed} | ${b.proposedRaw?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${ab.proposedRaw?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${run.clipSeedRefitMinusClipRefitProposedRawGlobal?.toFixed(3) ?? '—'} | ${run.clipSeedRefitMinusClipRefitProposedRawWindowed?.toFixed(3) ?? '—'} | ${b.proposedRefit?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${ab.proposedRefit?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${run.clipSeedRefitMinusClipRefitProposedRefitGlobal?.toFixed(3) ?? '—'} | ${run.clipSeedRefitMinusClipRefitProposedRefitWindowed?.toFixed(3) ?? '—'} | ${b.saved.globalSuppressionPercent.toFixed(3)} | ${ab.saved.globalSuppressionPercent.toFixed(3)} | ${run.clipSeedRefitMinusClipRefitSavedGlobal.toFixed(3)} | ${run.clipSeedRefitMinusClipRefitSavedWindowed.toFixed(3)} | ${ab.clipSeedObjectiveEvaluations} | ${(ab.durationMs / 1000).toFixed(1)} |`,
+    );
+  }
+  lines.push(
+    '',
+    '| Таргет | Прогонов | K1 среднее Δ | K2 среднее Δ | K2-VP среднее Δ | Clip-VP среднее Δ | Refit среднее Δ | A+B среднее Δ | VP−clip saved среднее | Raw−refit saved среднее | A+B−B saved среднее | K2−K1 среднее | VP−K2 среднее | VP−K1 среднее | K1 улучшено | K2 улучшено | VP улучшено | Clip улучшено | Refit улучшено | A+B улучшено | K2 выигрышей | VP выигрышей у K2 | K2 проходит screening |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
   );
   for (const summary of summaries) {
     lines.push(
-      `| ${summary.slug} | ${summary.runs} | ${summary.k1MeanGlobalDelta.toFixed(3)} | ${summary.k2MeanGlobalDelta.toFixed(3)} | ${summary.k2VpMeanGlobalDelta.toFixed(3)} | ${summary.k2VpClipMeanGlobalDelta.toFixed(3)} | ${summary.k2VpClipRefitMeanGlobalDelta.toFixed(3)} | ${summary.meanRawVpMinusClipVpSavedGlobal.toFixed(3)} | ${summary.meanClipRefitRawMinusRefitSavedGlobal.toFixed(3)} | ${summary.meanPairGlobalDelta.toFixed(3)} | ${summary.meanVpMinusK2.toFixed(3)} | ${summary.meanVpMinusK1.toFixed(3)} | ${summary.k1Improved} | ${summary.k2Improved} | ${summary.k2VpImproved} | ${summary.k2VpClipImproved} | ${summary.k2VpClipRefitImproved} | ${summary.k2Wins} | ${summary.k2VpWinsAgainstK2} | ${summary.k2PassesScreen ? 'да' : 'нет'} |`,
+      `| ${summary.slug} | ${summary.runs} | ${summary.k1MeanGlobalDelta.toFixed(3)} | ${summary.k2MeanGlobalDelta.toFixed(3)} | ${summary.k2VpMeanGlobalDelta.toFixed(3)} | ${summary.k2VpClipMeanGlobalDelta.toFixed(3)} | ${summary.k2VpClipRefitMeanGlobalDelta.toFixed(3)} | ${summary.k2VpClipSeedRefitMeanGlobalDelta.toFixed(3)} | ${summary.meanRawVpMinusClipVpSavedGlobal.toFixed(3)} | ${summary.meanClipRefitRawMinusRefitSavedGlobal.toFixed(3)} | ${summary.meanClipSeedRefitMinusClipRefitSavedGlobal.toFixed(3)} | ${summary.meanPairGlobalDelta.toFixed(3)} | ${summary.meanVpMinusK2.toFixed(3)} | ${summary.meanVpMinusK1.toFixed(3)} | ${summary.k1Improved} | ${summary.k2Improved} | ${summary.k2VpImproved} | ${summary.k2VpClipImproved} | ${summary.k2VpClipRefitImproved} | ${summary.k2VpClipSeedRefitImproved} | ${summary.k2Wins} | ${summary.k2VpWinsAgainstK2} | ${summary.k2PassesScreen ? 'да' : 'нет'} |`,
     );
   }
   lines.push(
@@ -1090,12 +1195,14 @@ async function runBlockScreening(
               `K2VP=${run.k2Vp.globalDelta.toFixed(3)} ` +
               `K2VPclip=${run.k2VpClip.globalDelta.toFixed(3)} ` +
               `K2VPclipRefit=${run.k2VpClipRefit.globalDelta.toFixed(3)} ` +
+              `K2VPclipSeedRefit=${run.k2VpClipSeedRefit.globalDelta.toFixed(3)} ` +
               `pair=${run.pairGlobalDelta.toFixed(3)} ` +
               `VP-K2=${run.vpMinusK2.toFixed(3)} VP-K1=${run.vpMinusK1.toFixed(3)} ` +
               `VP-clipSaved=${run.rawVpMinusClipVpSavedGlobal.toFixed(3)} ` +
               `raw-refitSaved=${run.clipRefitRawMinusRefitSavedGlobal.toFixed(3)} ` +
-              `K1status=${run.k1.status} K2status=${run.k2.status} VPstatus=${run.k2Vp.status} clipStatus=${run.k2VpClip.status} refitStatus=${run.k2VpClipRefit.status} ` +
-              `seconds=${((run.k1.durationMs + run.k2.durationMs + run.k2Vp.durationMs + run.k2VpClip.durationMs + run.k2VpClipRefit.durationMs) / 1000).toFixed(1)}`,
+              `A+B-B-saved=${run.clipSeedRefitMinusClipRefitSavedGlobal.toFixed(3)} ` +
+              `K1status=${run.k1.status} K2status=${run.k2.status} VPstatus=${run.k2Vp.status} clipStatus=${run.k2VpClip.status} refitStatus=${run.k2VpClipRefit.status} clipSeedRefitStatus=${run.k2VpClipSeedRefit.status} ` +
+              `seconds=${((run.k1.durationMs + run.k2.durationMs + run.k2Vp.durationMs + run.k2VpClip.durationMs + run.k2VpClipRefit.durationMs + run.k2VpClipSeedRefit.durationMs) / 1000).toFixed(1)}`,
           );
         }
       } catch (error) {
@@ -1136,11 +1243,13 @@ function printBlockScreeningSummary(report: BlockReport): void {
         `K2VP=${summary.k2VpMeanGlobalDelta.toFixed(3)} ` +
         `K2VPclip=${summary.k2VpClipMeanGlobalDelta.toFixed(3)} ` +
         `K2VPclipRefit=${summary.k2VpClipRefitMeanGlobalDelta.toFixed(3)} ` +
+        `K2VPclipSeedRefit=${summary.k2VpClipSeedRefitMeanGlobalDelta.toFixed(3)} ` +
         `pair=${summary.meanPairGlobalDelta.toFixed(3)} ` +
         `VP-K2=${summary.meanVpMinusK2.toFixed(3)} VP-K1=${summary.meanVpMinusK1.toFixed(3)} ` +
         `VP-clipSaved=${summary.meanRawVpMinusClipVpSavedGlobal.toFixed(3)} ` +
         `raw-refitSaved=${summary.meanClipRefitRawMinusRefitSavedGlobal.toFixed(3)} ` +
-        `K1improved=${summary.k1Improved} K2improved=${summary.k2Improved} VPimproved=${summary.k2VpImproved} clipImproved=${summary.k2VpClipImproved} refitImproved=${summary.k2VpClipRefitImproved} ` +
+        `A+B-B-saved=${summary.meanClipSeedRefitMinusClipRefitSavedGlobal.toFixed(3)} ` +
+        `K1improved=${summary.k1Improved} K2improved=${summary.k2Improved} VPimproved=${summary.k2VpImproved} clipImproved=${summary.k2VpClipImproved} refitImproved=${summary.k2VpClipRefitImproved} clipSeedRefitImproved=${summary.k2VpClipSeedRefitImproved} ` +
         `VPwins=${summary.k2VpWinsAgainstK2} pass=${summary.k2PassesScreen}`,
     );
   }
