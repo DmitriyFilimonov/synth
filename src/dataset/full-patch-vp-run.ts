@@ -8,13 +8,20 @@
  *   --out datasets/full-patch-grumu --seeds 1,2,3,4 \
  *   --max-outer 24 --max-inner 12 --max-backtracks 16
  *
- * BOg выбирается через `--dataset bog --bog-base DIR`. `--dataset all`
- * последовательно обрабатывает оба набора. `--mode no-op` только проверяет
- * source и сохраняет baseline; заранее зафиксированный gate при этом не проходит.
+ * npx tsx src/dataset/full-patch-vp-run.ts --dataset match \
+ *   --match-base DATASET_DIR --match-slug water_15_kick \
+ *   --out datasets/full-patch-water --seeds 1,2,3,4 \
+ *   --max-outer 4 --max-inner 12 --max-backtracks 16
+ *
+ * BOg выбирается через `--dataset bog --bog-base DIR`. Direct match
+ * выбирается через `--dataset match --match-base DIR --match-slug SLUG`;
+ * его source и original match совпадают. `--dataset all` последовательно
+ * обрабатывает только GrumU и BOg. `--mode no-op` только проверяет source
+ * и сохраняет baseline; заранее зафиксированный gate при этом не проходит.
  */
 import { existsSync, mkdirSync } from 'node:fs';
 import { rename } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { compareCharacter } from '../character-metrics';
 import {
@@ -59,8 +66,9 @@ import {
 } from './shared';
 
 export const FULL_PATCH_VP_RUN_USAGE =
-  'full-patch-vp-run --dataset grumu|bog|all --out DIR ' +
-  '[--grumu-base DIR] [--bog-base DIR] [--seeds 1,2,3,4] ' +
+  'full-patch-vp-run --dataset grumu|bog|match|all --out DIR ' +
+  '[--grumu-base DIR] [--bog-base DIR] [--match-base DIR] ' +
+  '[--match-slug SLUG] [--seeds 1,2,3,4] ' +
   '[--max-outer 24] [--max-inner 12] [--max-backtracks 16] ' +
   '[--mode vp|no-op]';
 
@@ -72,7 +80,7 @@ export const FULL_PATCH_VP_GATE = {
   jFloorDelta: 0.05,
 } as const;
 
-type DatasetKind = 'grumu' | 'bog';
+type DatasetKind = 'grumu' | 'bog' | 'match';
 type DatasetSelection = DatasetKind | 'all';
 type RunnerMode = 'vp' | 'no-op';
 
@@ -80,6 +88,8 @@ export interface FullPatchVpCliOptions {
   dataset: DatasetSelection;
   grumuBase: string;
   bogBase: string;
+  matchBase: string;
+  matchSlug: string;
   outDir: string;
   seeds: number[];
   maxOuter: number;
@@ -620,18 +630,54 @@ interface SourcePayload extends SourceLocation {
 
 type VerifiedSource = Omit<LoadedSource, 'usefulZone' | 'baseline'>;
 
-/** Разрешает candidate и original match по report, не смешивая их с target. */
+function sourceSlug(
+  options: FullPatchVpCliOptions,
+  datasetKind: DatasetKind,
+): string {
+  if (datasetKind === 'grumu') {
+    return 'GrumU';
+  }
+  return datasetKind === 'bog'
+    ? 'BOg-Disco-Futuro'
+    : options.matchSlug;
+}
+
+/** Создаёт direct-match location без report-цепочек. */
+function resolveDirectMatchLocation(arg: {
+  options: FullPatchVpCliOptions;
+  seed: number;
+}): SourceLocation {
+  const { matchBase, matchSlug } = arg.options;
+  if (matchBase.length === 0 || matchSlug.length === 0) {
+    throw new Error('Direct match требует matchBase и matchSlug');
+  }
+  const sourceRunDir = join(matchBase, matchSlug, `seed-${arg.seed}`);
+  return {
+    datasetKind: 'match',
+    slug: matchSlug,
+    seed: arg.seed,
+    sourceRunDir,
+    originalDataset: matchBase,
+    originalMatchRunDir: sourceRunDir,
+    patchPath: join(sourceRunDir, 'patch.json'),
+    wavPath: join(sourceRunDir, 'result.wav'),
+  };
+}
+
+/** Разрешает direct match или candidate по report, не смешивая их с target. */
 async function resolveSourceLocation(arg: {
   options: FullPatchVpCliOptions;
   datasetKind: DatasetKind;
   seed: number;
 }): Promise<SourceLocation | RunSkip> {
+  if (arg.datasetKind === 'match') {
+    return resolveDirectMatchLocation(arg);
+  }
   const base =
     arg.datasetKind === 'grumu'
       ? arg.options.grumuBase
       : arg.options.bogBase;
-  const slug =
-    arg.datasetKind === 'grumu' ? 'GrumU' : 'BOg-Disco-Futuro';
+  const slug = sourceSlug(arg.options, arg.datasetKind);
   const reportPath = join(base, 'report.json');
   const report = await readJsonOrNull<SourceReport>(reportPath);
   if (report === null || !Array.isArray(report.runs)) {
@@ -1202,7 +1248,10 @@ interface ControlBudget {
   canonicalGuardWork: number;
 }
 
-/** Строит только допустимое representation; localized-поля не удаляет. */
+/**
+ * Строит только допустимое representation; localized-поля не удаляет.
+ * BOg и direct match передают delay отдельным неизменным sidecar.
+ */
 function representControlSource(
   source: LoadedSource,
 ): ControlRepresentation {
@@ -1269,11 +1318,11 @@ async function saveSkippedControl(arg: {
     history: null,
     checkpoint: arg.checkpoint,
     fixedDelaySeconds:
-      source.datasetKind === 'bog'
-        ? source.patch.oscillators.map(
+      source.datasetKind === 'grumu'
+        ? null
+        : source.patch.oscillators.map(
             (group) => group.osc.delay ?? 0,
-          )
-        : null,
+          ),
     proposed: null,
     saved: metricReport({
       metrics: savedMetrics,
@@ -1951,8 +2000,7 @@ export async function runFullPatchVpScreening(
   );
   for (const datasetKind of kinds) {
     for (const seed of options.seeds) {
-      const slug =
-        datasetKind === 'grumu' ? 'GrumU' : 'BOg-Disco-Futuro';
+      const slug = sourceSlug(options, datasetKind);
       try {
         const source = await loadSource({
           options,
@@ -2001,6 +2049,18 @@ export async function runFullPatchVpScreening(
   return final;
 }
 
+/** Принимает только один безопасный сегмент каталога для direct match. */
+function isSafeMatchSlug(slug: string): boolean {
+  return (
+    slug.length > 0 &&
+    slug !== '.' &&
+    slug !== '..' &&
+    !isAbsolute(slug) &&
+    !slug.includes('/') &&
+    !slug.includes('\\')
+  );
+}
+
 function positiveInteger(
   value: string,
   name: string,
@@ -2024,6 +2084,8 @@ export function parseFullPatchVpRunArgs(
     '--dataset',
     '--grumu-base',
     '--bog-base',
+    '--match-base',
+    '--match-slug',
     '--out',
     '--seeds',
     '--max-outer',
@@ -2046,9 +2108,14 @@ export function parseFullPatchVpRunArgs(
     values.set(key, value);
   }
   const dataset = values.get('--dataset') ?? '';
-  if (dataset !== 'grumu' && dataset !== 'bog' && dataset !== 'all') {
+  if (
+    dataset !== 'grumu' &&
+    dataset !== 'bog' &&
+    dataset !== 'match' &&
+    dataset !== 'all'
+  ) {
     throw new Error(
-      `--dataset должен быть grumu|bog|all\n${FULL_PATCH_VP_RUN_USAGE}`,
+      `--dataset должен быть grumu|bog|match|all\n${FULL_PATCH_VP_RUN_USAGE}`,
     );
   }
   const outDir = values.get('--out');
@@ -2061,6 +2128,46 @@ export function parseFullPatchVpRunArgs(
   const bogBase = values.has('--bog-base')
     ? resolve(values.get('--bog-base') ?? '')
     : '';
+  const matchBase = values.has('--match-base')
+    ? resolve(values.get('--match-base') ?? '')
+    : '';
+  const matchSlug = values.get('--match-slug') ?? '';
+  const expectedBaseArguments: Record<DatasetSelection, string[]> = {
+    grumu: ['--grumu-base'],
+    bog: ['--bog-base'],
+    match: ['--match-base'],
+    all: ['--grumu-base', '--bog-base'],
+  };
+  for (const key of ['--grumu-base', '--bog-base', '--match-base']) {
+    if (
+      values.has(key) &&
+      !expectedBaseArguments[dataset].includes(key)
+    ) {
+      throw new Error(
+        `${key} не используется с --dataset ${dataset}`,
+      );
+    }
+  }
+  if (dataset !== 'match' && values.has('--match-slug')) {
+    throw new Error(
+      `--match-slug не используется с --dataset ${dataset}`,
+    );
+  }
+  if (
+    dataset === 'match' &&
+    (!values.has('--match-base') ||
+      (values.get('--match-base') ?? '').length === 0)
+  ) {
+    throw new Error('Direct match требует явный --match-base');
+  }
+  if (dataset === 'match' && matchSlug.length === 0) {
+    throw new Error('Direct match требует явный --match-slug');
+  }
+  if (dataset === 'match' && !isSafeMatchSlug(matchSlug)) {
+    throw new Error(
+      '--match-slug должен быть одним безопасным сегментом каталога',
+    );
+  }
   if (
     (dataset === 'grumu' || dataset === 'all') &&
     !values.has('--grumu-base')
@@ -2072,6 +2179,16 @@ export function parseFullPatchVpRunArgs(
     !values.has('--bog-base')
   ) {
     throw new Error('BOg требует явный --bog-base');
+  }
+  const resolvedOutDir = resolve(outDir);
+  for (const [baseName, base] of [
+    ['--grumu-base', grumuBase],
+    ['--bog-base', bogBase],
+    ['--match-base', matchBase],
+  ] as const) {
+    if (base.length > 0 && resolvedOutDir === base) {
+      throw new Error(`--out не должен совпадать с ${baseName}`);
+    }
   }
   const seeds = (values.get('--seeds') ?? '1,2,3,4')
     .split(',')
@@ -2087,7 +2204,9 @@ export function parseFullPatchVpRunArgs(
     dataset,
     grumuBase,
     bogBase,
-    outDir: resolve(outDir),
+    matchBase,
+    matchSlug,
+    outDir: resolvedOutDir,
     seeds,
     maxOuter: positiveInteger(
       values.get('--max-outer') ?? '24',

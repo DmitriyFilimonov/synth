@@ -6,7 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import {
   attackWeighting,
@@ -94,7 +94,7 @@ async function writeSource(
 }
 
 interface Fixture {
-  kind: 'grumu' | 'bog';
+  kind: 'grumu' | 'bog' | 'match';
   base: string;
   dataset: string;
   originalRunDir: string;
@@ -176,6 +176,48 @@ async function createFixture(
   };
 }
 
+async function createMatchFixture(
+  root: string,
+  attackBoost = 3,
+  localized = false,
+  matchDelay: number | null = DELAY_SECONDS,
+): Promise<Fixture> {
+  const base = join(root, 'match');
+  const slug = 'water_15_kick';
+  const sourceRunDir = join(base, slug, 'seed-1');
+  const targets = join(root, 'match-targets');
+  const delay = matchDelay ?? undefined;
+  const sourcePatch = tone(0.2, delay, localized ? 0.001 : undefined);
+  const targetPatch = tone(0.4, delay);
+  await writeSource(sourceRunDir, sourcePatch);
+  mkdirSync(targets, { recursive: true });
+  const targetPath = join(targets, 'target.wav');
+  writeWav({
+    samples: canonicalSamples(targetPatch),
+    sampleRate: SAMPLE_RATE,
+    filePath: targetPath,
+  });
+  await writeJsonAtomic(join(base, 'manifest.json'), {
+    targetsDir: targets,
+    phaseModel: 'integral',
+    attackBoost,
+  });
+  await writeJsonAtomic(join(sourceRunDir, 'run.json'), {
+    status: 'completed',
+    target: 'target.wav',
+  });
+  return {
+    kind: 'match',
+    base,
+    dataset: base,
+    originalRunDir: sourceRunDir,
+    sourceRunDir,
+    sourcePatch,
+    targetPath,
+    slug,
+  };
+}
+
 function options(
   fixture: Fixture,
   mode: 'vp' | 'no-op' = 'vp',
@@ -185,6 +227,8 @@ function options(
     dataset: fixture.kind,
     grumuBase: fixture.kind === 'grumu' ? fixture.base : '/unused',
     bogBase: fixture.kind === 'bog' ? fixture.base : '/unused',
+    matchBase: fixture.kind === 'match' ? fixture.base : '/unused',
+    matchSlug: fixture.kind === 'match' ? fixture.slug : '',
     outDir: join(fixture.base, 'out'),
     seeds,
     maxOuter: 0,
@@ -196,7 +240,7 @@ function options(
 
 async function withFixture(
   t: TestContext,
-  kind: 'grumu' | 'bog',
+  kind: 'grumu' | 'bog' | 'match',
   action: (fixture: Fixture) => Promise<void>,
   localized = false,
 ): Promise<void> {
@@ -204,7 +248,10 @@ async function withFixture(
     join('/tmp/opencode', `full-patch-${kind}-`),
   );
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const fixture = await createFixture(root, kind, 3, localized);
+  const fixture =
+    kind === 'match'
+      ? await createMatchFixture(root, 3, localized)
+      : await createFixture(root, kind, 3, localized);
   await action(fixture);
 }
 
@@ -371,6 +418,114 @@ test('BOg control uses fixedDelaySeconds and preserves optional delay fields', a
   });
 });
 
+test('direct match reads canonical source, manifest target and fixed-delay control without reports', async (t) => {
+  await withFixture(t, 'match', async (fixture) => {
+    const report = await runFullPatchVpScreening(options(fixture));
+    assert.equal(report.errors.length, 0);
+    assert.equal(report.skips.length, 0);
+    assert.equal(
+      existsSync(join(fixture.base, 'report.json')),
+      false,
+    );
+    const run = report.runs[0];
+    assert.ok(run !== undefined);
+    assert.equal(run.datasetKind, 'match');
+    assert.equal(run.slug, 'water_15_kick');
+    assert.equal(run.sourceRunDir, fixture.sourceRunDir);
+    assert.equal(run.originalMatchRunDir, fixture.sourceRunDir);
+    assert.equal(run.targetWavPath, fixture.targetPath);
+    assert.equal(report.summaries[0]?.slug, fixture.slug);
+
+    assert.deepEqual(
+      await readJsonOrNull<ArgCreateSynth>(run.noOp.patch),
+      fixture.sourcePatch,
+    );
+    assert.deepEqual(
+      readWav(run.noOp.wav).samples,
+      readWav(join(fixture.sourceRunDir, 'result.wav')).samples,
+    );
+    assert.ok(run.vp !== null);
+    const vpPatch = await readJsonOrNull<ArgCreateSynth>(
+      run.vp.patch,
+    );
+    assert.ok(vpPatch !== null);
+    assert.deepEqual(
+      readWav(run.vp.wav).samples,
+      canonicalSamples(vpPatch),
+    );
+
+    assert.ok(run.control !== null);
+    assert.equal(run.control.status, 'completed');
+    assert.deepEqual(run.control.fixedDelaySeconds, [DELAY_SECONDS]);
+    const controlPatch = await readJsonOrNull<ArgCreateSynth>(
+      run.control.patch,
+    );
+    assert.ok(controlPatch !== null);
+    assert.equal(
+      controlPatch.oscillators[0]?.osc.delay,
+      DELAY_SECONDS,
+    );
+    assert.deepEqual(
+      readWav(run.control.wav).samples,
+      canonicalSamples(controlPatch),
+    );
+    const controlAudit = await readJsonOrNull<{
+      representation: string;
+      fixedDelaySeconds: number[];
+    }>(run.control.audit);
+    assert.equal(
+      controlAudit?.representation,
+      'vector+fixedDelaySeconds',
+    );
+    assert.deepEqual(controlAudit?.fixedDelaySeconds, [
+      DELAY_SECONDS,
+    ]);
+  });
+});
+
+test('direct match control does not materialize delay zero after mapping and restore', async (t) => {
+  const root = mkdtempSync(
+    join('/tmp/opencode', 'full-patch-match-no-delay-'),
+  );
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const fixture = await createMatchFixture(root, 3, false, null);
+  const sourceOsc = fixture.sourcePatch.oscillators[0]?.osc;
+  assert.ok(sourceOsc !== undefined);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(sourceOsc, 'delay'),
+    false,
+  );
+
+  const runOptions = options(fixture);
+  runOptions.maxOuter = 1;
+  const report = await runFullPatchVpScreening(runOptions);
+  assert.equal(report.errors.length, 0);
+  const control = report.runs[0]?.control;
+  assert.ok(control !== null && control !== undefined);
+  assert.equal(control.status, 'completed');
+  assert.deepEqual(control.fixedDelaySeconds, [0]);
+  const controlHistory = await readJsonOrNull<unknown[]>(
+    control.history ?? '',
+  );
+  assert.ok((controlHistory?.length ?? 0) > 0);
+
+  const controlPatch = await readJsonOrNull<ArgCreateSynth>(
+    control.patch,
+  );
+  const controlOsc = controlPatch?.oscillators[0]?.osc;
+  assert.ok(controlOsc !== undefined);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(controlOsc, 'delay'),
+    false,
+  );
+  assert.equal(controlOsc.delay, undefined);
+  assert.ok(controlPatch !== null);
+  assert.deepEqual(
+    readWav(control.wav).samples,
+    canonicalSamples(controlPatch),
+  );
+});
+
 test('localized BOg source gets explicit skip-control without deleting fields', async (t) => {
   await withFixture(
     t,
@@ -395,6 +550,74 @@ test('localized BOg source gets explicit skip-control without deleting fields', 
     },
     true,
   );
+});
+
+test('localized direct match skips control and preserves delay and attack', async (t) => {
+  await withFixture(
+    t,
+    'match',
+    async (fixture) => {
+      const report = await runFullPatchVpScreening(options(fixture));
+      assert.equal(report.errors.length, 0);
+      const control = report.runs[0]?.control;
+      assert.ok(control !== null && control !== undefined);
+      assert.equal(control.status, 'skip-control');
+      assert.match(control.skipReason ?? '', /Localized amplitude/);
+      assert.deepEqual(control.fixedDelaySeconds, [DELAY_SECONDS]);
+      assert.deepEqual(
+        await readJsonOrNull<ArgCreateSynth>(control.patch),
+        fixture.sourcePatch,
+      );
+      assert.deepEqual(
+        readWav(control.wav).samples,
+        readWav(join(fixture.sourceRunDir, 'result.wav')).samples,
+      );
+    },
+    true,
+  );
+});
+
+test('missing direct match run gets the regular source-not-completed skip', async (t) => {
+  await withFixture(t, 'match', async (fixture) => {
+    rmSync(join(fixture.sourceRunDir, 'run.json'));
+    const report = await runFullPatchVpScreening(
+      options(fixture, 'no-op'),
+      {
+        runVp: () => {
+          throw new Error('VP must not run');
+        },
+        runCd: () => {
+          throw new Error('CD must not run');
+        },
+      },
+    );
+    assert.equal(report.errors.length, 0);
+    assert.equal(report.runs.length, 0);
+    assert.equal(report.skips.length, 1);
+    assert.equal(report.skips[0]?.reason, 'source-not-completed');
+    assert.equal(report.skips[0]?.slug, fixture.slug);
+    assert.equal(report.skips[0]?.detail, fixture.sourceRunDir);
+  });
+});
+
+test('direct match rejects a non-canonical source WAV before no-op', async (t) => {
+  await withFixture(t, 'match', async (fixture) => {
+    writeWav({
+      samples: canonicalSamples(tone(0.3, DELAY_SECONDS)),
+      sampleRate: SAMPLE_RATE,
+      filePath: join(fixture.sourceRunDir, 'result.wav'),
+    });
+    const report = await runFullPatchVpScreening(
+      options(fixture, 'no-op'),
+    );
+    assert.equal(report.runs.length, 0);
+    assert.equal(report.skips.length, 0);
+    assert.equal(report.errors.length, 1);
+    assert.match(
+      report.errors[0]?.message ?? '',
+      /patch\.json не совпадает с result\.wav/,
+    );
+  });
 });
 
 test('separate no-op mode verifies source and never calls VP or CD', async (t) => {
@@ -590,6 +813,158 @@ test('fixed gate uses 3/4, +4.6pp, 25% residual and visible warnings', () => {
       .gatePass,
     false,
   );
+});
+
+test('CLI direct match requires base and slug and rejects ambiguous bases', () => {
+  const parsed = parseFullPatchVpRunArgs([
+    '--dataset',
+    'match',
+    '--match-base',
+    '/tmp/opencode/match',
+    '--match-slug',
+    'water_15_kick',
+    '--out',
+    '/tmp/opencode/match-out',
+    '--seeds',
+    '1,2,3,4',
+    '--max-outer',
+    '4',
+    '--max-inner',
+    '12',
+    '--max-backtracks',
+    '16',
+  ]);
+  assert.equal(parsed.dataset, 'match');
+  assert.equal(parsed.matchBase, '/tmp/opencode/match');
+  assert.equal(parsed.matchSlug, 'water_15_kick');
+  assert.equal(parsed.maxOuter, 4);
+  assert.deepEqual(parsed.seeds, [1, 2, 3, 4]);
+  assert.throws(
+    () =>
+      parseFullPatchVpRunArgs([
+        '--dataset',
+        'match',
+        '--match-slug',
+        'water_15_kick',
+        '--out',
+        '/tmp/opencode/match-out',
+      ]),
+    /match-base/,
+  );
+  assert.throws(
+    () =>
+      parseFullPatchVpRunArgs([
+        '--dataset',
+        'match',
+        '--match-base',
+        '/tmp/opencode/match',
+        '--out',
+        '/tmp/opencode/match-out',
+      ]),
+    /match-slug/,
+  );
+  assert.throws(
+    () =>
+      parseFullPatchVpRunArgs([
+        '--dataset',
+        'match',
+        '--match-base',
+        '/tmp/opencode/match',
+        '--match-slug',
+        'water_15_kick',
+        '--grumu-base',
+        '/tmp/opencode/grumu',
+        '--out',
+        '/tmp/opencode/match-out',
+      ]),
+    /grumu-base.*не используется/,
+  );
+  const all = parseFullPatchVpRunArgs([
+    '--dataset',
+    'all',
+    '--grumu-base',
+    '/tmp/opencode/grumu',
+    '--bog-base',
+    '/tmp/opencode/bog',
+    '--out',
+    '/tmp/opencode/all-out',
+  ]);
+  assert.equal(all.dataset, 'all');
+  assert.equal(all.matchBase, '');
+  assert.equal(all.matchSlug, '');
+});
+
+test('CLI rejects unsafe match slugs and source/output collisions', () => {
+  const parseMatch = (
+    slug: string,
+    outDir: string,
+  ): FullPatchVpCliOptions =>
+    parseFullPatchVpRunArgs([
+      '--dataset',
+      'match',
+      '--match-base',
+      '/tmp/opencode/match-source',
+      '--match-slug',
+      slug,
+      '--out',
+      outDir,
+    ]);
+  for (const slug of [
+    '',
+    '.',
+    '..',
+    '/tmp/water',
+    'water/15',
+    'water\\15',
+    'C:\\water',
+  ]) {
+    assert.throws(
+      () => parseMatch(slug, '/tmp/opencode/match-output'),
+      /match-slug/,
+    );
+  }
+  assert.throws(
+    () => parseMatch('water_15_kick', '/tmp/opencode/match-source'),
+    /out.*match-base/,
+  );
+  assert.throws(
+    () =>
+      parseFullPatchVpRunArgs([
+        '--dataset',
+        'grumu',
+        '--grumu-base',
+        '/tmp/opencode/grumu-source',
+        '--out',
+        '/tmp/opencode/grumu-source',
+      ]),
+    /out.*grumu-base/,
+  );
+  assert.throws(
+    () =>
+      parseFullPatchVpRunArgs([
+        '--dataset',
+        'bog',
+        '--bog-base',
+        '/tmp/opencode/bog-source',
+        '--out',
+        '/tmp/opencode/bog-source',
+      ]),
+    /out.*bog-base/,
+  );
+
+  const relative = parseFullPatchVpRunArgs([
+    '--dataset',
+    'match',
+    '--match-base',
+    'tmp/match-source',
+    '--match-slug',
+    'water_15.kick',
+    '--out',
+    'tmp/match-output',
+  ]);
+  assert.equal(relative.matchBase, resolve('tmp/match-source'));
+  assert.equal(relative.outDir, resolve('tmp/match-output'));
+  assert.equal(relative.matchSlug, 'water_15.kick');
 });
 
 test('CLI requires explicit dataset bases and validates budgets', () => {

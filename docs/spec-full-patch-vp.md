@@ -161,6 +161,19 @@ Runner читает GrumU из режима `k2-vp-clip-seed-refit`, а BOg из
 `withAttackBoost` восстанавливает прежнее значение в `finally`, включая
 ошибку solver.
 
+Direct match выбирается через `--dataset match`, `--match-base DATASET_DIR`
+и `--match-slug SLUG`. Runner читает
+`DATASET_DIR/SLUG/seed-N/{run.json,patch.json,result.wav}` напрямую и не
+ищет report-цепочки. Здесь `sourceRunDir` и `originalMatchRunDir` совпадают,
+но target по-прежнему определяется через `run.target` и
+`manifest.targetsDir`. В report сохраняются переданный slug, оба исходных
+run path и target path. Slug должен быть одним сегментом каталога: пустое
+значение, `.`, `..`, absolute path и оба path separator отклоняются. `--out`
+не должен совпадать ни с `--match-base`, ни с базой GrumU или BOg, чтобы не
+перезаписать исходный run или report. Отсутствующий или незавершённый run
+получает штатный `source-not-completed` skip; битый source JSON и
+неканонический source WAV становятся ошибками.
+
 Примеры команд для будущего явного запуска:
 
 ```bash
@@ -175,9 +188,18 @@ npx tsx src/dataset/full-patch-vp-run.ts \
   --bog-base /opt/synth/datasets/delayed-patches-bog400 \
   --out datasets/full-patch-bog \
   --seeds 1,2,3,4 --max-outer 24 --max-inner 12 --max-backtracks 16
+
+npx tsx src/dataset/full-patch-vp-run.ts \
+  --dataset match \
+  --match-base DATASET_DIR --match-slug water_15_kick \
+  --out datasets/full-patch-water \
+  --seeds 1,2,3,4 --max-outer 4 --max-inner 12 --max-backtracks 16
 ```
 
-`--dataset all` требует оба base и обрабатывает наборы последовательно.
+`--dataset all` требует GrumU и BOg base и по-прежнему обрабатывает только
+эти два набора последовательно. Для direct match обязательны явные
+`--match-base` и `--match-slug`; base-аргументы других источников отклоняются,
+а не игнорируются.
 `--mode no-op` только проверяет source и сохраняет baseline без VP/CD.
 Запрошенный сид без записи или с незавершённым исходным match получает
 skip. Битый JSON, потерянный canonical WAV и нарушенный immutable guard
@@ -193,11 +215,13 @@ wall time. Runner заново вызывает `measureMetrics` для proposed
 измерения. Character/bands вычисляются против target и сохраняются вместе с
 warnings. Runner никогда не выставляет Q4 PASS.
 
-GrumU control использует обычный десятипараметровый vector. BOg снимает
-onset только во временной копии и передаёт его через `fixedDelaySeconds`;
-при обратном mapping runner восстанавливает исходные optional-поля. Патч с
-`attack` или `hardStop` получает явный `skip-control`: localized-поля не
-удаляются ради CD. В этом случае control сохраняет исходные patch/WAV.
+GrumU control использует обычный десятипараметровый vector. BOg и direct
+match снимают onset только во временной копии и передают его через
+`fixedDelaySeconds`, включая явный нулевой sidecar; при обратном mapping
+runner восстанавливает исходные optional-поля и не записывает `delay: 0`,
+если исходный patch не содержал `delay`. Патч с `attack` или
+`hardStop` получает явный `skip-control`: localized-поля не удаляются ради
+CD. В этом случае control сохраняет исходные patch/WAV и список delay.
 CD candidate тоже проходит canonical global/J guard; при отказе saved
 остаётся исходным.
 
