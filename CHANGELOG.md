@@ -2,6 +2,14 @@
 
 Формат: что изменилось, как проверено, какие ограничения. Теги в git аннотированные и дублируют краткое описание на русском.
 
+## v1.17.0 — localized high/transient-атом и отрицательный GrumU-контроль
+
+**Что.** Амплитудная модель получила optional sin² `attack` и `hardStop` с точным концом поддержки; onset и sweep используют существующие поля. Добавлен offline high-only поиск одного атома поверх A+B2 с локальными FFT-пиками, bounded fit, fixed-offset clip refit и canonical global/J/high guards. Vector/CD/enhance/production не используют новые поля, а T35 замораживает их в манифесте. Исправлена канонизация нормы квадратур на границе в пределах 4·EPSILON без содержательного clamp.
+
+**Проверки.** Полный комплекс прошёл: 267/267 тестов, backend и web build, Prettier и lint без ошибок. Known-answer покрывает default PCM, точную поддержку, high chirp 9000→3000 Гц выше 99%, full-offset clip, raw/refit boundary, canonical fallback, T35 и бюджет exact. Независимые численные, функциональные и статические ревизии — READY.
+
+**Реальный результат.** После исправления failed v1 повторный `localized-transient-grumu-v2` завершил 4/4 без ошибок. Saved global вырос только на seeds 1/4: +0.001357 и +0.059012 п.п., среднее +0.015092. Gate 0.5 п.п. не пройден. Оба accepted получили WARN по f0/спаду или низким полосам, поэтому Q4 не подтверждён. Направление закрыто без увеличения бюджета и production-подключения. Цель 98% и Q1–Q5 остаются открытыми.
+
 ## v1.16.0 — frozen onset во время coordinate descent
 
 **Что.** Добавлен `fixedDelaySeconds`: sidecar сохраняет `osc.delay` при каждой оценке CD, включая WaveformCache, off/on, rebuild, restart, relocation, pruning, rescale, scale fitting и финальный canonical patch/WAV. Десятипараметровый вектор не расширен; прежний `mapSynthConfigToVector` по-прежнему отклоняет ненулевой delay. Offline `delayed-cd-run.ts` сравнивает delayed patch и исходный match при одинаковом фактическом бюджете, сохраняет обе ветки и character/bands. Production runner не вызывает.
