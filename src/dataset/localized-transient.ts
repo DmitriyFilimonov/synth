@@ -1156,10 +1156,22 @@ function proposalFromExact(arg: {
   });
   const { metrics, before, after, rejectionReasons } = evaluation;
   const patch = clonePatch(arg.context.state.patch);
-  patch.oscillators[arg.choice.slot] = groupFromLocalizedAtom(
-    arg.description,
-    arg.fit,
-  );
+  try {
+    patch.oscillators[arg.choice.slot] = groupFromLocalizedAtom(
+      arg.description,
+      arg.fit,
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith('startLevel ')
+    ) {
+      throw new Error(
+        `Invalid localized fit: slot=${arg.choice.slot} stage=${arg.kind} startLevel=${arg.fit.startLevel}`,
+      );
+    }
+    throw error;
+  }
   const audit: LocalizedProposalAudit = {
     kind: arg.kind,
     fit: { ...arg.fit },
@@ -1194,7 +1206,45 @@ function proposalFromExact(arg: {
   };
 }
 
-function fitFromTwoCoefficients(
+const LOCALIZED_LEVEL_BOUNDARY_TOLERANCE = 4 * Number.EPSILON;
+
+/**
+ * Канонизирует только ulp-выход за границу уровня и согласованно масштабирует
+ * квадратуры. Более широкое нарушение возвращает null, а не маскируется clamp.
+ */
+export function canonicalizeLocalizedFitBoundary(
+  fit: QuadratureFit,
+): QuadratureFit | null {
+  const fittedLevel = Math.hypot(
+    fit.sineCoefficient,
+    fit.cosineCoefficient,
+  );
+  if (!Number.isFinite(fittedLevel)) {
+    return null;
+  }
+  const min = ampEnvConfigNormales.startLevel.min;
+  const max = ampEnvConfigNormales.startLevel.max;
+  if (
+    fittedLevel < min - LOCALIZED_LEVEL_BOUNDARY_TOLERANCE ||
+    fittedLevel > max + LOCALIZED_LEVEL_BOUNDARY_TOLERANCE
+  ) {
+    return null;
+  }
+  if (fittedLevel >= min && fittedLevel <= max) {
+    return fit;
+  }
+  const startLevel = fittedLevel < min ? min : max;
+  const scale = startLevel / fittedLevel;
+  return {
+    ...fit,
+    sineCoefficient: fit.sineCoefficient * scale,
+    cosineCoefficient: fit.cosineCoefficient * scale,
+    startLevel,
+  };
+}
+
+/** Превращает refit-квадратуры в уровень/фазу с тем же ulp-guard, что и raw. */
+export function fitFromTwoCoefficients(
   coefficients: ArrayLike<number>,
 ): QuadratureFit | null {
   if (coefficients.length !== 2) {
@@ -1203,25 +1253,17 @@ function fitFromTwoCoefficients(
   const sineCoefficient = coefficients[0] ?? 0;
   const cosineCoefficient = coefficients[1] ?? 0;
   const fittedLevel = Math.hypot(sineCoefficient, cosineCoefficient);
-  if (
-    !Number.isFinite(fittedLevel) ||
-    fittedLevel < 0.001 - 1e-10 ||
-    fittedLevel > 1 + 1e-10
-  ) {
-    return null;
-  }
-  const startLevel = Math.max(0.001, Math.min(1, fittedLevel));
-  const scale = startLevel / fittedLevel;
-  const sine = sineCoefficient * scale;
-  const cosine = cosineCoefficient * scale;
-  return {
-    sineCoefficient: sine,
-    cosineCoefficient: cosine,
-    startLevel,
-    phase:
-      ((Math.atan2(cosine, sine) % (2 * Math.PI)) + 2 * Math.PI) %
-      (2 * Math.PI),
-  };
+  const phase =
+    ((Math.atan2(cosineCoefficient, sineCoefficient) %
+      (2 * Math.PI)) +
+      2 * Math.PI) %
+    (2 * Math.PI);
+  return canonicalizeLocalizedFitBoundary({
+    sineCoefficient,
+    cosineCoefficient,
+    startLevel: fittedLevel,
+    phase,
+  });
 }
 
 function evaluateRawAndRefit(arg: {
@@ -1244,9 +1286,15 @@ function evaluateRawAndRefit(arg: {
     target: arg.context.target,
     rawWithout: arg.choice.rawWithout,
   });
-  const fit = fits?.[0];
-  if (fit === undefined) {
+  const rawFit = fits?.[0];
+  if (rawFit === undefined) {
     return { raw: null, refit: null };
+  }
+  const fit = canonicalizeLocalizedFitBoundary(rawFit);
+  if (fit === null) {
+    throw new Error(
+      `Invalid localized fit: slot=${arg.choice.slot} stage=raw startLevel=${rawFit.startLevel}`,
+    );
   }
   arg.cost.rawExactEvaluations += 1;
   arg.cost.exactEvaluations += 1;
@@ -1280,8 +1328,12 @@ function evaluateRawAndRefit(arg: {
     refitResult.objective.coefficients,
   );
   if (refitFit === null) {
+    const invalidLevel = Math.hypot(
+      refitResult.objective.coefficients[0] ?? Number.NaN,
+      refitResult.objective.coefficients[1] ?? Number.NaN,
+    );
     throw new Error(
-      'Localized clip refit вернул недопустимые квадратуры',
+      `Invalid localized fit: slot=${arg.choice.slot} stage=refit startLevel=${invalidLevel}`,
     );
   }
   const refit = proposalFromExact({

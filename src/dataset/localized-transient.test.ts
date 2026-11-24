@@ -4,9 +4,12 @@ import { SAMPLE_RATE } from '../consts';
 import { computeUsefulZone } from '../optimize/evaluate';
 import type { ArgCreateSynth } from '../synth';
 import { fitQuadratureBlock } from './block-pursuit';
+import { refitClippedQuadratureAtom } from './joint-projection-oracle';
 import {
+  canonicalizeLocalizedFitBoundary,
   evaluateLocalizedCandidates,
   finalizeLocalizedCandidate,
+  fitFromTwoCoefficients,
   groupFromLocalizedAtom,
   LOCALIZED_CONTINUATION_GATE,
   LOCALIZED_TRANSIENT_LIMITS,
@@ -249,6 +252,74 @@ test('bounded fit recovers high chirp 9000 to 3000 with onset, attack, level and
     221 / SAMPLE_RATE,
   );
   assert.equal(patch.oscillators[0]?.ampEnv.attack, 22 / SAMPLE_RATE);
+});
+
+test('raw and refit canonicalize one-ulp max boundary without a substantive clamp', () => {
+  const basis = [
+    Float64Array.from([1, 0]),
+    Float64Array.from([0, 1]),
+  ];
+  const rawAngle = (2 * Math.PI * 7) / 128;
+  const rawTarget = [
+    2 * Math.cos(rawAngle) * 32767,
+    2 * Math.sin(rawAngle) * 32767,
+  ];
+  const raw = fitQuadratureBlock({
+    basis,
+    target: rawTarget,
+    rawWithout: new Float64Array(2),
+  })?.[0];
+  assert.ok(raw);
+  assert.equal(raw.startLevel, 1.0000000000000002);
+  const canonicalRaw = canonicalizeLocalizedFitBoundary(raw);
+  assert.ok(canonicalRaw);
+  assert.equal(canonicalRaw.startLevel, 1);
+  assert.ok(
+    Math.abs(
+      Math.hypot(
+        canonicalRaw.sineCoefficient,
+        canonicalRaw.cosineCoefficient,
+      ) - 1,
+    ) <= Number.EPSILON,
+  );
+  assert.doesNotThrow(() =>
+    groupFromLocalizedAtom(description(), canonicalRaw),
+  );
+
+  const refitAngle = (2 * Math.PI * 77) / 128;
+  const cosine = Math.cos(refitAngle);
+  const sine = Math.sin(refitAngle);
+  const refit = refitClippedQuadratureAtom({
+    basis,
+    target: [cosine, sine],
+    fixedOffset: [0, 0],
+    initialCoefficients: [2 * cosine, 2 * sine],
+    maxIterations: 1,
+  });
+  assert.equal(
+    Math.hypot(
+      refit.objective.coefficients[0] ?? 0,
+      refit.objective.coefficients[1] ?? 0,
+    ),
+    1.0000000000000002,
+  );
+  const canonicalRefit = fitFromTwoCoefficients(
+    refit.objective.coefficients,
+  );
+  assert.ok(canonicalRefit);
+  assert.equal(canonicalRefit.startLevel, 1);
+  assert.ok(
+    Math.abs(
+      Math.hypot(
+        canonicalRefit.sineCoefficient,
+        canonicalRefit.cosineCoefficient,
+      ) - 1,
+    ) <= Number.EPSILON,
+  );
+  assert.doesNotThrow(() =>
+    groupFromLocalizedAtom(description(), canonicalRefit),
+  );
+  assert.equal(fitFromTwoCoefficients([1.000000000001, 0]), null);
 });
 
 test('high guard rejects global growth when selected high RSS grows', () => {

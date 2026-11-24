@@ -690,10 +690,14 @@ export async function runLocalizedTransientScreening(
           );
         }
       } catch (error) {
-        const message =
+        const detail =
           error instanceof Error ? error.message : String(error);
-        errors.push({ slug: SLUG, seed, message });
-        console.warn(`WARN ${SLUG}/seed-${seed}: ${message}`);
+        errors.push({
+          slug: SLUG,
+          seed,
+          message: `seed=${seed} ${detail}`,
+        });
+        console.warn(`WARN ${SLUG}/seed-${seed}: ${detail}`);
       }
       await checkpoint(
         options.outDir,

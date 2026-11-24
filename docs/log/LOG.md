@@ -2,6 +2,16 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-24: v1 localized screening исправлен на ulp-границе raw fit
+
+`localized-transient-grumu-v1` завершился как invalid screening реализации: seeds 1/2/4 получили ошибку диапазона startLevel, seed 3 остался unchanged после 16 exact. Это не NO GO модели и не оценка гипотезы. После завершения процесса выполнен только focused diagnostic seed 1, без полного A/B и CD. Он дал `slot=46`, `stage=raw`, `startLevel=1.0000000000000002`.
+
+Источник найден в raw max-boundary: bounded solver задаёт квадратуры через `1·cos` и `1·sin`, а `Math.hypot` может поднять норму на один ulp выше 1. Его собственный feasibility guard это допускает, после чего строгая проверка `groupFromLocalizedAtom` останавливала сид до refit. Refit-путь проверен отдельно: его прежний converter канонизировал границу, но использовал более широкий допуск.
+
+Теперь `canonicalizeLocalizedFitBoundary` обслуживает raw и refit одинаково. Только отклонение не более `4·Number.EPSILON` приводится к 0.001 или 1 с согласованным масштабом квадратур; внутридиапазонный fit возвращается без изменений, а значение `1.000000000001` отклоняется. Это не содержательный clamp и не изменение constraint solver. Known-answer воспроизводит исходные 1+ulp в raw и refit, затем проверяет canonical level 1. Ошибки runner содержат seed/slot/stage/value без лишних данных сигнала.
+
+Полный повторный real screening не запускался; его выполнит основной агент. Проверки: 79/79 профильных тестов, TypeScript, Prettier, target ESLint и diff check. Результат модели по-прежнему неизвестен.
+
 ## 2026-11-24: localized transient прошёл адресный function-review fix
 
 `validHighSweep` теперь ограничивает и freqBase, и freqStart значением 16000 Гц из `LOCALIZED_TRANSIENT_LIMITS`, а не общим потолком synth 20 кГц. Boundary-тест принимает ровно 16000 и отклоняет превышение любой из двух частот. Модель, bounded solver и порядок candidate selection не менялись.
