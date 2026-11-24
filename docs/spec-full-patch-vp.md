@@ -2,12 +2,12 @@
 
 ## Статус
 
-Core `src/dataset/full-patch-vp.ts` реализован, но реальный эксперимент ещё
+Core `src/dataset/full-patch-vp.ts` и offline runner
+`src/dataset/full-patch-vp-run.ts` реализованы, но реальный эксперимент ещё
 не запускался. Текущие CD, slot-post-pass, frozen-delay и
 localized-контролы не достигли 98%. Производственный match, enhance и API
-этот документ не подключает. Runner, character/bands и A/B остаются
-следующим этапом; synthetic known-answer не является результатом на
-реальных таргетах.
+этот документ не подключает. Synthetic known-answer проверяет runner и
+solver, но не является результатом на реальных таргетах.
 
 ## Что проверяем
 
@@ -95,7 +95,10 @@ backtracking обязательны. Truncated ridge остаётся диагн
 normalized Gram и retained eigenvectors задают `B+` без матрицы N×N. На
 активной радиальной границе квадратурная пара даёт только tangent-направление.
 Затем направление решается из `(J_KᵀJ_K + λD)δ = -g`. Нормировка и MGS
-отсекают вырожденные оси уже после проекции и не заменяют её. Нулевой rank
+отсекают вырожденные оси уже после проекции и не заменяют её. Если tangent
+выпадает из normalized Gram, diagnostics оставляет `droppedQuadratures`
+пустым: у одиночного tangent-столбца нет пары sine/cosine, и код не
+выводит её номер из `floor(column/2)`. Нулевой rank
 останавливает поиск; dense/non-descent отказ повышает lambda и продолжает
 работу до maxOuter или численного потолка.
 
@@ -145,9 +148,59 @@ stationary initial с ненулевым RSS, атомарный trial-ауди�
 roundtrip и известную стоимость. Они подтверждают только механику core.
 Реального результата пока нет.
 
+## Offline runner и допустимый контроль
+
+Runner читает GrumU из режима `k2-vp-clip-seed-refit`, а BOg из canonical
+`delayed-patches-bog400`. Target берёт только из исходного match через
+`run.json` и `manifest.json`; каталог post-pass не подменяет источник
+таргета. До solver runner проверяет source patch против source WAV. Модель
+фазы и `attackBoost` приходят из manifest исходного датасета. Каждый
+`withAttackBoost` восстанавливает прежнее значение в `finally`, включая
+ошибку solver.
+
+Примеры команд для будущего явного запуска:
+
+```bash
+npx tsx src/dataset/full-patch-vp-run.ts \
+  --dataset grumu \
+  --grumu-base /opt/synth/datasets/block-pursuit-ab-blocks2-grumu \
+  --out datasets/full-patch-grumu \
+  --seeds 1,2,3,4 --max-outer 24 --max-inner 12 --max-backtracks 16
+
+npx tsx src/dataset/full-patch-vp-run.ts \
+  --dataset bog \
+  --bog-base /opt/synth/datasets/delayed-patches-bog400 \
+  --out datasets/full-patch-bog \
+  --seeds 1,2,3,4 --max-outer 24 --max-inner 12 --max-backtracks 16
+```
+
+`--dataset all` требует оба base и обрабатывает наборы последовательно.
+`--mode no-op` только проверяет source и сохраняет baseline без VP/CD.
+Запрошенный сид без записи или с незавершённым исходным match получает
+skip. Битый JSON, потерянный canonical WAV и нарушенный immutable guard
+становятся ошибками; CLI завершается с кодом 1, если есть такие ошибки.
+
+Для каждого сида runner сохраняет no-op, VP и control в разных каталогах.
+VP получает patch/WAV, `audit.json`, `history.json` и атомарный checkpoint.
+Report различает proposed и saved global/J, измеряет фактическое уменьшение
+residual RMS, показывает inner/outer, rank, clip, backtracking, sampleWork и
+wall time. Runner заново вызывает `measureMetrics` для proposed и saved PCM,
+а также для обоих control outcomes; эти измерения идут в guard, gate и report.
+Исходные solver metrics лежат отдельно в `audit.solverMetrics` и не заменяют
+измерения. Character/bands вычисляются против target и сохраняются вместе с
+warnings. Runner никогда не выставляет Q4 PASS.
+
+GrumU control использует обычный десятипараметровый vector. BOg снимает
+onset только во временной копии и передаёт его через `fixedDelaySeconds`;
+при обратном mapping runner восстанавливает исходные optional-поля. Патч с
+`attack` или `hardStop` получает явный `skip-control`: localized-поля не
+удаляются ради CD. В этом случае control сохраняет исходные patch/WAV.
+CD candidate тоже проходит canonical global/J guard; при отказе saved
+остаётся исходным.
+
 ## Артефакты и guards
 
-Runner сохраняет исходный и итоговый patch/WAV, историю outer steps,
+Runner сохраняет исходный no-op и итоговый patch/WAV, историю outer steps,
 rank, clip-маски, backtracking, стоимость и character/bands. Proposed
 candidate до guard и фактически сохранённый результат разделены.
 
@@ -166,11 +219,34 @@ patch служит контролем только там, где он подд�
 Для localized GrumU контролем служит no-op или допустимый patch-native
 solver; удалять localized-поля ради CD нельзя.
 
-Одна CD-итерация не равна одному LM-шагу. Нужен общий work-бюджет:
-каждый проход длины `N` в synth, basis, Jacobian, Gram/dot и metric
-увеличивает счётчик на `N`. Обе ветки завершают только целые итерации и
-не превышают бюджет. Публикуются фактически использованный бюджет и
-wall time.
+Одна CD-итерация не равна одному LM-шагу. Фактический VP
+`cost.sampleWork.total` задаёт W для control. В CD необязательный
+`config.maxSampleWork` считает проходы длины `N` в synth, evaluation и
+cache. Перед итерацией CD резервирует консервативный верхний предел всех
+candidate/cache/metric проходов и возможного plateau post-pass. Random
+restart дополнительно резервирует rebuild из `initialVector`: при обычном CD
+он включает все слоты, даже если current/best уже прошли prune. Перед
+последним циклом restore best резервируется безусловно, потому что смена
+preview-метрики на полную может изменить порядок scores. Поэтому CD
+завершает только целые итерации и не превышает W.
+
+Если финальные стадии не помещаются, CD возвращает лучший геном завершённых
+итераций и не выполняет их частично. Финальный progress разделяет два факта:
+`workBudgetStop` означает отказ перед итерацией или финальными стадиями, а
+`finalStagesSkipped` равен фактическому `!finalStagesFit`. Поэтому остановка
+перед следующей итерацией может сочетаться с выполненными prune/scale.
+При совсем маленьком W startup не запускается, а история остаётся пустой.
+Без `maxSampleWork` алгоритм, возврат `{vector, history}` и golden-хэши не
+меняются.
+
+VP finalization и control резервируют одинаковые `6N`: proposed render,
+второй render внутри canonical assert, PCM compare, global, J и RSS. Report
+control содержит `internalWorkBudget`, `canonicalGuardWork`, фактический
+`sampleWork.total` и `unusedWork`, поэтому резерв и недобор видны отдельно.
+Known-answer фиксирует 6N в VP и control. Отчёт показывает W, фактически
+использованный VP/control work, целые CD-итерации и wall time. Общие для
+обеих веток чтение входов, запись файлов, character/bands и повторная
+проверка сохранённого WAV в W не входят.
 
 Gate продолжения заранее требует:
 

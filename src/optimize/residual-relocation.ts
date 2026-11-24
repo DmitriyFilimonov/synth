@@ -10,6 +10,10 @@ import {
   UsefulZone,
   evaluateSuppressionWindowed,
 } from './evaluate';
+import {
+  addCoordinateDescentSampleWork,
+  type CoordinateDescentSampleWorkCounter,
+} from './sample-work';
 
 const TWO_PI = 2 * Math.PI;
 
@@ -72,8 +76,10 @@ const residualMagnitude = (
   residual: readonly number[],
   sampleRate: number,
   freqHz: number,
+  sampleWork?: CoordinateDescentSampleWorkCounter,
 ): number => {
   const n = residual.length;
+  addCoordinateDescentSampleWork(sampleWork, 'evaluation', n);
   const k = (freqHz * n) / sampleRate;
   const omega = (TWO_PI * k) / n;
   const coeff = 2 * Math.cos(omega);
@@ -113,8 +119,10 @@ const residualMagPhaseDFT = (
   residual: readonly number[],
   sampleRate: number,
   freqHz: number,
+  sampleWork?: CoordinateDescentSampleWorkCounter,
 ): { magnitude: number; phase: number } => {
   const n = residual.length;
+  addCoordinateDescentSampleWork(sampleWork, 'evaluation', n);
   const omega = (TWO_PI * freqHz) / sampleRate;
   let re = 0;
   let im = 0;
@@ -150,6 +158,7 @@ const findResidualPeak = (
   residual: readonly number[],
   sampleRate: number,
   excludeFreqsHz: readonly number[],
+  sampleWork?: CoordinateDescentSampleWorkCounter,
 ): { freqHz: number; magnitude: number; phase: number } | null => {
   const isCovered = (f: number): boolean =>
     excludeFreqsHz.some(
@@ -166,7 +175,12 @@ const findResidualPeak = (
     if (isCovered(f)) {
       continue;
     }
-    const magnitude = residualMagnitude(residual, sampleRate, f);
+    const magnitude = residualMagnitude(
+      residual,
+      sampleRate,
+      f,
+      sampleWork,
+    );
     if (magnitude > bestMag) {
       bestMag = magnitude;
       bestFreq = f;
@@ -192,7 +206,12 @@ const findResidualPeak = (
     if (isCovered(f)) {
       continue;
     }
-    const magnitude = residualMagnitude(residual, sampleRate, f);
+    const magnitude = residualMagnitude(
+      residual,
+      sampleRate,
+      f,
+      sampleWork,
+    );
     if (magnitude > refinedMag) {
       refinedMag = magnitude;
       refinedFreq = f;
@@ -205,6 +224,7 @@ const findResidualPeak = (
     residual,
     sampleRate,
     refinedFreq,
+    sampleWork,
   );
 
   return {
@@ -277,6 +297,7 @@ const relocationGreedyPass = (arg: {
   sampleRate: number;
   score: number;
   usefulZone: UsefulZone;
+  sampleWork?: CoordinateDescentSampleWorkCounter;
 }): number => {
   const {
     genome,
@@ -285,6 +306,7 @@ const relocationGreedyPass = (arg: {
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   } = arg;
   const base = oscIndex * OSC_PARAMS;
 
@@ -324,6 +346,7 @@ const relocationGreedyPass = (arg: {
         targetSignal,
         sampleRate,
         usefulZone,
+        sampleWork,
       );
       if (probe > best) {
         best = probe;
@@ -373,6 +396,8 @@ export const tryRelocateOscillator = (arg: {
   usefulZone: UsefulZone;
   /** Минимальное улучшение score (п.п.) для принятия relocation. */
   minImprovement?: number;
+  /** Общий счётчик budgeted CD; без него поведение прежнее. */
+  sampleWork?: CoordinateDescentSampleWorkCounter;
 }): { relocated: boolean; score: number } => {
   const {
     genome,
@@ -383,12 +408,18 @@ export const tryRelocateOscillator = (arg: {
     currentScore,
     usefulZone,
     minImprovement = 0,
+    sampleWork,
   } = arg;
 
   // Остаток против текущего состояния (кандидат ещё включён,
   // но его вклад при volume ≤ prune-порога пренебрежим).
   const generated = waveformCache.getWaveform();
   const residual = new Array<number>(targetSignal.length);
+  addCoordinateDescentSampleWork(
+    sampleWork,
+    'evaluation',
+    targetSignal.length,
+  );
   for (let i = 0; i < targetSignal.length; i++) {
     residual[i] = (targetSignal[i] ?? 0) - (generated[i] ?? 0);
   }
@@ -397,6 +428,7 @@ export const tryRelocateOscillator = (arg: {
     residual,
     sampleRate,
     collectCoveredFreqsHz(genome),
+    sampleWork,
   );
   if (!peak) {
     return { relocated: false, score: currentScore };
@@ -468,8 +500,10 @@ export const tryRelocateOscillator = (arg: {
       targetSignal,
       sampleRate,
       usefulZone,
+      sampleWork,
     ),
     usefulZone,
+    sampleWork,
   });
 
   if (score > currentScore + minImprovement) {

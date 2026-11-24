@@ -1,3 +1,5 @@
+import type { CoordinateDescentSampleWork } from './sample-work';
+
 export interface ProgressEntry {
   iteration: number;
   suppressionPercent: number;
@@ -11,6 +13,20 @@ export interface ProgressEntry {
    * expose intermediate synth configurations for running jobs.
    */
   bestVector?: readonly number[];
+  /**
+   * Фактические N-проходы с начала прогона. Поле появляется только при
+   * заданном `config.maxSampleWork`, поэтому обычный golden не меняется.
+   */
+  sampleWork?: CoordinateDescentSampleWork;
+  /** Общий жёсткий предел N-проходов, если он был задан. */
+  maxSampleWork?: number;
+  /** CD остановился перед следующей целой итерацией или финальными стадиями. */
+  workBudgetStop?: boolean;
+  /**
+   * Финальные prune/scale стадии не выполнялись. Поле записывается только
+   * в последний budgeted progress и не зависит от остановки перед iter.
+   */
+  finalStagesSkipped?: boolean;
 }
 
 export type ProgressCallback = (entry: ProgressEntry) => void;

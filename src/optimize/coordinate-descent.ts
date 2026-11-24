@@ -3,6 +3,7 @@ import { OSC_PARAMS, clampVolume, initGenome } from './consts';
 import { VOLUME_PRUNE_THRESHOLD } from '../consts';
 import {
   evaluateSuppressionWindowed,
+  estimateFullWindowedEvaluationSampleWork,
   findOptimalScale,
   computeUsefulZone,
   createWaveForm,
@@ -19,6 +20,11 @@ import type {
 import type { PhaseModel } from '../synth';
 import { VECTOR_PARAM_OFFSETS as OFFSET } from '../vector-param-offsets';
 import { validateFixedDelaySeconds } from '../fixed-delay';
+import {
+  createCoordinateDescentSampleWorkCounter,
+  snapshotCoordinateDescentSampleWork,
+  type CoordinateDescentSampleWorkCounter,
+} from './sample-work';
 
 /**
  * Конфигурация алгоритма coordinate descent.
@@ -178,6 +184,14 @@ export interface CoordinateDescentConfig {
    * цикла шли на одной метрике.
    */
   explorationWindowStride?: number;
+  /**
+   * Жёсткий бюджет фактических N-проходов synth/evaluation/cache.
+   * CD начинает только такую целую итерацию, чей консервативный предел
+   * помещается в остаток. Если финальные стадии не помещаются, возвращает
+   * лучший геном целых итераций без скрытого превышения бюджета.
+   * Отсутствие поля сохраняет прежний алгоритм и JSON history побитово.
+   */
+  maxSampleWork?: number;
 }
 
 /** Default config values (previous hardcoded constants). */
@@ -366,6 +380,7 @@ const optimizeSingleParameter = (
   usefulZone: UsefulZone,
   rng: () => number,
   temperature = 0,
+  sampleWork?: CoordinateDescentSampleWorkCounter,
 ): {
   genome: number[];
   score: number;
@@ -394,6 +409,7 @@ const optimizeSingleParameter = (
       targetSignal,
       sampleRate,
       usefulZone,
+      sampleWork,
     );
     if (score > bestScore) {
       bestScore = score;
@@ -462,6 +478,7 @@ interface IterationContext {
   relocationMinImprovement: number;
   frozenParameterIndices: ReadonlySet<number>;
   preserveOscillatorFlags: boolean;
+  sampleWork?: CoordinateDescentSampleWorkCounter;
 }
 
 /**
@@ -495,6 +512,7 @@ const optimizeOscillatorParameters = (
     rng,
     temperature,
     frozenParameterIndices,
+    sampleWork,
   } = context;
   const base = osc * OSC_PARAMS;
   let score = currentBest;
@@ -522,6 +540,7 @@ const optimizeOscillatorParameters = (
       usefulZone,
       rng,
       temperature,
+      sampleWork,
     );
     genome = result.genome;
     score = result.score;
@@ -574,6 +593,7 @@ const relocateOrPruneOscillator = (
     relocationMinImprovement,
     frozenParameterIndices,
     preserveOscillatorFlags,
+    sampleWork,
   } = context;
   const base = osc * OSC_PARAMS;
   const volume = genome[base + OFFSET.startLevel] ?? 0;
@@ -600,6 +620,7 @@ const relocateOrPruneOscillator = (
         currentScore: currentBest,
         usefulZone,
         minImprovement: relocationMinImprovement,
+        sampleWork,
       })
     : { relocated: false, score: currentBest };
   if (relocationAttempts && relocationAllowed) {
@@ -615,6 +636,7 @@ const relocateOrPruneOscillator = (
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   );
   if (scoreOff > currentBest) {
     genome[base] = 0;
@@ -701,6 +723,7 @@ const finalPruneOscillators = (
   numOsc: number,
   sampleRate: number,
   usefulZone: UsefulZone,
+  sampleWork?: CoordinateDescentSampleWorkCounter,
 ): number => {
   const pruneCandidates: { base: number; volume: number }[] = [];
   for (let osc = 0; osc < numOsc; osc++) {
@@ -721,6 +744,7 @@ const finalPruneOscillators = (
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   );
   for (const { base } of pruneCandidates) {
     const savedFlag = genome[base] ?? 0;
@@ -733,6 +757,7 @@ const finalPruneOscillators = (
       targetSignal,
       sampleRate,
       usefulZone,
+      sampleWork,
     );
     if (score - scoreAfter > 0.05) {
       genome[base] = savedFlag;
@@ -760,6 +785,12 @@ const emitProgress = (
   suppressionPercent: number,
   cycle?: string,
   bestVector?: readonly number[],
+  work?: {
+    counter: CoordinateDescentSampleWorkCounter;
+    maxSampleWork: number;
+    budgetStop?: boolean;
+    finalStagesSkipped?: boolean;
+  },
 ): void => {
   const entry: ProgressEntry = {
     iteration,
@@ -768,6 +799,18 @@ const emitProgress = (
   };
   if (bestVector !== undefined) {
     entry.bestVector = bestVector;
+  }
+  if (work !== undefined) {
+    entry.sampleWork = snapshotCoordinateDescentSampleWork(
+      work.counter,
+    );
+    entry.maxSampleWork = work.maxSampleWork;
+    if (work.budgetStop === true) {
+      entry.workBudgetStop = true;
+    }
+    if (work.finalStagesSkipped !== undefined) {
+      entry.finalStagesSkipped = work.finalStagesSkipped;
+    }
   }
   history.push(entry);
   onProgress?.(entry);
@@ -801,6 +844,7 @@ interface DescentContext {
   stepDecayFactor: number;
   frozenParameterIndices: ReadonlySet<number>;
   preserveOscillatorFlags: boolean;
+  sampleWork?: CoordinateDescentSampleWorkCounter;
 }
 
 /**
@@ -820,6 +864,37 @@ interface DescentState {
   plateauCount: number;
   restartCount: number;
   consecutiveSuccesses: number;
+  workBudgetExhausted: boolean;
+}
+
+/** Добавляет work-поля только в явно ограниченный прогон. */
+function progressWork(
+  context: DescentContext,
+  state: DescentState,
+  finalStagesSkipped?: boolean,
+):
+  | {
+      counter: CoordinateDescentSampleWorkCounter;
+      maxSampleWork: number;
+      budgetStop?: boolean;
+      finalStagesSkipped?: boolean;
+    }
+  | undefined {
+  const maxSampleWork = context.cfg.maxSampleWork;
+  if (
+    context.sampleWork === undefined ||
+    maxSampleWork === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    counter: context.sampleWork,
+    maxSampleWork,
+    ...(state.workBudgetExhausted ? { budgetStop: true } : {}),
+    ...(finalStagesSkipped === undefined
+      ? {}
+      : { finalStagesSkipped }),
+  };
 }
 
 /**
@@ -837,13 +912,20 @@ const rescaleScoresToCurrentMetric = (
   context: DescentContext,
   state: DescentState,
 ): void => {
-  const { targetSignal, sampleRate, usefulZone, waveformCache, cfg } =
-    context;
+  const {
+    targetSignal,
+    sampleRate,
+    usefulZone,
+    waveformCache,
+    cfg,
+    sampleWork,
+  } = context;
   const current = evaluateSuppressionWindowed(
     waveformCache.getWaveform(),
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   );
   const bestEver = evaluateSuppressionWindowed(
     createWaveForm(
@@ -853,11 +935,13 @@ const rescaleScoresToCurrentMetric = (
       {
         phaseModel: cfg.phaseModel,
         fixedDelaySeconds: cfg.fixedDelaySeconds,
+        sampleWork,
       },
     ),
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   );
   state.currentBest = current;
   if (current >= bestEver) {
@@ -892,6 +976,7 @@ interface PlateauContext {
   history: ProgressEntry[];
   onProgress?: ProgressCallback;
   cycleLabel: string;
+  sampleWork?: CoordinateDescentSampleWorkCounter;
 }
 
 /**
@@ -923,6 +1008,7 @@ const performRandomRestart = (
     cfg,
     iter,
     restartCount,
+    sampleWork,
   } = context;
   console.log(
     `[CoordDescent] Random restart at iter ${iter} (best=${bestScore.toFixed(4)}%, restarts=${restartCount})`,
@@ -945,6 +1031,7 @@ const performRandomRestart = (
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   );
 
   if (currentBest < bestScore - cfg.randomRestartRegressionLimit) {
@@ -988,6 +1075,7 @@ const performPlateauKick = (
     cfg,
     iter,
     restartCount,
+    sampleWork,
   } = context;
   let { genome, currentBest } = context;
   const enabledOscs: number[] = [];
@@ -1022,6 +1110,7 @@ const performPlateauKick = (
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   );
 
   if (currentBest < bestScore * cfg.kickFallbackThreshold) {
@@ -1083,6 +1172,7 @@ const handlePlateau = (
     history: context.history,
     onProgress: context.onProgress,
     cycleLabel,
+    sampleWork: context.sampleWork,
   };
 
   if (wantsRandomRestart && !isLastCycle) {
@@ -1102,6 +1192,8 @@ const handlePlateau = (
     state.iter,
     state.currentBest,
     cycleLabel,
+    undefined,
+    progressWork(context, state),
   );
   state.plateauCount = 0;
   state.consecutiveSuccesses = 0;
@@ -1123,6 +1215,7 @@ interface ScaleFittingContext {
   phaseModel: PhaseModel;
   fixedDelaySeconds?: readonly number[];
   frozenParameterIndices: ReadonlySet<number>;
+  sampleWork?: CoordinateDescentSampleWorkCounter;
 }
 
 /**
@@ -1149,6 +1242,7 @@ const applyScaleFitting = (
     phaseModel,
     fixedDelaySeconds,
     frozenParameterIndices,
+    sampleWork,
   } = context;
   let { genome } = context;
 
@@ -1159,12 +1253,14 @@ const applyScaleFitting = (
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   );
   const { scale, suppressionPercent: scaleScore } = findOptimalScale(
     generated,
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   );
   console.log(
     `[CoordDescent] Optimal scale: ${scale.toFixed(4)} (waveform probe ${scaleScore.toFixed(4)}%)`,
@@ -1188,12 +1284,14 @@ const applyScaleFitting = (
       targetSignal.length,
       phaseModel,
       fixedDelaySeconds,
+      sampleWork,
     );
     const scaledScore = evaluateSuppressionWindowed(
       scaledCache.getWaveform(),
       targetSignal,
       sampleRate,
       usefulZone,
+      sampleWork,
     );
     if (scaledScore > preScaleScore) {
       genome = scaledGenome;
@@ -1266,6 +1364,7 @@ const applyFinalPruning = (
     waveformCache,
     numOsc,
     preserveOscillatorFlags,
+    sampleWork,
   } = context;
   const finalPruningScore = preserveOscillatorFlags
     ? evaluateSuppressionWindowed(
@@ -1273,6 +1372,7 @@ const applyFinalPruning = (
         targetSignal,
         sampleRate,
         usefulZone,
+        sampleWork,
       )
     : finalPruneOscillators(
         state.genome,
@@ -1282,6 +1382,7 @@ const applyFinalPruning = (
         numOsc,
         sampleRate,
         usefulZone,
+        sampleWork,
       );
   syncFlagsToCache(state.genome, waveformCache, numOsc);
   console.log(
@@ -1331,6 +1432,45 @@ const prepareCycle = (
     state.cycleIndex === 0 && Number.isFinite(configuredStride)
       ? Math.min(8, Math.max(1, Math.floor(configuredStride)))
       : 1;
+  const maxSampleWork = cfg.maxSampleWork;
+  if (
+    context.sampleWork !== undefined &&
+    maxSampleWork !== undefined
+  ) {
+    const n = context.targetSignal.length;
+    const evaluation = estimateFullWindowedEvaluationSampleWork(
+      n,
+      context.sampleRate,
+    );
+    const active = Math.max(
+      countActiveForBudget(
+        state.genome,
+        numOsc,
+        context.preserveOscillatorFlags,
+      ),
+      countActiveForBudget(
+        state.bestGenome,
+        numOsc,
+        context.preserveOscillatorFlags,
+      ),
+    );
+    let required = 0;
+    if (previewStride !== windowSubsampling.stride) {
+      required += (active + 2) * n + 2 * evaluation;
+    }
+    if (isLastCycle) {
+      // Preview→full rescale может изменить порядок scores: restore нужен
+      // резервировать до rescale, даже если старый bestScore не выше.
+      required += estimateCacheRebuildWork(state.bestGenome, context);
+    }
+    const used = snapshotCoordinateDescentSampleWork(
+      context.sampleWork,
+    ).total;
+    if (used + required > maxSampleWork) {
+      state.workBudgetExhausted = true;
+      return null;
+    }
+  }
   if (previewStride !== windowSubsampling.stride) {
     windowSubsampling.stride = previewStride;
     if (previewStride > 1) {
@@ -1444,6 +1584,193 @@ const updateCycleProgress = (
   progress.windowStartBest = state.bestScore;
 };
 
+/** Число включённых слотов с учётом обязательного первого osc в обычном CD. */
+function countActiveForBudget(
+  genome: readonly number[],
+  numOsc: number,
+  preserveOscillatorFlags: boolean,
+): number {
+  let active = 0;
+  for (let osc = 0; osc < numOsc; osc += 1) {
+    const enabled =
+      (genome[osc * OSC_PARAMS + OFFSET.flag] ?? 0) >= 0.5 ||
+      (osc === 0 && !preserveOscillatorFlags);
+    if (enabled) {
+      active += 1;
+    }
+  }
+  return active;
+}
+
+/** Верхняя стоимость `WaveformCache.rebuild` в sample units. */
+function estimateCacheRebuildWork(
+  genome: readonly number[],
+  context: DescentContext,
+): number {
+  const n = context.targetSignal.length;
+  const active = countActiveForBudget(
+    genome,
+    context.numOsc,
+    context.preserveOscillatorFlags,
+  );
+  return (2 * active + 2) * n;
+}
+
+/** Резервирует первый restart rebuild из initialVector, а не из current. */
+function estimateRandomRestartRebuildWork(
+  context: DescentContext,
+): number {
+  const n = context.targetSignal.length;
+  // initGenome(initialVector, false) включает все флаги, в том числе уже
+  // pruned у current/best. До restart нельзя занижать этот rebuild.
+  const active = context.preserveOscillatorFlags
+    ? countActiveForBudget(
+        context.initialVector,
+        context.numOsc,
+        true,
+      )
+    : context.numOsc;
+  return (2 * active + 2) * n;
+}
+
+/**
+ * Консервативно оценивает целую итерацию и возможный plateau post-pass.
+ * Никакие candidate/cache/metric N-проходы не начинаются до этой проверки.
+ */
+function estimateWholeIterationWork(
+  context: DescentContext,
+  state: DescentState,
+  plan: CyclePlan,
+): number {
+  const n = context.targetSignal.length;
+  const evaluation = estimateFullWindowedEvaluationSampleWork(
+    n,
+    context.sampleRate,
+  );
+  let total = 0;
+  if (
+    !context.preserveOscillatorFlags &&
+    (state.genome[OFFSET.flag] ?? 0) !== 1
+  ) {
+    total += 3 * n;
+  }
+  for (let osc = 0; osc < context.numOsc; osc += 1) {
+    const base = osc * OSC_PARAMS;
+    const enabled =
+      (state.genome[base + OFFSET.flag] ?? 0) >= 0.5 ||
+      (osc === 0 && !context.preserveOscillatorFlags);
+    if (!enabled) {
+      continue;
+    }
+    let freeParameters = 0;
+    for (
+      let offset = OFFSET.freqBase;
+      offset < OSC_PARAMS;
+      offset += 1
+    ) {
+      if (!context.frozenParameterIndices.has(base + offset)) {
+        freeParameters += 1;
+      }
+    }
+    // Два кандидата: set/get/evaluate каждый, затем финальный set.
+    total += freeParameters * (11 * n + 2 * evaluation);
+    if (
+      osc === 0 &&
+      !context.frozenParameterIndices.has(OFFSET.startLevel)
+    ) {
+      total += 3 * n;
+    }
+    if (!context.preserveOscillatorFlags) {
+      const attemptsUsed = context.relocationAttempts[osc] ?? 0;
+      if (
+        context.cfg.maxRelocationAttemptsPerOsc > attemptsUsed &&
+        !hasFrozenOscillatorParameter(
+          context.frozenParameterIndices,
+          base,
+        )
+      ) {
+        // Двухпроходный residual scan, DFT, relocation, greedy и rollback.
+        total += 2300 * n + 25 * evaluation;
+      }
+      // Prune probe и возможный rollback после relocation.
+      total += 5 * n + evaluation;
+    }
+  }
+
+  const plateauAfterIteration =
+    state.plateauCount + 1 >= context.cfg.plateauRestartThreshold;
+  if (plateauAfterIteration) {
+    const wantsRandomRestart =
+      state.restartCount + 1 >=
+        context.cfg.maxRestartsBeforeRandomRestart &&
+      !plan.isLastCycle;
+    const bestRebuild = estimateCacheRebuildWork(
+      state.bestGenome,
+      context,
+    );
+    if (wantsRandomRestart) {
+      // Random rebuild стартует из initialVector, rollback — из bestGenome.
+      total +=
+        estimateRandomRestartRebuildWork(context) +
+        bestRebuild +
+        n +
+        evaluation;
+    } else {
+      // Один kick, metric и возможный fallback rebuild.
+      const currentRebuild = estimateCacheRebuildWork(
+        state.genome,
+        context,
+      );
+      total +=
+        Math.max(currentRebuild, bestRebuild) + 4 * n + evaluation;
+    }
+  }
+  return total;
+}
+
+/** Верхняя стоимость всех финальных стадий после последней целой итерации. */
+function estimateFinalStagesWork(
+  context: DescentContext,
+  state: DescentState,
+): number {
+  const n = context.targetSignal.length;
+  const evaluation = estimateFullWindowedEvaluationSampleWork(
+    n,
+    context.sampleRate,
+  );
+  const active = Math.max(
+    countActiveForBudget(
+      state.genome,
+      context.numOsc,
+      context.preserveOscillatorFlags,
+    ),
+    countActiveForBudget(
+      state.bestGenome,
+      context.numOsc,
+      context.preserveOscillatorFlags,
+    ),
+  );
+  const rebuild = Math.max(
+    estimateCacheRebuildWork(state.genome, context),
+    estimateCacheRebuildWork(state.bestGenome, context),
+  );
+  let total = 0;
+  if (windowSubsampling.stride !== 1) {
+    // Текущий cache и полный render best-ever, каждый со своей метрикой.
+    total += (active + 2) * n + 2 * evaluation;
+  }
+  // Полный score и не более одного prune probe с rollback на каждый слот.
+  total += n + evaluation;
+  if (!context.preserveOscillatorFlags) {
+    total += context.numOsc * (5 * n + evaluation);
+  }
+  // Scale probe, analytic scale + metric, scaled cache и его metric.
+  total += 4 * n + 3 * evaluation + 2 * active * n;
+  // Принятый scale rebuild, restore best и финальная нормализация флагов.
+  total += 2 * rebuild + 3 * context.numOsc * n;
+  return total;
+}
+
 /** Выполняет итерации одного цикла до бюджета, плато или early exit. */
 const runCycleIterations = (
   context: DescentContext,
@@ -1465,6 +1792,7 @@ const runCycleIterations = (
     stepGrowthAdd,
     frozenParameterIndices,
     preserveOscillatorFlags,
+    sampleWork,
   } = context;
   const { cycle, isLastCycle } = plan;
   let step = cycle.startStep;
@@ -1480,6 +1808,24 @@ const runCycleIterations = (
     state.iter < plan.cycleHardCap &&
     (state.iter < plan.cycleSoftCap || progress.cycleStillImproving)
   ) {
+    const maxSampleWork = cfg.maxSampleWork;
+    if (sampleWork !== undefined && maxSampleWork !== undefined) {
+      const used =
+        snapshotCoordinateDescentSampleWork(sampleWork).total;
+      const required = estimateWholeIterationWork(
+        context,
+        state,
+        plan,
+      );
+      if (used + required > maxSampleWork) {
+        state.workBudgetExhausted = true;
+        console.log(
+          `[CoordDescent] Sample-work budget stops before iteration ${state.iter + 1}: ` +
+            `used=${used}, reserved=${required}, max=${maxSampleWork}`,
+        );
+        break;
+      }
+    }
     const prevGenome = state.genome.slice();
     const result = optimizeIteration(
       state.genome,
@@ -1502,6 +1848,7 @@ const runCycleIterations = (
         relocationMinImprovement: cfg.relocationMinImprovement,
         frozenParameterIndices,
         preserveOscillatorFlags,
+        sampleWork,
       },
     );
     state.genome = result.genome;
@@ -1535,6 +1882,7 @@ const runCycleIterations = (
       state.currentBest,
       cycle.label,
       bestVectorSnapshot,
+      progressWork(context, state),
     );
     state.iter++;
     state.temperature *= cfg.saCoolingRate;
@@ -1602,6 +1950,9 @@ const runRestartSchedule = (
     }
     const genomeChanged = runCycleIterations(context, state, plan);
 
+    if (state.workBudgetExhausted) {
+      break;
+    }
     if (state.currentBest >= context.cfg.earlyExitSuppression) {
       break;
     }
@@ -1629,6 +1980,76 @@ const runRestartSchedule = (
 };
 
 /**
+ * Выполняет финальные стадии целиком либо возвращает лучший целый genome.
+ * Порядок restore/prune/scale и все sample-work операции совпадают с
+ * прежним inline-путём; возвращаемый флаг описывает факт, а не причину stop.
+ */
+function finalizeCoordinateDescent(
+  context: DescentContext,
+  state: DescentState,
+): { finalStagesSkipped: boolean } {
+  const {
+    cfg,
+    sampleWork,
+    waveformCache,
+    targetSignal,
+    sampleRate,
+    usefulZone,
+    numOsc,
+    frozenParameterIndices,
+  } = context;
+  const maxSampleWork = cfg.maxSampleWork;
+  const finalStagesFit =
+    sampleWork === undefined ||
+    maxSampleWork === undefined ||
+    snapshotCoordinateDescentSampleWork(sampleWork).total +
+      estimateFinalStagesWork(context, state) <=
+      maxSampleWork;
+  if (finalStagesFit) {
+    restoreFullMetricForFinalStages(context, state);
+    applyFinalPruning(context, state);
+    const scaled = applyScaleFitting({
+      genome: state.genome,
+      waveformCache,
+      targetSignal,
+      sampleRate,
+      usefulZone,
+      numOsc,
+      phaseModel: cfg.phaseModel,
+      fixedDelaySeconds: cfg.fixedDelaySeconds,
+      frozenParameterIndices,
+      sampleWork,
+    });
+    state.genome = scaled.genome;
+    state.currentBest = scaled.currentBest;
+
+    if (state.bestScore > state.currentBest) {
+      state.genome = state.bestGenome.slice();
+      waveformCache.rebuild(state.genome);
+      syncFlagsToCache(state.genome, waveformCache, numOsc);
+      state.currentBest = state.bestScore;
+      console.log(
+        `[CoordDescent] Restored best genome: ${state.currentBest.toFixed(4)}%`,
+      );
+    }
+    normalizeFlags(state.genome, numOsc);
+    syncFlagsToCache(state.genome, waveformCache, numOsc);
+  } else {
+    state.workBudgetExhausted = true;
+    windowSubsampling.stride = 1;
+    if (state.bestScore > state.currentBest) {
+      state.genome = state.bestGenome.slice();
+      state.currentBest = state.bestScore;
+    }
+    normalizeFlags(state.genome, numOsc);
+    console.log(
+      '[CoordDescent] Sample-work budget skips non-iteration final stages',
+    );
+  }
+  return { finalStagesSkipped: !finalStagesFit };
+}
+
+/**
  * Подбирает параметры осцилляторов методом coordinate descent и
  * максимизирует windowed suppressionPercent против таргета.
  *
@@ -1644,8 +2065,9 @@ const runRestartSchedule = (
  * @param config - Переопределения CoordinateDescentConfig
  * @returns Оптимизированный вектор и история прогресса
  * @throws Error если frozenParameterIndices указывает вне генома,
- *   содержит нецелый индекс или индекс флага on/off, либо если
- *   fixedDelaySeconds имеет неверную длину или значение вне 0–0.5 с
+ *   содержит нецелый индекс или индекс флага on/off, если
+ *   fixedDelaySeconds имеет неверную длину или значение вне 0–0.5 с,
+ *   либо если maxSampleWork отрицателен или не конечен
  * @remarks Циклы меняют шаги частоты, фазы и остальных параметров;
  *   плато вызывает пинки или сидируемые рестарты, а simulated annealing
  *   выключается в финальном цикле. После спуска функция возвращает
@@ -1655,7 +2077,12 @@ const runRestartSchedule = (
  *   исходные флаги, а relocation и прунинг не запускаются. В возврате
  *   все флаги равны строго 0 или 1. Fixed-delay sidecar копируется на
  *   входе, не попадает в vector/history и остаётся привязанным к исходным
- *   индексам при любых операциях спуска.
+ *   индексам при любых операциях спуска. При заданном maxSampleWork
+ *   progress дополнительно несёт фактические N-проходы; CD начинает только
+ *   целую итерацию с достаточным консервативным запасом и не выполняет
+ *   финальные стадии частично. В последнем progress `workBudgetStop` и
+ *   `finalStagesSkipped` описывают причину остановки и фактический skip
+ *   независимо. Без лимита возврат и history не меняются.
  */
 export const coordinateDescent = (
   initialVector: readonly number[],
@@ -1686,21 +2113,53 @@ export const coordinateDescent = (
   const preserveOscillatorFlags =
     cfg.preserveOscillatorFlags ?? false;
   const genome = initGenome(initialVector, preserveOscillatorFlags);
+  const maxSampleWork = cfg.maxSampleWork;
+  if (
+    maxSampleWork !== undefined &&
+    (!Number.isFinite(maxSampleWork) || maxSampleWork < 0)
+  ) {
+    throw new Error('maxSampleWork должен быть конечным и >= 0');
+  }
+  let sampleWork: CoordinateDescentSampleWorkCounter | undefined;
+  if (maxSampleWork !== undefined) {
+    const n = targetSignal.length;
+    const active = countActiveForBudget(
+      genome,
+      numOsc,
+      preserveOscillatorFlags,
+    );
+    const startupUpperBound =
+      2 * n +
+      2 * active * n +
+      n +
+      estimateFullWindowedEvaluationSampleWork(n, sampleRate);
+    if (startupUpperBound > maxSampleWork) {
+      normalizeFlags(genome, numOsc);
+      return { vector: genome, history: [] };
+    }
+    sampleWork = createCoordinateDescentSampleWorkCounter();
+  }
   const relocationAttempts = new Array<number>(numOsc).fill(0);
   const firstOscInitVolume = genome[OFFSET.startLevel] ?? 0;
-  const usefulZone = computeUsefulZone(targetSignal, sampleRate);
+  const usefulZone = computeUsefulZone(
+    targetSignal,
+    sampleRate,
+    sampleWork,
+  );
   const waveformCache = new WaveformCache(
     genome,
     sampleRate,
     targetSignal.length,
     cfg.phaseModel,
     cfg.fixedDelaySeconds,
+    sampleWork,
   );
   const currentBest = evaluateSuppressionWindowed(
     waveformCache.getWaveform(),
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   );
   const history: ProgressEntry[] = [];
   const state: DescentState = {
@@ -1715,6 +2174,7 @@ export const coordinateDescent = (
     plateauCount: 0,
     restartCount: 0,
     consecutiveSuccesses: 0,
+    workBudgetExhausted: false,
   };
   const context: DescentContext = {
     initialVector,
@@ -1734,6 +2194,7 @@ export const coordinateDescent = (
     stepDecayFactor: stepDecayFactor ?? cfg.stagnationStepDecayFactor,
     frozenParameterIndices,
     preserveOscillatorFlags,
+    sampleWork,
   };
 
   console.log(
@@ -1750,33 +2211,19 @@ export const coordinateDescent = (
   }
 
   runRestartSchedule(context, state);
-  restoreFullMetricForFinalStages(context, state);
-  applyFinalPruning(context, state);
-  const scaled = applyScaleFitting({
-    genome: state.genome,
-    waveformCache,
-    targetSignal,
-    sampleRate,
-    usefulZone,
-    numOsc,
-    phaseModel: cfg.phaseModel,
-    fixedDelaySeconds: cfg.fixedDelaySeconds,
-    frozenParameterIndices,
-  });
-  state.genome = scaled.genome;
-  state.currentBest = scaled.currentBest;
-
-  if (state.bestScore > state.currentBest) {
-    state.genome = state.bestGenome.slice();
-    waveformCache.rebuild(state.genome);
-    syncFlagsToCache(state.genome, waveformCache, numOsc);
-    state.currentBest = state.bestScore;
-    console.log(
-      `[CoordDescent] Restored best genome: ${state.currentBest.toFixed(4)}%`,
-    );
+  const { finalStagesSkipped } = finalizeCoordinateDescent(
+    context,
+    state,
+  );
+  if (sampleWork !== undefined && maxSampleWork !== undefined) {
+    const used =
+      snapshotCoordinateDescentSampleWork(sampleWork).total;
+    if (used > maxSampleWork) {
+      throw new Error(
+        `Internal sample-work estimate failed: ${used} > ${maxSampleWork}`,
+      );
+    }
   }
-  normalizeFlags(state.genome, numOsc);
-  syncFlagsToCache(state.genome, waveformCache, numOsc);
   emitProgress(
     history,
     onProgress,
@@ -1784,6 +2231,7 @@ export const coordinateDescent = (
     state.currentBest,
     state.lastCycleLabel,
     state.genome.slice(),
+    progressWork(context, state, finalStagesSkipped),
   );
   return { vector: state.genome, history };
 };

@@ -306,6 +306,13 @@ const INITIAL_LAMBDA = 1e-3;
 const MIN_LAMBDA = 1e-12;
 const MAX_LAMBDA = 1e12;
 
+/**
+ * Логическая стоимость финального canonical guard в проходах длины N:
+ * proposed render, render внутри assert, PCM compare, global, J и RSS.
+ * Runner использует ту же константу для additional CD control.
+ */
+export const FULL_PATCH_FINALIZATION_SAMPLE_PASSES = 6;
+
 /** Пределы работы по умолчанию; solver не смотрит на часы. */
 export const DEFAULT_FULL_PATCH_VP_OPTIONS: FullPatchVpOptions = {
   maxOuter: 24,
@@ -630,11 +637,19 @@ function evaluateInnerCoefficients(
   };
 }
 
-/** Строит normalized Gram и rank без правой части. */
+/**
+ * Строит normalized Gram и rank без правой части.
+ *
+ * Обычный inner basis описывает пары sine/cosine, поэтому dropped-метаданные
+ * можно вывести из номера столбца. Проекционный basis на radial boundary
+ * содержит tangent вместо пары: для него caller передаёт `null`, и диагностика
+ * не приписывает tangent чужому осциллятору или квадратуре.
+ */
 function maskedGram(
   basis: Float64Array[],
   mask: Uint8Array,
   context: SolverContext,
+  quadratureMetadata: 'paired' | null = 'paired',
 ): Omit<NormalEquations, 'rhs'> {
   const size = basis.length;
   const norms = new Float64Array(size);
@@ -647,7 +662,7 @@ function maskedGram(
     const norm = rawNorms[column] ?? 0;
     if (norm > NORM_RELATIVE_CUTOFF * maxNorm && norm > 1e-15) {
       norms[column] = norm;
-    } else {
+    } else if (quadratureMetadata === 'paired') {
       droppedQuadratures.push({
         column,
         oscillator: Math.floor(column / 2),
@@ -809,7 +824,7 @@ function projectKaufmanColumns(
       diagnostics: null,
     };
   }
-  const equations = maskedGram(prepared.basis, mask, context);
+  const equations = maskedGram(prepared.basis, mask, context, null);
   if (!equations.rank.diagnostics.jacobiConverged) {
     throw new Error('Kaufman coefficient Gram did not converge');
   }

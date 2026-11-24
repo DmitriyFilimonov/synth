@@ -2,6 +2,12 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-24: full-patch runner и equal-work CD готовы
+
+`full-patch-vp-run.ts` проверяет canonical GrumU A+B2 и BOg delayed до solver, сохраняет VP/no-op/control patch/WAV, атомарные чекпоинты, proposed/saved global/J, residual reduction, character/bands и видимые warnings. Control получает фактический VP work-бюджет через optional `maxSampleWork`; обе ветки учитывают одинаковые 6N canonical-работы. Runner независимо измеряет сохранённые PCM, а solver metrics хранит отдельно.
+
+CD сохраняет прежний return `{vector,history}` и default golden. Random restart резервирует all-slot initial genome, последний restore резервируется до preview/full rescale, а `finalStagesSkipped` не смешивается с `workBudgetStop`. Все три повторные ревизии READY; related63/63 и полный набор 308/308. Реальные GrumU/BOg и gate пока не запускались, Q4 не заявлен.
+
 ## 2026-11-24: реализован offline core full-patch VP
 
 `full-patch-vp.ts` работает прямо с `ArgCreateSynth`. LM меняет семь log-форм каждого активного слота. На текущей clip-маске normalized Gram внутреннего basis строит projected Kaufman `(I−BB+)J`; активная radial граница оставляет только tangent пары. Затем MGS отсекает зависимые столбцы до damped dense solve с partial pivoting. Внутренний solver строит normalized Gram по ненасыщенным отсчётам, совместно решает все квадратуры и соблюдает радиальные границы 0.001–1 с общей ulp-канонизацией. Каждая проба заново применяет clip и квантование; raw-only accept отсутствует.

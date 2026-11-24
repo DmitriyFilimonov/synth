@@ -4,6 +4,7 @@ import { SAMPLE_RATE } from '../consts';
 import type { ArgCreateSynth, PhaseModel } from '../synth';
 import { assertPatchMatchesWav } from './beat-transfer-run';
 import {
+  FULL_PATCH_FINALIZATION_SAMPLE_PASSES,
   passesFullPatchCanonicalGuard,
   projectFullPatchKaufmanColumns,
   runFullPatchVariableProjection,
@@ -318,6 +319,17 @@ test('Kaufman projection removes the coefficient subspace and honors bounds', ()
   assert.deepEqual(bounded.columns[0], fixedCoefficientColumn);
 });
 
+test('radial tangent diagnostics do not invent quadrature metadata', () => {
+  const projected = projectFullPatchKaufmanColumns({
+    basis: [Float64Array.from([1, 0]), Float64Array.from([0, 0])],
+    coefficients: [1, 0],
+    columns: [Float64Array.from([1, 1])],
+  });
+  assert.equal(projected.activeRadialBounds, 1);
+  assert.equal(projected.coefficientRank, 0);
+  assert.deepEqual(projected.diagnostics?.droppedQuadratures, []);
+});
+
 test('duplicate, zero-support and near-collinear bases stay finite', () => {
   const first = tone(91, 0.12, 0.2);
   const duplicate = structuredClone(first);
@@ -567,6 +579,34 @@ test('input guards reject invalid patches even with zero outer budget', () => {
       }),
     /Invalid fixed or phase field/,
   );
+});
+
+test('canonical finalization has a six-N known count without outer steps', () => {
+  const patch: ArgCreateSynth = {
+    oscillators: [tone(73, 0.4, 0.37)],
+  };
+  const group = patch.oscillators[0];
+  assert.ok(group !== undefined);
+  group.ampEnv.endLevel = 1;
+  const sampleCount = 8;
+  const result = runFullPatchVariableProjection({
+    patch,
+    target: renderForTarget(patch, sampleCount, 'legacy'),
+    phaseModel: 'legacy',
+    maxOuter: 0,
+    maxInner: 1,
+    maxBacktracks: 0,
+  });
+  assert.equal(FULL_PATCH_FINALIZATION_SAMPLE_PASSES, 6);
+  // Внутри metric=14N и synth=5N финальный guard даёт 4N и 2N.
+  assert.deepEqual(result.cost.sampleWork, {
+    synth: 5 * sampleCount,
+    basis: 5 * sampleCount,
+    jacobian: 0,
+    gram: 0,
+    metric: 14 * sampleCount,
+    total: 24 * sampleCount,
+  });
 });
 
 test('sample work known count includes Jacobian normalization and MGS vector passes', () => {

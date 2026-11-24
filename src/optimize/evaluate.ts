@@ -12,6 +12,10 @@ import {
   mapVectorToSynthConfigForOsc,
 } from '../vector-to-synth-config';
 import { validateFixedDelaySeconds } from '../fixed-delay';
+import {
+  addCoordinateDescentSampleWork,
+  type CoordinateDescentSampleWorkCounter,
+} from './sample-work';
 
 /**
  * Multi-scale window sizes (seconds). Metric evaluates suppression on each
@@ -116,6 +120,7 @@ export interface UsefulZone {
 export const computeUsefulZone = (
   targetSignal: readonly number[],
   sampleRate: number,
+  sampleWork?: CoordinateDescentSampleWorkCounter,
 ): UsefulZone => {
   const total = targetSignal.length;
   const probeSize = Math.max(1, Math.round(0.001 * sampleRate));
@@ -138,6 +143,7 @@ export const computeUsefulZone = (
     };
   }
 
+  addCoordinateDescentSampleWork(sampleWork, 'evaluation', total, 2);
   let peakRms = 0;
   const probeRms = new Float64Array(numProbes);
   for (let p = 0; p < numProbes; p++) {
@@ -193,6 +199,8 @@ export const computeUsefulZone = (
 export interface WaveformOptions extends SynthOptions {
   /** Onset по индексам слотов; не входит в десятипараметровый вектор. */
   fixedDelaySeconds?: readonly number[];
+  /** Общий счётчик budgeted CD; обычные вызовы его не задают. */
+  sampleWork?: CoordinateDescentSampleWorkCounter;
 }
 
 export const createWaveForm = (
@@ -201,6 +209,22 @@ export const createWaveForm = (
   numSamples: number,
   options: WaveformOptions = {},
 ): number[] => {
+  let activeOscillators = 0;
+  for (
+    let base = 0;
+    base < vectorValues.length;
+    base += OSC_PARAMS_PER_OSCILLATOR
+  ) {
+    if ((vectorValues[base] ?? 0) >= 0.5) {
+      activeOscillators += 1;
+    }
+  }
+  addCoordinateDescentSampleWork(
+    options.sampleWork,
+    'synth',
+    numSamples,
+    activeOscillators + 1,
+  );
   const synth = createSynth(
     mapVectorToSynthConfig(
       [...vectorValues],
@@ -370,6 +394,7 @@ const evaluateMultiScaleWindowed = (
   targetSignal: readonly number[],
   sampleRate: number,
   usefulZone: UsefulZone,
+  sampleWork?: CoordinateDescentSampleWorkCounter,
 ): number => {
   const length = usefulZone.end - usefulZone.start;
   if (length <= 0) {
@@ -406,6 +431,11 @@ const evaluateMultiScaleWindowed = (
       }
       const s = usefulZone.start + w * windowSize;
       const tgtRms = rangeRMS(targetSignal, s, windowSize);
+      addCoordinateDescentSampleWork(
+        sampleWork,
+        'evaluation',
+        generated.length,
+      );
       if (tgtRms > peakTargetRms) {
         peakTargetRms = tgtRms;
       }
@@ -417,6 +447,11 @@ const evaluateMultiScaleWindowed = (
         targetSignal,
         s,
         windowSize,
+      );
+      addCoordinateDescentSampleWork(
+        sampleWork,
+        'evaluation',
+        generated.length,
       );
       const weight =
         tgtRms *
@@ -431,6 +466,11 @@ const evaluateMultiScaleWindowed = (
     if (tailLength > 0 && fullWindows % stride === 0) {
       const s = usefulZone.start + fullWindows * windowSize;
       const tgtRms = rangeRMS(targetSignal, s, tailLength);
+      addCoordinateDescentSampleWork(
+        sampleWork,
+        'evaluation',
+        generated.length,
+      );
       if (tgtRms > peakTargetRms) {
         peakTargetRms = tgtRms;
       }
@@ -440,6 +480,11 @@ const evaluateMultiScaleWindowed = (
           targetSignal,
           s,
           tailLength,
+        );
+        addCoordinateDescentSampleWork(
+          sampleWork,
+          'evaluation',
+          generated.length,
         );
         const weight =
           tgtRms *
@@ -466,6 +511,11 @@ const evaluateMultiScaleWindowed = (
   // Bias toward worst-scale to force fixing errors on every timescale.
   const combined = worstScale * 0.5 + avgScale * 0.5;
 
+  addCoordinateDescentSampleWork(
+    sampleWork,
+    'evaluation',
+    generated.length,
+  );
   const ringingPenalty = computeRingingPenalty(
     generated,
     usefulZone,
@@ -506,15 +556,42 @@ export const evaluateSuppressionWindowed = (
   targetSignal: readonly number[],
   sampleRate = 44100,
   usefulZone?: UsefulZone,
+  sampleWork?: CoordinateDescentSampleWorkCounter,
 ): number => {
   const zone =
-    usefulZone ?? computeUsefulZone(targetSignal, sampleRate);
+    usefulZone ??
+    computeUsefulZone(targetSignal, sampleRate, sampleWork);
   return evaluateMultiScaleWindowed(
     generated,
     targetSignal,
     sampleRate,
     zone,
+    sampleWork,
   );
+};
+
+/**
+ * Возвращает консервативный предел N-проходов одной полной метрики.
+ *
+ * Полезная зона и preview stride могут только уменьшить число окон. CD
+ * использует этот предел до начала целой итерации, поэтому фактический
+ * candidate work не перескакивает через `maxSampleWork` на середине pass.
+ */
+export const estimateFullWindowedEvaluationSampleWork = (
+  sampleCount: number,
+  sampleRate: number,
+): number => {
+  if (sampleCount <= 0) {
+    return 0;
+  }
+  let windowCount = 0;
+  for (const scaleSec of MULTI_SCALE_WINDOWS_SECONDS) {
+    const windowSize = Math.max(1, Math.round(scaleSec * sampleRate));
+    if (windowSize <= sampleCount) {
+      windowCount += Math.ceil(sampleCount / windowSize);
+    }
+  }
+  return windowCount === 0 ? 0 : (2 * windowCount + 1) * sampleCount;
 };
 
 export const findOptimalScale = (
@@ -522,7 +599,14 @@ export const findOptimalScale = (
   targetSignal: readonly number[],
   sampleRate = 44100,
   usefulZone?: UsefulZone,
+  sampleWork?: CoordinateDescentSampleWorkCounter,
 ): { scale: number; suppressionPercent: number } => {
+  addCoordinateDescentSampleWork(
+    sampleWork,
+    'evaluation',
+    generated.length,
+    2,
+  );
   let dot = 0;
   let genSqSum = 0;
   for (let i = 0; i < generated.length; i++) {
@@ -543,6 +627,7 @@ export const findOptimalScale = (
     targetSignal,
     sampleRate,
     usefulZone,
+    sampleWork,
   );
 
   return { scale, suppressionPercent };
@@ -568,6 +653,7 @@ export class WaveformCache {
   private readonly sum: Float64Array;
   private readonly phaseModel: PhaseModel;
   private readonly fixedDelaySeconds?: readonly number[];
+  private readonly sampleWork?: CoordinateDescentSampleWorkCounter;
 
   constructor(
     initialGenome: readonly number[],
@@ -575,10 +661,12 @@ export class WaveformCache {
     numSamples: number,
     phaseModel: PhaseModel = 'legacy',
     fixedDelaySeconds?: readonly number[],
+    sampleWork?: CoordinateDescentSampleWorkCounter,
   ) {
     this.sampleRate = sampleRate;
     this.phaseModel = phaseModel;
     this.numSamples = numSamples;
+    this.sampleWork = sampleWork;
     this.numOsc = Math.floor(
       initialGenome.length / OSC_PARAMS_PER_OSCILLATOR,
     );
@@ -604,6 +692,11 @@ export class WaveformCache {
         : new Float64Array(numSamples);
       this.contributions.push(contrib);
       if (on) {
+        addCoordinateDescentSampleWork(
+          this.sampleWork,
+          'cache',
+          numSamples,
+        );
         for (let i = 0; i < numSamples; i++) {
           this.sum[i] = (this.sum[i] ?? 0) + contrib[i]!;
         }
@@ -620,6 +713,11 @@ export class WaveformCache {
     const synth = createOscillatorGroup(config, {
       phaseModel: this.phaseModel,
     });
+    addCoordinateDescentSampleWork(
+      this.sampleWork,
+      'synth',
+      this.numSamples,
+    );
     const out = new Float64Array(this.numSamples);
     for (let i = 0; i < this.numSamples; i++) {
       out[i] = synth({ x: i / this.sampleRate });
@@ -642,6 +740,11 @@ export class WaveformCache {
     const offset = paramIndex % OSC_PARAMS_PER_OSCILLATOR;
 
     const oldContrib = this.contributions[osc]!;
+    addCoordinateDescentSampleWork(
+      this.sampleWork,
+      'cache',
+      this.numSamples,
+    );
     for (let i = 0; i < this.numSamples; i++) {
       this.sum[i] = (this.sum[i] ?? 0) - oldContrib[i]!;
     }
@@ -656,6 +759,11 @@ export class WaveformCache {
     this.contributions[osc] = contrib;
 
     if (this.enabled[osc]) {
+      addCoordinateDescentSampleWork(
+        this.sampleWork,
+        'cache',
+        this.numSamples,
+      );
       for (let i = 0; i < this.numSamples; i++) {
         this.sum[i] = (this.sum[i] ?? 0) + contrib[i]!;
       }
@@ -677,6 +785,11 @@ export class WaveformCache {
       if (on) {
         const contrib = this.synthesizeOsc(osc);
         newContributions.push(contrib);
+        addCoordinateDescentSampleWork(
+          this.sampleWork,
+          'cache',
+          this.numSamples,
+        );
         for (let i = 0; i < this.numSamples; i++) {
           newSum[i] = (newSum[i] ?? 0) + contrib[i]!;
         }
@@ -689,6 +802,12 @@ export class WaveformCache {
     this.contributions.push(...newContributions);
     this.enabled.length = 0;
     this.enabled.push(...newEnabled);
+    addCoordinateDescentSampleWork(
+      this.sampleWork,
+      'cache',
+      this.numSamples,
+      2,
+    );
     this.sum.fill(0);
     for (let i = 0; i < this.numSamples; i++) {
       this.sum[i] = newSum[i] ?? 0;
@@ -697,6 +816,11 @@ export class WaveformCache {
 
   /** Клампированная waveform в том же формате, что createWaveForm. */
   getWaveform(): number[] {
+    addCoordinateDescentSampleWork(
+      this.sampleWork,
+      'cache',
+      this.numSamples,
+    );
     const out = new Array<number>(this.numSamples);
     for (let i = 0; i < this.numSamples; i++) {
       const v = this.sum[i] ?? 0;
