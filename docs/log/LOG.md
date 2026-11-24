@@ -2,6 +2,10 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-24: localized high-атом получил NO GO на GrumU
+
+`localized-transient-grumu-v2` завершил 4/4 без ошибок после ulp-исправления. Saved global вырос только на seeds 1 и 4: +0.001357 и +0.059012 п.п.; среднее +0.015092, improved 2/4, J-floor и high guards соблюдены. Это ниже заранее заданного gate 0.5 п.п. Оба accepted получили WARN по характеру: seed 1 ухудшает f0, спад и низкие полосы, seed 4 — спад и низкие полосы. Q4 не пройден. Направление закрыто без увеличения бюджета и без production. Полный комплекс 267/267, backend/web build, Prettier и lint зелёные.
+
 ## 2026-11-24: v1 localized screening исправлен на ulp-границе raw fit
 
 `localized-transient-grumu-v1` завершился как invalid screening реализации: seeds 1/2/4 получили ошибку диапазона startLevel, seed 3 остался unchanged после 16 exact. Это не NO GO модели и не оценка гипотезы. После завершения процесса выполнен только focused diagnostic seed 1, без полного A/B и CD. Он дал `slot=46`, `stage=raw`, `startLevel=1.0000000000000002`.
@@ -31,6 +35,9 @@ Localized pipeline разделён на `selectHighResidualCells`, `prepareLoca
 Accepted обязан поднять global, удержать J не ниже initial−0.05 и уменьшить selected high cell и total high RSS. Proposed raw/refit и saved canonical разделены, любой проигрыш сохраняет A+B2. Runner пишет patch/WAV/audit/report, clipping, character/bands и WARN при большем отклонении низа, f0 или decay. Gate продолжения заранее требует четыре сида, mean saved не менее +0.5 п.п. и минимум два улучшенных сида. Q4 PASS не выставляется.
 
 Known-answer покрывают нулевые default-поля, onset 221 с attack 22 и точным концом поддержки, chirp с 9000 до 3000 Гц с global выше 99% в integral, нулевые onset/sweep controls, насыщенный fixed offset, отказ при росте selected high RSS и canonical fallback/round-trip. Целевые synth/fixed-delay/structural/joint/localized тесты, TypeScript, Prettier и lint проходят. Реальные A/B/CD не запускались: это гипотеза и проверенная механика, а не измеренный результат на GrumU.
+## 2026-11-24: v1.16.0 опубликована
+
+Аннотированный тег `v1.16.0` и master указывают на `54e614d6259804347cb32ca16c3c65c2c8633149`. Чистый клон прошёл 245/245 тестов, backend и web build, Prettier и lint без ошибок. Выпуск сохраняет fixed onset на всех этапах CD и содержит offline парный runner. Реальный BOg screening дал лишь +0.011 п.п. среднего дополнительного прироста delayed и не оправдывает увеличение бюджета. Production не изменён.
 
 ## 2026-11-24: frozen-delay CD screening не показал роста
 
