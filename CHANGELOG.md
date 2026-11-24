@@ -2,6 +2,14 @@
 
 Формат: что изменилось, как проверено, какие ограничения. Теги в git аннотированные и дублируют краткое описание на русском.
 
+## v1.16.0 — frozen onset во время coordinate descent
+
+**Что.** Добавлен `fixedDelaySeconds`: sidecar сохраняет `osc.delay` при каждой оценке CD, включая WaveformCache, off/on, rebuild, restart, relocation, pruning, rescale, scale fitting и финальный canonical patch/WAV. Десятипараметровый вектор не расширен; прежний `mapSynthConfigToVector` по-прежнему отклоняет ненулевой delay. Offline `delayed-cd-run.ts` сравнивает delayed patch и исходный match при одинаковом фактическом бюджете, сохраняет обе ветки и character/bands. Production runner не вызывает.
+
+**Проверки.** Полный комплекс прошёл: 245/245 тестов, backend build, Prettier и lint без ошибок. Known-answer покрывает initial/off/on/rebuild/restart/scale/rescale/worker/final, strict validation, отсутствие протечки и прежний golden. Optimizer, function и static reviews завершились READY. Прямой runner проверен с attackBoost 3, skip и damaged refined input.
+
+**Реальный результат.** `delayed-cd-bog5` завершил четыре пары без ошибок. Delayed получил среднее +0.011 п.п. global от source, control — почти ноль. Delayed сохраняет преимущество +7.365 п.п. благодаря прежнему onset, но дополнительный CD не даёт заметного нового эффекта. Увеличение итераций по этому результату не оправдано; цель 98% и Q1–Q5 остаются открытыми.
+
 ## v1.15.0 — совместная проекция и clip-aware K2 VP
 
 **Что.** Добавлен offline `joint-projection-oracle.ts`: он совместно меняет уровни и фазы существующих осцилляторов через normalized Gram, Jacobi rank, радиальные границы и clip-aware backtracking. K2 VP получил optional clip-aware навигацию, refit четырёх квадратур победителя и отбор исходных пар по полному clipped PCM до top-8. Все флаги по умолчанию выключены. Runner сравнивает шесть режимов от одного match, разделяет proposed/saved и проверяет canonical patch/WAV. Production match/enhance/API не вызывают новые механизмы.
