@@ -2,6 +2,14 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-24: реализован изолированный clip-aware refit VP-победителя
+
+Optional `clipAwareRefit` по умолчанию выключен и работает только вместе с clip-aware K2-VP. После выбора raw-победителя solver получает те же слоты, `PreparedAtom`, нелинейные shapes и `choice.rawWithout`. Один E-старт от raw bounded fit меняет только четыре квадратуры: внешний offset складывается с вкладами пары до hard clip, поэтому target не заменяется остатком. Радиальные границы 0.001–1, не более 25 принятых итераций и ограниченный backtracking сохранены из проверенного solver. Полный D/E не вызывается, новые unit-базисы не строятся.
+
+Raw и refit получают раздельные exact global/J/clipped RSS. Оба проходят прежний global/J guard, `betterCandidate` выбирает среди допустимых, raw остаётся fallback. Следующий центр и навигационные winnerGain/winnerClippedRss по-прежнему содержат raw fit. Пять проходов теперь допускают до 10 VP exact-оценок на попытку вместо 5; refitObjectiveEvaluations и backtracks считаются отдельно от навигации. Runner добавил пятый режим `k2-vp-clip-refit`. Независимые proposed raw/refit maxima сохраняют свои step/pass и больше не описываются как один winner. Для честного сравнения `refitPassPairs` и paired-таблица берут raw/refit из одного pass с общими slots/shapeKey. Saved по-прежнему описывает canonical result; unchanged сохраняет нулевые saved-дельты. Delayed post-pass не участвует.
+
+Known-answer с ненулевым offset различает raw optimum 1.1 и clipped optimum 1.5, а намеренно неверный clip только пары сходится к 1.3. Integration off/on сохраняет slots, shape keys и raw-навигацию; выключенный B побитово совпадает с прежним clip-режимом. High-clip integration проверяет, что accepted refit выигрывает raw и его levels/phases попадают в BlockPursuitStep.atoms, patch и canonical WAV. В контроле без clip raw уже оптимален: refit делает ноль итераций, не выигрывает строгое betterCandidate, поэтому сохраняются raw patch/WAV. Реальный B A/B не запускался. Прежний вывод остаётся в силе: clip navigation на GrumU улучшил proposed 4/4, но дал saved 0/4.
+
 ## 2026-11-24: clip-aware VP улучшает proposed, но не даёт saved на GrumU
 
 Optional `clipAwareNavigation` выбирает центр, победителя прохода и направления joint-ходов по RSS полного PCM после clip и квантования. Solver, словарь, пять проходов, exact/canonical guard и число слотов не меняются. Clip и exact используют общий raw-sum helper, runner получает явный флаг режима. Численная ревизия и декомпозиция READY; профиль 15/15, полный комплекс 207/207, default golden legacy/integral побитово прежний.

@@ -108,6 +108,8 @@ export interface JointRankDiagnostics {
 /** Подготовленный базис. target и сигнал базиса выражены в полной шкале. */
 export interface JointProjectionProblem {
   target: Float64Array;
+  /** Фиксированный вклад остальных осцилляторов, добавляемый до clip. */
+  fixedOffset?: Float64Array;
   targetRss: number;
   basis: Float64Array[];
   norms: Float64Array;
@@ -814,7 +816,7 @@ function evaluateCoefficients(
   let clippedRss = 0;
   let saturatedSamples = 0;
   for (let sample = 0; sample < sampleCount; sample += 1) {
-    let value = 0;
+    let value = problem.fixedOffset?.[sample] ?? 0;
     for (let column = 0; column < problem.basis.length; column += 1) {
       value +=
         (coefficients[column] ?? 0) *
@@ -1196,6 +1198,80 @@ function optimizeClippedStart(arg: {
       history,
       coefficients,
     },
+  };
+}
+
+/** Результат одного clip-aware refit с неизменным внешним вкладом. */
+export interface FixedOffsetClipRefitResult {
+  objective: JointProjectionObjective;
+  audit: ClipStartAudit;
+}
+
+/**
+ * Уточняет четыре квадратуры пары при фиксированном внешнем вкладе.
+ *
+ * @param arg - Базисы пары, полный normalized target, внешний raw offset,
+ *   стартовые коэффициенты bounded raw winner и предел итераций
+ * @returns Прямые метрики полного сигнала и аудит одного E-старта
+ * @remarks `fixedOffset` складывается с вкладами пары до hard clip. Поэтому
+ *   solver минимизирует RSS полного сигнала против исходного target, а не
+ *   клиппирует пару отдельно. Запускается только один старт от переданного
+ *   raw fit; полный D/E, ridge и новые базисы здесь не вычисляются.
+ */
+export function refitClippedQuadraturePair(arg: {
+  basis: Float64Array[];
+  target: ArrayLike<number>;
+  fixedOffset: ArrayLike<number>;
+  initialCoefficients: ArrayLike<number>;
+  maxIterations?: number;
+}): FixedOffsetClipRefitResult {
+  if (arg.basis.length !== 4) {
+    throw new Error(
+      'Clip-aware refit принимает ровно четыре квадратуры',
+    );
+  }
+  const maxIterations = arg.maxIterations ?? JOINT_E_ITERATIONS;
+  if (
+    !Number.isInteger(maxIterations) ||
+    maxIterations < 1 ||
+    maxIterations > JOINT_E_ITERATIONS
+  ) {
+    throw new Error('maxIterations должен быть целым от 1 до 25');
+  }
+  if (arg.fixedOffset.length !== arg.target.length) {
+    throw new Error('Фиксированный offset не совпадает с target');
+  }
+  const fixedOffset = Float64Array.from(arg.fixedOffset);
+  if (fixedOffset.some((value) => !Number.isFinite(value))) {
+    throw new Error(
+      'Фиксированный offset содержит нечисловое значение',
+    );
+  }
+  const prepared = prepareJointProjectionProblem({
+    basis: arg.basis,
+    target: arg.target,
+    initialCoefficients: arg.initialCoefficients,
+  });
+  const problem: JointProjectionProblem = {
+    ...prepared,
+    fixedOffset,
+  };
+  const { evaluation, audit } = optimizeClippedStart({
+    problem,
+    initial: Array.from(arg.initialCoefficients),
+    start: 'd',
+    maxIterations,
+  });
+  return {
+    objective: {
+      coefficients: evaluation.coefficients,
+      rawRss: evaluation.rawRss,
+      clippedRss: evaluation.clippedRss,
+      rawSuppressionPercent: evaluation.rawSuppressionPercent,
+      clippedSuppressionPercent: evaluation.clippedSuppressionPercent,
+      saturatedSamples: evaluation.saturatedSamples,
+    },
+    audit,
   };
 }
 

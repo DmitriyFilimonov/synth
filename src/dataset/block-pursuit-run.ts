@@ -1,8 +1,8 @@
 /* eslint-disable no-console */
 /**
- * Парный screening K1, K2, K2-VP и clip-aware K2-VP на готовых
- * match-прогонах. Все режимы стартуют с одного patch и используют один
- * словарь.
+ * Парный screening K1, K2, K2-VP, clip-aware K2-VP и clip-aware refit
+ * на готовых match-прогонах. Все пять режимов стартуют с одного patch
+ * и используют один словарь.
  * Новый coordinate descent не запускается, production-сервис не меняется.
  *
  * npx tsx src/dataset/block-pursuit-run.ts --dataset datasets/ref --out datasets/block-screen
@@ -72,6 +72,22 @@ interface SavedResultReport extends CandidateMetricsReport {
   status: BlockPursuitResult['status'];
 }
 
+/** Raw и refit одного VP-победителя на одном step/pass. */
+interface ClipRefitPassPairReport {
+  step: number;
+  pass: number;
+  slots: number[];
+  shapeKey: string;
+  raw: CandidateMetricsReport;
+  refit: CandidateMetricsReport;
+  rawClippedRss: number | null;
+  refitClippedRss: number | null;
+  refitMinusRawGlobal: number;
+  refitMinusRawWindowed: number;
+  rawAccepted: boolean;
+  refitAccepted: boolean;
+}
+
 interface ModeRunReport {
   blockSize: PursuitBlockSize;
   status: BlockPursuitResult['status'];
@@ -93,8 +109,15 @@ interface ModeRunReport {
   slotSetsEvaluated: number;
   variableProjection: boolean;
   clipAwareNavigation: boolean;
+  clipAwareRefit: boolean;
   clipObjectiveEvaluations: number;
-  proposedExact: ProposedExactCandidateReport | null;
+  refitObjectiveEvaluations: number;
+  refitBacktracks: number;
+  refitIterations: number;
+  refitMaskChanges: number;
+  proposedRaw: ProposedExactCandidateReport | null;
+  proposedRefit: ProposedExactCandidateReport | null;
+  refitPassPairs: ClipRefitPassPairReport[];
   saved: SavedResultReport;
   variableProjectionAudit?: BlockPursuitResult['variableProjection'];
   character: ReturnType<typeof compareCharacter>;
@@ -110,6 +133,7 @@ interface PairedBlockRun {
   k2: ModeRunReport;
   k2Vp: ModeRunReport;
   k2VpClip: ModeRunReport;
+  k2VpClipRefit: ModeRunReport;
   pairGlobalDelta: number;
   vpMinusK2: number;
   vpMinusK1: number;
@@ -117,6 +141,10 @@ interface PairedBlockRun {
   rawVpMinusClipVpProposedWindowed: number | null;
   rawVpMinusClipVpSavedGlobal: number;
   rawVpMinusClipVpSavedWindowed: number;
+  clipRefitRawMinusRefitProposedGlobal: number | null;
+  clipRefitRawMinusRefitProposedWindowed: number | null;
+  clipRefitRawMinusRefitSavedGlobal: number;
+  clipRefitRawMinusRefitSavedWindowed: number;
 }
 
 interface BlockTargetSummary {
@@ -126,7 +154,9 @@ interface BlockTargetSummary {
   k2MeanGlobalDelta: number;
   k2VpMeanGlobalDelta: number;
   k2VpClipMeanGlobalDelta: number;
+  k2VpClipRefitMeanGlobalDelta: number;
   meanRawVpMinusClipVpSavedGlobal: number;
+  meanClipRefitRawMinusRefitSavedGlobal: number;
   meanPairGlobalDelta: number;
   meanVpMinusK2: number;
   meanVpMinusK1: number;
@@ -136,6 +166,7 @@ interface BlockTargetSummary {
   k2Improved: number;
   k2VpImproved: number;
   k2VpClipImproved: number;
+  k2VpClipRefitImproved: number;
   k2Wins: number;
   k2VpWinsAgainstK2: number;
   k2PassesScreen: boolean;
@@ -176,7 +207,7 @@ function sampleSd(values: number[]): number | null {
 }
 
 /**
- * Сводит результаты K1, K2, K2-VP и clip-aware K2-VP по таргету.
+ * Сводит результаты K1, K2, VP, clip-aware VP и clip refit по таргету.
  *
  * @param slug - Имя таргета в датасете
  * @param runs - Парные прогоны всех доступных сидов этого таргета
@@ -209,8 +240,14 @@ export function summarizeBlockTarget(
     k2VpClipMeanGlobalDelta: mean(
       runs.map((run) => run.k2VpClip.globalDelta),
     ),
+    k2VpClipRefitMeanGlobalDelta: mean(
+      runs.map((run) => run.k2VpClipRefit.globalDelta),
+    ),
     meanRawVpMinusClipVpSavedGlobal: mean(
       runs.map((run) => run.rawVpMinusClipVpSavedGlobal),
+    ),
+    meanClipRefitRawMinusRefitSavedGlobal: mean(
+      runs.map((run) => run.clipRefitRawMinusRefitSavedGlobal),
     ),
     meanPairGlobalDelta: mean(pair),
     meanVpMinusK2: mean(runs.map((run) => run.vpMinusK2)),
@@ -229,6 +266,11 @@ export function summarizeBlockTarget(
       (run) =>
         run.k2VpClip.status === 'refined' &&
         run.k2VpClip.globalDelta > 0,
+    ).length,
+    k2VpClipRefitImproved: runs.filter(
+      (run) =>
+        run.k2VpClipRefit.status === 'refined' &&
+        run.k2VpClipRefit.globalDelta > 0,
     ).length,
     k2Wins: runs.filter((run) => run.pairGlobalDelta > 1e-9).length,
     k2VpWinsAgainstK2: runs.filter((run) => run.vpMinusK2 > 1e-9)
@@ -262,12 +304,12 @@ async function saveModeArtifacts(arg: {
 /**
  * Запускает один режим и проверяет его канонический WAV.
  *
- * @param arg - Общие параметры block pursuit и необязательные флаги VP
- *   и clip-aware навигации
+ * @param arg - Общие параметры block pursuit и необязательные флаги VP,
+ *   clip-aware навигации и refit
  * @returns Результат поиска и его длительность в миллисекундах
  * @remarks Без `variableProjection` выполняется стандартный K1/K2.
- *   Clip-флаг передаётся только четвёртому режиму; canonical assert
- *   одинаков для всех режимов.
+ *   Clip-флаг задаёт четвёртый режим, а оба clip-флага — пятый;
+ *   canonical assert одинаков для всех режимов.
  * @throws Error если WAV не совпадает с каноническим рендером patch
  */
 function executeBlockMode(arg: {
@@ -280,6 +322,7 @@ function executeBlockMode(arg: {
   diverseShortlist: boolean;
   variableProjection?: boolean;
   clipAwareNavigation?: boolean;
+  clipAwareRefit?: boolean;
 }): { result: BlockPursuitResult; durationMs: number } {
   const started = Date.now();
   const result = pursueResidualBlocks(arg);
@@ -294,11 +337,12 @@ function executeBlockMode(arg: {
 }
 
 /**
- * Находит лучший exact-кандидат среди победителей VP-проходов до guard.
+ * Находит лучший raw или refit exact-кандидат до guard.
  * Сравнение повторяет `betterCandidate`: сначала global, затем windowed J.
  */
 function findProposedExactCandidate(
   result: BlockPursuitResult,
+  kind: 'raw' | 'refit',
 ): Omit<
   ProposedExactCandidateReport,
   'globalDelta' | 'windowedDelta'
@@ -309,12 +353,19 @@ function findProposedExactCandidate(
   > | null = null;
   for (const attempt of result.variableProjection?.attempts ?? []) {
     for (const pass of attempt.passes) {
-      const globalSuppressionPercent = pass.globalSuppressionPercent;
+      const globalSuppressionPercent =
+        kind === 'raw'
+          ? pass.globalSuppressionPercent
+          : (pass.refitGlobalSuppressionPercent ?? null);
       const windowedSuppressionPercent =
-        pass.windowedSuppressionPercent;
+        kind === 'raw'
+          ? pass.windowedSuppressionPercent
+          : (pass.refitWindowedSuppressionPercent ?? null);
       if (
         globalSuppressionPercent === null ||
-        windowedSuppressionPercent === null
+        globalSuppressionPercent === undefined ||
+        windowedSuppressionPercent === null ||
+        windowedSuppressionPercent === undefined
       ) {
         continue;
       }
@@ -363,15 +414,85 @@ function createCandidateMetricsReport(arg: {
 }
 
 /**
+ * Собирает paired-сравнение raw/refit из существующего аудита проходов.
+ * Неполные exact-диагностики пропускаются и не смешиваются с maxima.
+ */
+function collectClipRefitPassPairs(
+  result: BlockPursuitResult,
+): ClipRefitPassPairReport[] {
+  const pairs: ClipRefitPassPairReport[] = [];
+  for (const attempt of result.variableProjection?.attempts ?? []) {
+    for (const pass of attempt.passes) {
+      const rawGlobal = pass.rawGlobalSuppressionPercent;
+      const rawWindowed = pass.rawWindowedSuppressionPercent;
+      const refitGlobal = pass.refitGlobalSuppressionPercent;
+      const refitWindowed = pass.refitWindowedSuppressionPercent;
+      if (
+        rawGlobal === null ||
+        rawGlobal === undefined ||
+        rawWindowed === null ||
+        rawWindowed === undefined ||
+        refitGlobal === null ||
+        refitGlobal === undefined ||
+        refitWindowed === null ||
+        refitWindowed === undefined ||
+        pass.slots === undefined ||
+        pass.shapeKey === undefined
+      ) {
+        continue;
+      }
+      const raw = createCandidateMetricsReport({
+        globalSuppressionPercent: rawGlobal,
+        windowedSuppressionPercent: rawWindowed,
+        baseline: result.baseline,
+      });
+      const refit = createCandidateMetricsReport({
+        globalSuppressionPercent: refitGlobal,
+        windowedSuppressionPercent: refitWindowed,
+        baseline: result.baseline,
+      });
+      pairs.push({
+        step: attempt.step,
+        pass: pass.pass,
+        slots: [...pass.slots],
+        shapeKey: pass.shapeKey,
+        raw,
+        refit,
+        rawClippedRss: pass.rawClippedRss ?? null,
+        refitClippedRss: pass.refitClippedRss ?? null,
+        refitMinusRawGlobal: refitGlobal - rawGlobal,
+        refitMinusRawWindowed: refitWindowed - rawWindowed,
+        rawAccepted: pass.rawAccepted ?? false,
+        refitAccepted: pass.refitAccepted ?? false,
+      });
+    }
+  }
+  return pairs;
+}
+
+/** Печатает источник независимого proposed maximum. */
+function formatStepPass(
+  candidate: ProposedExactCandidateReport | null,
+): string {
+  return candidate === null
+    ? '—'
+    : `${candidate.step}/${candidate.pass}`;
+}
+
+/**
  * Строит DTO режима и измеряет характер итогового WAV.
  *
  * @param arg - Результат, target, параметры режима, явный clip-флаг
  *   и пути артефактов
  * @returns Метрики global/J, характер, стоимость и аудит VP
  * @remarks Полный `variableProjectionAudit` присутствует только при
- *   включённом VP. `proposedExact` выбирает лучший exact-победитель
- *   проходов до guard, а `saved` описывает фактически сохранённый
- *   результат. При unchanged обе saved-дельты равны нулю.
+ *   включённом VP. `proposedRaw` и `proposedRefit` независимо выбирают
+ *   лучшие exact-кандидаты проходов до guard и сохраняют свои step/pass;
+ *   они могут описывать разных победителей. `refitPassPairs` отдельно
+ *   сравнивает raw/refit одного step/pass с общими slots и shapeKey.
+ *   `saved` описывает фактически сохранённый canonical результат. Без
+ *   refit proposedRefit равен null, а список пар пуст. При unchanged
+ *   обе saved-дельты равны нулю.
  */
 function createModeRunReport(arg: {
   result: BlockPursuitResult;
@@ -380,11 +501,16 @@ function createModeRunReport(arg: {
   blockSize: PursuitBlockSize;
   durationMs: number;
   clipAwareNavigation: boolean;
+  clipAwareRefit: boolean;
   artifacts: { patch: string; wav: string };
 }): ModeRunReport {
   const { result } = arg;
-  const proposed = findProposedExactCandidate(result);
-  const proposedExact =
+  const withBaseline = (
+    proposed: Omit<
+      ProposedExactCandidateReport,
+      'globalDelta' | 'windowedDelta'
+    > | null,
+  ): ProposedExactCandidateReport | null =>
     proposed === null
       ? null
       : {
@@ -394,6 +520,12 @@ function createModeRunReport(arg: {
             baseline: result.baseline,
           }),
         };
+  const proposedRaw = withBaseline(
+    findProposedExactCandidate(result, 'raw'),
+  );
+  const proposedRefit = arg.clipAwareRefit
+    ? withBaseline(findProposedExactCandidate(result, 'refit'))
+    : null;
   const saved: SavedResultReport = {
     status: result.status,
     ...createCandidateMetricsReport({
@@ -426,8 +558,19 @@ function createModeRunReport(arg: {
     slotSetsEvaluated: result.slotSetsEvaluated,
     variableProjection: result.variableProjection !== undefined,
     clipAwareNavigation: arg.clipAwareNavigation,
+    clipAwareRefit: arg.clipAwareRefit,
     clipObjectiveEvaluations,
-    proposedExact,
+    refitObjectiveEvaluations:
+      result.variableProjection?.refitObjectiveEvaluations ?? 0,
+    refitBacktracks: result.variableProjection?.refitBacktracks ?? 0,
+    refitIterations: result.variableProjection?.refitIterations ?? 0,
+    refitMaskChanges:
+      result.variableProjection?.refitMaskChanges ?? 0,
+    proposedRaw,
+    proposedRefit,
+    refitPassPairs: arg.clipAwareRefit
+      ? collectClipRefitPassPairs(result)
+      : [],
     saved,
     ...(result.variableProjection === undefined
       ? {}
@@ -468,9 +611,9 @@ async function saveModeAudit(arg: {
  *
  * @param arg - Параметры поиска, флаги VP/clip и каталог режима
  * @returns DTO режима со ссылками на сохранённые артефакты
- * @remarks Для обоих VP-режимов в `audit.json` попадают пошаговые
- *   записи, proposed/saved-сводка и стоимость. Coordinate descent и
- *   production API здесь не запускаются.
+ * @remarks Для VP-режимов в `audit.json` попадают пошаговые записи,
+ *   proposed raw/refit/saved-сводка и раздельная стоимость навигации
+ *   и refit. Coordinate descent и production API здесь не запускаются.
  */
 async function processMode(arg: {
   patch: ArgCreateSynth;
@@ -482,6 +625,7 @@ async function processMode(arg: {
   diverseShortlist: boolean;
   variableProjection?: boolean;
   clipAwareNavigation?: boolean;
+  clipAwareRefit?: boolean;
   directory: string;
 }): Promise<ModeRunReport> {
   const executed = executeBlockMode(arg);
@@ -497,6 +641,7 @@ async function processMode(arg: {
     blockSize: arg.blockSize,
     durationMs: executed.durationMs,
     clipAwareNavigation: arg.clipAwareNavigation ?? false,
+    clipAwareRefit: arg.clipAwareRefit ?? false,
     artifacts,
   });
   await saveModeAudit({
@@ -558,16 +703,17 @@ async function loadVerifiedMatchRun(arg: {
 }
 
 /**
- * Запускает K1, K2, K2-VP и K2-VP-clip от проверенного исходника.
+ * Запускает пять равнобюджетных режимов от проверенного исходника.
  *
  * @param arg - Координаты match-сида, manifest и параметры screening
- * @returns Отчёт четырёх режимов или `null` для незавершённого match
+ * @returns Отчёт пяти режимов или `null` для незавершённого match
  * @remarks K1 получает двойной лимит одиночных блоков, а остальные
  *   режимы — один лимит пар, поэтому все режимы могут заменить
  *   одинаковое число слотов. Третий режим включает VP, четвёртый
- *   дополнительно включает clip-aware навигацию. Парные поля хранят
- *   raw VP минус clip VP отдельно для proposed global/J и saved
- *   global/J. Все режимы получают один проверенный patch и target.
+ *   дополнительно включает clip-aware навигацию, пятый добавляет refit
+ *   четырёх квадратур без изменения навигации. Парные поля разделяют
+ *   raw VP против clip VP и raw/refit внутри пятого режима. Все режимы
+ *   получают один проверенный patch и target.
  * @throws Error если исходник противоречит WAV или режимы получили
  *   разный baseline global/J
  */
@@ -621,6 +767,15 @@ async function processPair(arg: {
     clipAwareNavigation: true,
     directory: join(pairDir, 'k2-vp-clip'),
   });
+  const k2VpClipRefit = await processMode({
+    ...common,
+    maxBlocks: arg.maxBlocks,
+    blockSize: 2,
+    variableProjection: true,
+    clipAwareNavigation: true,
+    clipAwareRefit: true,
+    directory: join(pairDir, 'k2-vp-clip-refit'),
+  });
   if (
     k1.baselineGlobalSuppressionPercent !==
       k2.baselineGlobalSuppressionPercent ||
@@ -633,22 +788,38 @@ async function processPair(arg: {
     k1.baselineGlobalSuppressionPercent !==
       k2VpClip.baselineGlobalSuppressionPercent ||
     k1.baselineWindowedSuppressionPercent !==
-      k2VpClip.baselineWindowedSuppressionPercent
+      k2VpClip.baselineWindowedSuppressionPercent ||
+    k1.baselineGlobalSuppressionPercent !==
+      k2VpClipRefit.baselineGlobalSuppressionPercent ||
+    k1.baselineWindowedSuppressionPercent !==
+      k2VpClipRefit.baselineWindowedSuppressionPercent
   ) {
     throw new Error(
-      `K1, K2, K2-VP и K2-VP-clip получили разные baseline в ${pairDir}`,
+      `Пять режимов block pursuit получили разные baseline в ${pairDir}`,
     );
   }
   const proposedGlobal =
-    k2Vp.proposedExact === null || k2VpClip.proposedExact === null
+    k2Vp.proposedRaw === null || k2VpClip.proposedRaw === null
       ? null
-      : k2Vp.proposedExact.globalSuppressionPercent -
-        k2VpClip.proposedExact.globalSuppressionPercent;
+      : k2Vp.proposedRaw.globalSuppressionPercent -
+        k2VpClip.proposedRaw.globalSuppressionPercent;
   const proposedWindowed =
-    k2Vp.proposedExact === null || k2VpClip.proposedExact === null
+    k2Vp.proposedRaw === null || k2VpClip.proposedRaw === null
       ? null
-      : k2Vp.proposedExact.windowedSuppressionPercent -
-        k2VpClip.proposedExact.windowedSuppressionPercent;
+      : k2Vp.proposedRaw.windowedSuppressionPercent -
+        k2VpClip.proposedRaw.windowedSuppressionPercent;
+  const refitProposedGlobal =
+    k2VpClipRefit.proposedRaw === null ||
+    k2VpClipRefit.proposedRefit === null
+      ? null
+      : k2VpClipRefit.proposedRaw.globalSuppressionPercent -
+        k2VpClipRefit.proposedRefit.globalSuppressionPercent;
+  const refitProposedWindowed =
+    k2VpClipRefit.proposedRaw === null ||
+    k2VpClipRefit.proposedRefit === null
+      ? null
+      : k2VpClipRefit.proposedRaw.windowedSuppressionPercent -
+        k2VpClipRefit.proposedRefit.windowedSuppressionPercent;
   return {
     slug: arg.slug,
     seed: arg.seed,
@@ -659,6 +830,7 @@ async function processPair(arg: {
     k2,
     k2Vp,
     k2VpClip,
+    k2VpClipRefit,
     pairGlobalDelta:
       k2.globalSuppressionPercent - k1.globalSuppressionPercent,
     vpMinusK2:
@@ -673,15 +845,23 @@ async function processPair(arg: {
     rawVpMinusClipVpSavedWindowed:
       k2Vp.saved.windowedSuppressionPercent -
       k2VpClip.saved.windowedSuppressionPercent,
+    clipRefitRawMinusRefitProposedGlobal: refitProposedGlobal,
+    clipRefitRawMinusRefitProposedWindowed: refitProposedWindowed,
+    clipRefitRawMinusRefitSavedGlobal:
+      k2VpClip.saved.globalSuppressionPercent -
+      k2VpClipRefit.saved.globalSuppressionPercent,
+    clipRefitRawMinusRefitSavedWindowed:
+      k2VpClip.saved.windowedSuppressionPercent -
+      k2VpClipRefit.saved.windowedSuppressionPercent,
   };
 }
 
 /**
- * Строит Markdown с четырьмя режимами и парой raw/clip VP.
+ * Строит Markdown с пятью режимами и раздельными raw/refit-сводками.
  *
  * @param runs - Парные результаты по всем обработанным сидам
  * @param summaries - Сводки по таргетам для тех же прогонов
- * @param maxBlocks - Общий лимит пар K2 и обоих VP-режимов;
+ * @param maxBlocks - Общий лимит пар K2 и VP-режимов;
  *   K1 получает двойной лимит блоков
  * @returns Таблицы прогонов и таргетов с пояснением порога screening
  * @remarks Отчёт описывает offline-диагностику вне production. Порог
@@ -694,9 +874,9 @@ export function renderBlockReportMarkdown(
   maxBlocks: number,
 ): string {
   const lines = [
-    '# Screening K1, K2, K2-VP и clip-aware K2-VP',
+    '# Screening K1, K2, K2-VP, clip-aware K2-VP и clip refit',
     '',
-    `K1, K2, K2-VP и K2-VP-clip стартуют с одного match и используют один словарь v3. K1 выполняет до ${maxBlocks * 2} одиночных блоков, а остальные режимы — до ${maxBlocks} пар с общим МНК 4×4, поэтому каждый режим может заменить не более ${maxBlocks * 2} слотов. Оба VP-режима делают пять проходов нелинейного уточнения выбранной пары и после каждого прохода проверяют полный global/J guard. Clip-режим выбирает направление и победителя по RSS полного клиппированного PCM, но сохраняет результат только через прежний guard. Это offline-диагностика, не закон T35 и не подключение к production.`,
+    `Пять режимов стартуют с одного match и используют один словарь v3. K1 выполняет до ${maxBlocks * 2} одиночных блоков, а остальные режимы — до ${maxBlocks} пар с общим МНК 4×4, поэтому каждый режим может заменить не более ${maxBlocks * 2} слотов. VP-режимы делают пять проходов нелинейного уточнения выбранной пары. Clip-режим выбирает направление и победителя по RSS полного клиппированного PCM. Пятый режим дополнительно уточняет четыре квадратуры уже выбранного победителя, но не меняет навигацию. Оба варианта проходят прежний global/J guard; refit добавляет не более 25 принятых итераций и backtracking на проход, а также второй exact-кандидат. Это offline-диагностика, не закон T35 и не подключение к production.`,
     '',
     '| Таргет | Сид | Global до | K1 после | K1 Δ | K2 после | K2 Δ | K2−K1 | K2-VP после | K2-VP Δ | VP−K2 | VP−K1 | K1 с | K2 с | VP с |',
     '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
@@ -717,17 +897,48 @@ export function renderBlockReportMarkdown(
   );
   for (const run of runs) {
     lines.push(
-      `| ${run.slug} | ${run.seed} | ${run.k2Vp.proposedExact?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${run.k2VpClip.proposedExact?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${run.rawVpMinusClipVpProposedGlobal?.toFixed(3) ?? '—'} | ${run.k2Vp.saved.globalSuppressionPercent.toFixed(3)} | ${run.k2VpClip.saved.globalSuppressionPercent.toFixed(3)} | ${run.rawVpMinusClipVpSavedGlobal.toFixed(3)} | ${run.rawVpMinusClipVpProposedWindowed?.toFixed(3) ?? '—'} | ${run.rawVpMinusClipVpSavedWindowed.toFixed(3)} | ${run.k2VpClip.variableProjectionAudit?.evaluations ?? 0} | ${run.k2VpClip.basisRenders + (run.k2VpClip.variableProjectionAudit?.unitBasisRenders ?? 0)} | ${run.k2VpClip.exactEvaluations + (run.k2VpClip.variableProjectionAudit?.exactCandidates ?? 0)} | ${run.k2VpClip.clipObjectiveEvaluations} | ${(run.k2VpClip.durationMs / 1000).toFixed(1)} |`,
+      `| ${run.slug} | ${run.seed} | ${run.k2Vp.proposedRaw?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${run.k2VpClip.proposedRaw?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${run.rawVpMinusClipVpProposedGlobal?.toFixed(3) ?? '—'} | ${run.k2Vp.saved.globalSuppressionPercent.toFixed(3)} | ${run.k2VpClip.saved.globalSuppressionPercent.toFixed(3)} | ${run.rawVpMinusClipVpSavedGlobal.toFixed(3)} | ${run.rawVpMinusClipVpProposedWindowed?.toFixed(3) ?? '—'} | ${run.rawVpMinusClipVpSavedWindowed.toFixed(3)} | ${run.k2VpClip.variableProjectionAudit?.evaluations ?? 0} | ${run.k2VpClip.basisRenders + (run.k2VpClip.variableProjectionAudit?.unitBasisRenders ?? 0)} | ${run.k2VpClip.exactEvaluations + (run.k2VpClip.variableProjectionAudit?.exactCandidates ?? 0)} | ${run.k2VpClip.clipObjectiveEvaluations} | ${(run.k2VpClip.durationMs / 1000).toFixed(1)} |`,
     );
   }
   lines.push(
     '',
-    '| Таргет | Прогонов | K1 среднее Δ | K2 среднее Δ | K2-VP среднее Δ | Clip-VP среднее Δ | VP−clip saved среднее | K2−K1 среднее | VP−K2 среднее | VP−K1 среднее | K1 улучшено | K2 улучшено | VP улучшено | Clip улучшено | K2 выигрышей | VP выигрышей у K2 | K2 проходит screening |',
-    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
+    '### Независимые proposed maxima и saved',
+    '',
+    'Proposed raw и proposed refit здесь выбираются независимо и могут принадлежать разным step/pass, поэтому их разница не является эффектом на одном победителе. Колонки step/pass показывают источник каждого maximum. Saved сравнивает итоговые canonical patch/WAV режимов без refit и с refit; при unchanged дельта равна нулю. В колонках разницы из proposed raw вычитается proposed refit, а из saved без refit — saved с refit. Пять VP-проходов дают не более десяти exact-оценок на попытку вместо пяти. Счётчики refit objective и backtracks не смешаны с навигационными clip-оценками.',
+    '',
+    '| Таргет | Сид | Raw step/pass | Refit step/pass | Proposed raw global | Proposed refit global | Raw−refit global | Proposed raw J | Proposed refit J | Saved без refit | Saved с refit | Raw−refit saved global | Raw−refit saved J | VP exact | Refit iterations | Refit objective | Refit backtracks | Mask changes | Refit с |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+  );
+  for (const run of runs) {
+    const mode = run.k2VpClipRefit;
+    lines.push(
+      `| ${run.slug} | ${run.seed} | ${formatStepPass(mode.proposedRaw)} | ${formatStepPass(mode.proposedRefit)} | ${mode.proposedRaw?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${mode.proposedRefit?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${run.clipRefitRawMinusRefitProposedGlobal?.toFixed(3) ?? '—'} | ${mode.proposedRaw?.windowedSuppressionPercent.toFixed(3) ?? '—'} | ${mode.proposedRefit?.windowedSuppressionPercent.toFixed(3) ?? '—'} | ${run.k2VpClip.saved.globalSuppressionPercent.toFixed(3)} | ${mode.saved.globalSuppressionPercent.toFixed(3)} | ${run.clipRefitRawMinusRefitSavedGlobal.toFixed(3)} | ${run.clipRefitRawMinusRefitSavedWindowed.toFixed(3)} | ${mode.variableProjectionAudit?.exactCandidates ?? 0} | ${mode.refitIterations} | ${mode.refitObjectiveEvaluations} | ${mode.refitBacktracks} | ${mode.refitMaskChanges} | ${(mode.durationMs / 1000).toFixed(1)} |`,
+    );
+  }
+  lines.push(
+    '',
+    '### Paired raw/refit на одном VP-победителе',
+    '',
+    'Каждая строка берёт raw и refit из одной записи step/pass с общими slots и shapeKey. Положительная дельта refit−raw означает рост метрики после refit. Accepted показывает прежний guard до выбора сохранённого кандидата. Те же записи доступны в JSON-поле refitPassPairs.',
+    '',
+    '| Таргет | Сид | Step | Pass | Slots | Shape key | Raw global | Refit global | Refit−raw global | Raw J | Refit J | Refit−raw J | Raw accepted | Refit accepted |',
+    '| --- | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |',
+  );
+  for (const run of runs) {
+    for (const pair of run.k2VpClipRefit.refitPassPairs) {
+      lines.push(
+        `| ${run.slug} | ${run.seed} | ${pair.step} | ${pair.pass} | ${JSON.stringify(pair.slots)} | \`${pair.shapeKey}\` | ${pair.raw.globalSuppressionPercent.toFixed(3)} | ${pair.refit.globalSuppressionPercent.toFixed(3)} | ${pair.refitMinusRawGlobal.toFixed(3)} | ${pair.raw.windowedSuppressionPercent.toFixed(3)} | ${pair.refit.windowedSuppressionPercent.toFixed(3)} | ${pair.refitMinusRawWindowed.toFixed(3)} | ${pair.rawAccepted ? 'да' : 'нет'} | ${pair.refitAccepted ? 'да' : 'нет'} |`,
+      );
+    }
+  }
+  lines.push(
+    '',
+    '| Таргет | Прогонов | K1 среднее Δ | K2 среднее Δ | K2-VP среднее Δ | Clip-VP среднее Δ | Refit среднее Δ | VP−clip saved среднее | Raw−refit saved среднее | K2−K1 среднее | VP−K2 среднее | VP−K1 среднее | K1 улучшено | K2 улучшено | VP улучшено | Clip улучшено | Refit улучшено | K2 выигрышей | VP выигрышей у K2 | K2 проходит screening |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
   );
   for (const summary of summaries) {
     lines.push(
-      `| ${summary.slug} | ${summary.runs} | ${summary.k1MeanGlobalDelta.toFixed(3)} | ${summary.k2MeanGlobalDelta.toFixed(3)} | ${summary.k2VpMeanGlobalDelta.toFixed(3)} | ${summary.k2VpClipMeanGlobalDelta.toFixed(3)} | ${summary.meanRawVpMinusClipVpSavedGlobal.toFixed(3)} | ${summary.meanPairGlobalDelta.toFixed(3)} | ${summary.meanVpMinusK2.toFixed(3)} | ${summary.meanVpMinusK1.toFixed(3)} | ${summary.k1Improved} | ${summary.k2Improved} | ${summary.k2VpImproved} | ${summary.k2VpClipImproved} | ${summary.k2Wins} | ${summary.k2VpWinsAgainstK2} | ${summary.k2PassesScreen ? 'да' : 'нет'} |`,
+      `| ${summary.slug} | ${summary.runs} | ${summary.k1MeanGlobalDelta.toFixed(3)} | ${summary.k2MeanGlobalDelta.toFixed(3)} | ${summary.k2VpMeanGlobalDelta.toFixed(3)} | ${summary.k2VpClipMeanGlobalDelta.toFixed(3)} | ${summary.k2VpClipRefitMeanGlobalDelta.toFixed(3)} | ${summary.meanRawVpMinusClipVpSavedGlobal.toFixed(3)} | ${summary.meanClipRefitRawMinusRefitSavedGlobal.toFixed(3)} | ${summary.meanPairGlobalDelta.toFixed(3)} | ${summary.meanVpMinusK2.toFixed(3)} | ${summary.meanVpMinusK1.toFixed(3)} | ${summary.k1Improved} | ${summary.k2Improved} | ${summary.k2VpImproved} | ${summary.k2VpClipImproved} | ${summary.k2VpClipRefitImproved} | ${summary.k2Wins} | ${summary.k2VpWinsAgainstK2} | ${summary.k2PassesScreen ? 'да' : 'нет'} |`,
     );
   }
   lines.push(
@@ -878,11 +1089,13 @@ async function runBlockScreening(
               `K1=${run.k1.globalDelta.toFixed(3)} K2=${run.k2.globalDelta.toFixed(3)} ` +
               `K2VP=${run.k2Vp.globalDelta.toFixed(3)} ` +
               `K2VPclip=${run.k2VpClip.globalDelta.toFixed(3)} ` +
+              `K2VPclipRefit=${run.k2VpClipRefit.globalDelta.toFixed(3)} ` +
               `pair=${run.pairGlobalDelta.toFixed(3)} ` +
               `VP-K2=${run.vpMinusK2.toFixed(3)} VP-K1=${run.vpMinusK1.toFixed(3)} ` +
               `VP-clipSaved=${run.rawVpMinusClipVpSavedGlobal.toFixed(3)} ` +
-              `K1status=${run.k1.status} K2status=${run.k2.status} VPstatus=${run.k2Vp.status} clipStatus=${run.k2VpClip.status} ` +
-              `seconds=${((run.k1.durationMs + run.k2.durationMs + run.k2Vp.durationMs + run.k2VpClip.durationMs) / 1000).toFixed(1)}`,
+              `raw-refitSaved=${run.clipRefitRawMinusRefitSavedGlobal.toFixed(3)} ` +
+              `K1status=${run.k1.status} K2status=${run.k2.status} VPstatus=${run.k2Vp.status} clipStatus=${run.k2VpClip.status} refitStatus=${run.k2VpClipRefit.status} ` +
+              `seconds=${((run.k1.durationMs + run.k2.durationMs + run.k2Vp.durationMs + run.k2VpClip.durationMs + run.k2VpClipRefit.durationMs) / 1000).toFixed(1)}`,
           );
         }
       } catch (error) {
@@ -922,10 +1135,12 @@ function printBlockScreeningSummary(report: BlockReport): void {
         `K1=${summary.k1MeanGlobalDelta.toFixed(3)} K2=${summary.k2MeanGlobalDelta.toFixed(3)} ` +
         `K2VP=${summary.k2VpMeanGlobalDelta.toFixed(3)} ` +
         `K2VPclip=${summary.k2VpClipMeanGlobalDelta.toFixed(3)} ` +
+        `K2VPclipRefit=${summary.k2VpClipRefitMeanGlobalDelta.toFixed(3)} ` +
         `pair=${summary.meanPairGlobalDelta.toFixed(3)} ` +
         `VP-K2=${summary.meanVpMinusK2.toFixed(3)} VP-K1=${summary.meanVpMinusK1.toFixed(3)} ` +
         `VP-clipSaved=${summary.meanRawVpMinusClipVpSavedGlobal.toFixed(3)} ` +
-        `K1improved=${summary.k1Improved} K2improved=${summary.k2Improved} VPimproved=${summary.k2VpImproved} clipImproved=${summary.k2VpClipImproved} ` +
+        `raw-refitSaved=${summary.meanClipRefitRawMinusRefitSavedGlobal.toFixed(3)} ` +
+        `K1improved=${summary.k1Improved} K2improved=${summary.k2Improved} VPimproved=${summary.k2VpImproved} clipImproved=${summary.k2VpClipImproved} refitImproved=${summary.k2VpClipRefitImproved} ` +
         `VPwins=${summary.k2VpWinsAgainstK2} pass=${summary.k2PassesScreen}`,
     );
   }
