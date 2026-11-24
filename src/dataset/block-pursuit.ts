@@ -86,11 +86,13 @@ export interface VariableProjectionAtomAudit {
 export interface VariableProjectionPassAudit {
   pass: number;
   winnerGain: number;
+  winnerClippedRss?: number | null;
   globalSuppressionPercent: number | null;
   windowedSuppressionPercent: number | null;
   accepted: boolean;
   evaluations: number;
   unitBasisRenders: number;
+  clipObjectiveEvaluations?: number;
 }
 
 /** Чем закончилась попытка VP относительно обычного K2. */
@@ -106,6 +108,7 @@ export interface VariableProjectionAttemptAudit {
   final: VariableProjectionAtomAudit[] | null;
   evaluations: number;
   unitBasisRenders: number;
+  clipObjectiveEvaluations?: number;
   exactCandidates: number;
   passes: VariableProjectionPassAudit[];
 }
@@ -114,6 +117,7 @@ export interface VariableProjectionAttemptAudit {
 export interface VariableProjectionSummary {
   evaluations: number;
   unitBasisRenders: number;
+  clipObjectiveEvaluations?: number;
   exactCandidates: number;
   accepted: number;
   k2Fallback: number;
@@ -185,6 +189,7 @@ interface VariableProjectionPoint {
   atoms: PreparedAtom[];
   fit: JointFit;
   gain: number;
+  clippedRss?: number;
 }
 
 interface VariableProjectionEvaluation {
@@ -192,11 +197,13 @@ interface VariableProjectionEvaluation {
   atoms: PreparedAtom[];
   fit: JointFit | null;
   gain: number;
+  clippedRss?: number;
 }
 
 interface VariableProjectionEvaluationCounters {
   evaluations: number;
   unitBasisRenders: number;
+  clipObjectiveEvaluations?: number;
 }
 
 interface VariableProjectionEvaluator {
@@ -219,6 +226,7 @@ interface VariableProjectionRefinement {
   final: AtomDescription[];
   evaluations: number;
   unitBasisRenders: number;
+  clipObjectiveEvaluations?: number;
   exactCandidates: number;
   passes: VariableProjectionPassAudit[];
 }
@@ -545,16 +553,34 @@ function fitPreparedAtoms(atoms: PreparedAtom[]): JointFit | null {
   return Number.isFinite(gain) ? { fits, gain } : null;
 }
 
-/** Строит кандидат и считает обе метрики по полному квантованному WAV. */
-function renderBlockCandidate(arg: {
-  state: RenderState;
+/**
+ * Сравнивает две точки clip-aware навигации по полному PCM RSS.
+ *
+ * @param candidate - Новая точка с уже вычисленным clipped RSS
+ * @param winner - Текущий победитель с уже вычисленным clipped RSS
+ * @returns `true`, только если новый RSS строго меньше
+ * @remarks Точка без решения МНК получает бесконечный RSS. При равенстве
+ *   прежний победитель сохраняется, поэтому центр не заменяется на tie.
+ */
+export function isBetterClipAwareNavigationCandidate(
+  candidate: { clippedRss?: number },
+  winner: { clippedRss?: number },
+): boolean {
+  return (
+    (candidate.clippedRss ?? Number.POSITIVE_INFINITY) <
+    (winner.clippedRss ?? Number.POSITIVE_INFINITY)
+  );
+}
+
+/**
+ * Складывает полный raw блока в одном порядке для clip-навигации и
+ * exact render. Не применяет clip или квантование.
+ */
+function renderBlockRawSum(arg: {
   choice: SlotSetChoice;
   atoms: PreparedAtom[];
   fits: QuadratureFit[];
-  target: number[];
-  sampleRate: number;
-  zone: UsefulZone;
-}): BlockCandidate | null {
+}): Float64Array | null {
   if (arg.atoms.length !== arg.fits.length) {
     return null;
   }
@@ -575,6 +601,46 @@ function renderBlockCandidate(arg: {
         fit.sineCoefficient * (atom.sine[index] ?? 0) +
         fit.cosineCoefficient * (atom.cosine[index] ?? 0);
     }
+  }
+  return rawSum;
+}
+
+/**
+ * Считает RSS полного клиппированного PCM против исходного target.
+ * Использует тот же raw-sum, что и exact render.
+ */
+function computeVariableProjectionClipObjective(arg: {
+  choice: SlotSetChoice;
+  atoms: PreparedAtom[];
+  fits: QuadratureFit[];
+  target: number[];
+}): number | null {
+  const rawSum = renderBlockRawSum(arg);
+  if (rawSum === null) {
+    return null;
+  }
+  const samples = quantizeRaw(rawSum);
+  let rss = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const error = (samples[index] ?? 0) - (arg.target[index] ?? 0);
+    rss += error * error;
+  }
+  return rss;
+}
+
+/** Строит кандидат и считает обе метрики по полному квантованному WAV. */
+function renderBlockCandidate(arg: {
+  state: RenderState;
+  choice: SlotSetChoice;
+  atoms: PreparedAtom[];
+  fits: QuadratureFit[];
+  target: number[];
+  sampleRate: number;
+  zone: UsefulZone;
+}): BlockCandidate | null {
+  const rawSum = renderBlockRawSum(arg);
+  if (rawSum === null) {
+    return null;
   }
   const samples = quantizeRaw(rawSum);
   const metrics = measureMetrics(
@@ -824,18 +890,23 @@ function moveVariableProjectionAtPass(arg: {
 /**
  * Создаёт кэшированный измеритель точек одного прохода VP.
  *
- * @param arg - Центр прохода, target, остаток для МНК и модель фазы
+ * @param arg - Центр прохода, слоты, target, остаток для МНК, модель
+ *   фазы и флаг clip-aware навигации
  * @returns Оценку центра, функцию измерения и локальные счётчики
  * @remarks Повторная clamped-форма возвращается из кэша. Для новой формы
  *   переиспользуются `PreparedAtom` неизменных атомов центра; базисы
  *   изменённых атомов строятся заново, после чего общий bounded МНК
- *   пересчитывает уровни и фазы всей пары.
+ *   пересчитывает уровни и фазы всей пары. Clip-режим дополнительно
+ *   суммирует полный raw, квантует его и считает PCM RSS без новых
+ *   вызовов `prepareAtom` или `renderGroup`.
  */
 function createVariableProjectionEvaluator(arg: {
   center: VariableProjectionPoint;
+  choice: SlotSetChoice;
   target: number[];
   fitResidual: Float64Array;
   phaseModel: PhaseModel;
+  clipAwareNavigation: boolean;
 }): VariableProjectionEvaluator {
   const cache = new Map<string, VariableProjectionEvaluation>();
   const centerEvaluation: VariableProjectionEvaluation = {
@@ -843,10 +914,16 @@ function createVariableProjectionEvaluator(arg: {
     atoms: arg.center.atoms,
     fit: arg.center.fit,
     gain: arg.center.gain,
+    ...(arg.center.clippedRss === undefined
+      ? {}
+      : { clippedRss: arg.center.clippedRss }),
   };
   const counters: VariableProjectionEvaluationCounters = {
     evaluations: 0,
     unitBasisRenders: 0,
+    ...(arg.clipAwareNavigation
+      ? { clipObjectiveEvaluations: 0 }
+      : {}),
   };
   cache.set(
     variableProjectionShapeKey(arg.center.descriptions),
@@ -879,11 +956,25 @@ function createVariableProjectionEvaluator(arg: {
     });
     counters.evaluations += 1;
     const fit = fitPreparedAtoms(atoms);
+    const clippedRss =
+      arg.clipAwareNavigation && fit !== null
+        ? computeVariableProjectionClipObjective({
+            choice: arg.choice,
+            atoms,
+            fits: fit.fits,
+            target: arg.target,
+          })
+        : null;
+    if (clippedRss !== null) {
+      counters.clipObjectiveEvaluations =
+        (counters.clipObjectiveEvaluations ?? 0) + 1;
+    }
     const evaluated: VariableProjectionEvaluation = {
       descriptions,
       atoms,
       fit,
       gain: fit?.gain ?? -Infinity,
+      ...(clippedRss === null ? {} : { clippedRss }),
     };
     cache.set(key, evaluated);
     return evaluated;
@@ -897,14 +988,15 @@ function createVariableProjectionEvaluator(arg: {
  * @param arg - Центр, исходные атомы, номер прохода и измеритель точек
  * @returns Кандидаты в исходном детерминированном порядке
  * @remarks Сначала оси из `VP_AXES` проверяются в направлениях minus/plus.
- *   Затем `VP_PARAMETERS` задаёт четыре совместных хода. Для каждого
- *   атома направление выбирается по большему RSS gain среди его одиночных
- *   ходов, включая случаи неположительного прироста.
+ *   Затем `VP_PARAMETERS` задаёт четыре совместных хода. Обычный VP
+ *   выбирает направление по большему RSS gain, а clip-aware VP — по
+ *   меньшему полному PCM RSS. При равенстве оба режима выбирают minus.
  */
 function buildVariableProjectionPassCandidates(arg: {
   center: VariableProjectionPoint;
   origins: AtomDescription[];
   pass: number;
+  clipAwareNavigation: boolean;
   evaluate: (
     descriptions: AtomDescription[],
   ) => VariableProjectionEvaluation;
@@ -948,9 +1040,15 @@ function buildVariableProjectionPassCandidates(arg: {
       if (single === undefined) {
         continue;
       }
+      const plusWins = arg.clipAwareNavigation
+        ? isBetterClipAwareNavigationCandidate(
+            single.plus,
+            single.minus,
+          )
+        : single.plus.gain > single.minus.gain;
       moves.push({
         axis: { atomIndex, parameter },
-        sign: single.plus.gain > single.minus.gain ? 1 : -1,
+        sign: plusWins ? 1 : -1,
       });
     }
     candidates.push(
@@ -970,11 +1068,14 @@ function buildVariableProjectionPassCandidates(arg: {
 /**
  * Обрабатывает один проход VP от оценки ходов до нового центра.
  *
- * @param arg - Текущий центр, контекст exact render и лучший accepted
+ * @param arg - Текущий центр, контекст exact render, лучший accepted
+ *   и флаг clip-aware навигации
  * @returns Новый центр, обновлённый accepted, аудит и стоимость прохода
- * @remarks Победитель максимизирует RSS gain среди кандидатов и прежнего
- *   центра. Полный global/J guard влияет только на `bestAccepted` и аудит:
- *   центр следующего прохода всегда следует за RSS-победителем.
+ * @remarks Обычный VP максимизирует RSS gain, а clip-aware VP минимизирует
+ *   полный PCM RSS среди кандидатов и прежнего центра. Строгое сравнение
+ *   сохраняет центр при равенстве. Полный global/J guard влияет только на
+ *   `bestAccepted` и аудит: центр следующего прохода всегда следует за
+ *   победителем выбранной навигационной метрики.
  */
 function processVariableProjectionPass(arg: {
   center: VariableProjectionPoint;
@@ -989,22 +1090,29 @@ function processVariableProjectionPass(arg: {
   windowedFloor: number;
   fitResidual: Float64Array;
   bestAccepted: BlockCandidate | null;
+  clipAwareNavigation: boolean;
 }): VariableProjectionPassResult {
   const evaluator = createVariableProjectionEvaluator({
     center: arg.center,
+    choice: arg.seed.choice,
     target: arg.target,
     fitResidual: arg.fitResidual,
     phaseModel: arg.phaseModel,
+    clipAwareNavigation: arg.clipAwareNavigation,
   });
   const candidates = buildVariableProjectionPassCandidates({
     center: arg.center,
     origins: arg.origins,
     pass: arg.pass,
+    clipAwareNavigation: arg.clipAwareNavigation,
     evaluate: evaluator.evaluate,
   });
   let winner = evaluator.centerEvaluation;
   for (const candidate of candidates) {
-    if (candidate.gain > winner.gain) {
+    const candidateWins = arg.clipAwareNavigation
+      ? isBetterClipAwareNavigationCandidate(candidate, winner)
+      : candidate.gain > winner.gain;
+    if (candidateWins) {
       winner = candidate;
     }
   }
@@ -1038,6 +1146,9 @@ function processVariableProjectionPass(arg: {
   const audit: VariableProjectionPassAudit = {
     pass: arg.pass + 1,
     winnerGain: winner.gain,
+    ...(arg.clipAwareNavigation
+      ? { winnerClippedRss: winner.clippedRss ?? null }
+      : {}),
     globalSuppressionPercent:
       exact?.state.metrics.globalSuppressionPercent ?? null,
     windowedSuppressionPercent:
@@ -1045,6 +1156,12 @@ function processVariableProjectionPass(arg: {
     accepted,
     evaluations: evaluator.counters.evaluations,
     unitBasisRenders: evaluator.counters.unitBasisRenders,
+    ...(arg.clipAwareNavigation
+      ? {
+          clipObjectiveEvaluations:
+            evaluator.counters.clipObjectiveEvaluations ?? 0,
+        }
+      : {}),
   };
   const center =
     winner.fit === null
@@ -1054,6 +1171,9 @@ function processVariableProjectionPass(arg: {
           atoms: winner.atoms,
           fit: winner.fit,
           gain: winner.gain,
+          ...(winner.clippedRss === undefined
+            ? {}
+            : { clippedRss: winner.clippedRss }),
         };
   return {
     center,
@@ -1066,15 +1186,18 @@ function processVariableProjectionPass(arg: {
 /**
  * Уточняет нелинейные параметры словарной пары пятью проходами VP.
  *
- * @param arg - Проверенное состояние, словарный сид, target и порог J
+ * @param arg - Проверенное состояние, словарный сид, target, порог J
+ *   и флаг clip-aware навигации
  * @returns Лучший принятый кандидат, конечный центр и аудит стоимости
  * @remarks Каждый проход оценивает 16 одиночных и четыре совместных
  *   сдвига. Для каждой точки bounded МНК 4×4 заново решает уровни
- *   и фазы обоих атомов. Победителя выбирают по локальному RSS gain,
- *   затем рендерят полный сигнал и проверяют global вместе с обоими
- *   ограничениями J. Guard определяет только `bestAccepted`: даже
- *   отклонённый победитель может стать центром следующего прохода и
- *   попасть в аудит `final`, но не может сам изменить patch.
+ *   и фазы обоих атомов. Победителя выбирают по локальному RSS gain
+ *   или по полному clipped PCM RSS. Затем один exact render проверяет
+ *   global вместе с обоими ограничениями J. Guard определяет только
+ *   `bestAccepted`: даже отклонённый победитель может стать центром
+ *   следующего прохода и попасть в аудит `final`, но не может сам
+ *   изменить patch. Clip-оценка центра считается один раз и движется
+ *   вместе с ним без повторного рендера базисов.
  */
 function refineVariableProjection(arg: {
   state: RenderState;
@@ -1084,6 +1207,7 @@ function refineVariableProjection(arg: {
   phaseModel: PhaseModel;
   zone: UsefulZone;
   windowedFloor: number;
+  clipAwareNavigation: boolean;
 }): VariableProjectionRefinement {
   const origins = arg.seed.atoms.map((atom) => ({
     ...atom.description,
@@ -1091,6 +1215,7 @@ function refineVariableProjection(arg: {
   const seedFit = fitPreparedAtoms(arg.seed.atoms);
   let evaluations = 1;
   let unitBasisRenders = 0;
+  let clipObjectiveEvaluations = 0;
   let exactCandidates = 0;
   let bestAccepted: BlockCandidate | null = null;
   const passes: VariableProjectionPassAudit[] = [];
@@ -1100,15 +1225,32 @@ function refineVariableProjection(arg: {
       final: origins,
       evaluations,
       unitBasisRenders,
+      ...(arg.clipAwareNavigation
+        ? { clipObjectiveEvaluations }
+        : {}),
       exactCandidates,
       passes,
     };
+  }
+  const seedClippedRss = arg.clipAwareNavigation
+    ? computeVariableProjectionClipObjective({
+        choice: arg.seed.choice,
+        atoms: arg.seed.atoms,
+        fits: seedFit.fits,
+        target: arg.target,
+      })
+    : null;
+  if (seedClippedRss !== null) {
+    clipObjectiveEvaluations += 1;
   }
   let center: VariableProjectionPoint = {
     descriptions: origins.map((description) => ({ ...description })),
     atoms: arg.seed.atoms,
     fit: seedFit,
     gain: seedFit.gain,
+    ...(seedClippedRss === null
+      ? {}
+      : { clippedRss: seedClippedRss }),
   };
   const fitResidual = Float64Array.from(
     { length: arg.target.length },
@@ -1130,11 +1272,14 @@ function refineVariableProjection(arg: {
       windowedFloor: arg.windowedFloor,
       fitResidual,
       bestAccepted,
+      clipAwareNavigation: arg.clipAwareNavigation,
     });
     center = processed.center;
     bestAccepted = processed.bestAccepted;
     evaluations += processed.counters.evaluations;
     unitBasisRenders += processed.counters.unitBasisRenders;
+    clipObjectiveEvaluations +=
+      processed.counters.clipObjectiveEvaluations ?? 0;
     exactCandidates += 1;
     passes.push(processed.audit);
   }
@@ -1145,6 +1290,7 @@ function refineVariableProjection(arg: {
     })),
     evaluations,
     unitBasisRenders,
+    ...(arg.clipAwareNavigation ? { clipObjectiveEvaluations } : {}),
     exactCandidates,
     passes,
   };
@@ -1362,7 +1508,8 @@ function auditAtoms(arg: {
 /**
  * Ищет лучший блок не более чем в двух наборах слотов.
  *
- * @param arg - Состояние, target, ограничения поиска и флаг VP
+ * @param arg - Состояние, target, ограничения поиска, флаги VP
+ *   и clip-aware навигации
  * @returns Принятый блок, стоимость и необязательный аудит VP
  * @remarks В K2-VP отклонённый guard'ом `bestAny` служит только
  *   сидом для нелинейного уточнения и никогда не возвращается как
@@ -1383,6 +1530,7 @@ function pursueOneBlock(arg: {
   usedSlots: ReadonlySet<number>;
   diverseShortlist: boolean;
   variableProjection: boolean;
+  clipAwareNavigation: boolean;
 }): {
   accepted: AcceptedBlock | null;
   counters: AttemptCounters;
@@ -1485,6 +1633,9 @@ function pursueOneBlock(arg: {
         final: null,
         evaluations: 0,
         unitBasisRenders: 0,
+        ...(arg.clipAwareNavigation
+          ? { clipObjectiveEvaluations: 0 }
+          : {}),
         exactCandidates: 0,
         passes: [],
       },
@@ -1498,6 +1649,7 @@ function pursueOneBlock(arg: {
     phaseModel: arg.phaseModel,
     zone: arg.zone,
     windowedFloor: arg.windowedFloor,
+    clipAwareNavigation: arg.clipAwareNavigation,
   });
   let best = bestAccepted;
   let outcome: VariableProjectionOutcome = bestAccepted
@@ -1520,6 +1672,11 @@ function pursueOneBlock(arg: {
     final: variableProjectionAtomsAudit(refined.final),
     evaluations: refined.evaluations,
     unitBasisRenders: refined.unitBasisRenders,
+    ...(refined.clipObjectiveEvaluations === undefined
+      ? {}
+      : {
+          clipObjectiveEvaluations: refined.clipObjectiveEvaluations,
+        }),
     exactCandidates: refined.exactCandidates,
     passes: refined.passes,
   };
@@ -1559,10 +1716,13 @@ function pursueOneBlock(arg: {
  * Суммирует стоимость и исходы всех VP-попыток, включая неудачные.
  *
  * @param attempts - Аудит каждой выполненной попытки VP
+ * @param clipAwareNavigation - Нужно ли суммировать отдельный счётчик
+ *   clip-оценок; при `false` новое поле не появляется
  * @returns Общие счётчики и подробные записи по каждому блоку
  */
 function summarizeVariableProjection(
   attempts: VariableProjectionAttemptAudit[],
+  clipAwareNavigation: boolean,
 ): VariableProjectionSummary {
   return {
     evaluations: attempts.reduce(
@@ -1573,6 +1733,15 @@ function summarizeVariableProjection(
       (sum, attempt) => sum + attempt.unitBasisRenders,
       0,
     ),
+    ...(clipAwareNavigation
+      ? {
+          clipObjectiveEvaluations: attempts.reduce(
+            (sum, attempt) =>
+              sum + (attempt.clipObjectiveEvaluations ?? 0),
+            0,
+          ),
+        }
+      : {}),
     exactCandidates: attempts.reduce(
       (sum, attempt) => sum + attempt.exactCandidates,
       0,
@@ -1626,7 +1795,8 @@ function unchangedResult(arg: {
  * Выполняет не более `maxBlocks` жадных одиночных или парных замен.
  *
  * @param arg - Match, target PCM, размер блока и опции поиска;
- *   `variableProjection` по умолчанию равен `false`
+ *   `variableProjection` и `clipAwareNavigation` по умолчанию равны
+ *   `false`
  * @returns Лучший patch/WAV и аудит; при неудаче — исходник
  * @remarks K1 и K2 используют общий словарь и проверяют до двух
  *   наборов слотов на шаг. K2 ранжирует пары совместным МНК 4×4 и
@@ -1638,11 +1808,15 @@ function unchangedResult(arg: {
  *   пять проходов только для K2. Уровни и фазы каждой VP-точки решает
  *   общий bounded МНК 4×4. Отклонённый словарный `bestAny` служит
  *   только сидом: принять блок можно лишь после полного global/J
- *   guard. Финальный WAV получается каноническим рендером патча и
- *   повторно проходит суммарный global/J guard; новый CD не
- *   запускается. Это offline-screening вне production: он не
- *   доказывает закон T35 и не показывает, что достигнуты 98%
- *   suppression.
+ *   guard. `clipAwareNavigation=true` действует только вместе с K2-VP:
+ *   направление и победителя выбирает RSS полного PCM после clip и
+ *   квантования, включая центр. Число exact render, базисов и правила
+ *   принятия не меняются, а `clipObjectiveEvaluations` считает только
+ *   новые clip-оценки. Без этого флага clip-объектив не вычисляется.
+ *   Финальный WAV получается каноническим рендером патча и повторно
+ *   проходит суммарный global/J guard; новый CD не запускается. Это
+ *   offline-screening вне production: он не доказывает закон T35 и не
+ *   показывает, что достигнуты 98% suppression.
  * @throws Error если target пуст, sample rate не 44100 Гц,
  *   blockSize не 1/2 или maxBlocks не целый от 1 до 12
  */
@@ -1655,6 +1829,7 @@ export function pursueResidualBlocks(arg: {
   maxBlocks?: number;
   diverseShortlist?: boolean;
   variableProjection?: boolean;
+  clipAwareNavigation?: boolean;
 }): BlockPursuitResult {
   const sampleRate = arg.sampleRate ?? SAMPLE_RATE;
   const phaseModel = arg.phaseModel ?? 'legacy';
@@ -1696,6 +1871,8 @@ export function pursueResidualBlocks(arg: {
   const steps: BlockPursuitStep[] = [];
   const variableProjectionEnabled =
     (arg.variableProjection ?? false) && arg.blockSize === 2;
+  const clipAwareNavigationEnabled =
+    variableProjectionEnabled && (arg.clipAwareNavigation ?? false);
   const variableProjectionAttempts: VariableProjectionAttemptAudit[] =
     [];
   const counters: AttemptCounters = {
@@ -1722,6 +1899,7 @@ export function pursueResidualBlocks(arg: {
       usedSlots,
       diverseShortlist: arg.diverseShortlist ?? false,
       variableProjection: variableProjectionEnabled,
+      clipAwareNavigation: clipAwareNavigationEnabled,
     });
     if (attempt.variableProjection !== undefined) {
       variableProjectionAttempts.push(attempt.variableProjection);
@@ -1742,7 +1920,10 @@ export function pursueResidualBlocks(arg: {
     }
   }
   const variableProjection = variableProjectionEnabled
-    ? summarizeVariableProjection(variableProjectionAttempts)
+    ? summarizeVariableProjection(
+        variableProjectionAttempts,
+        clipAwareNavigationEnabled,
+      )
     : undefined;
   if (steps.length === 0) {
     return unchangedResult({

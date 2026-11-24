@@ -1,7 +1,8 @@
 /* eslint-disable no-console */
 /**
- * Парный screening K1, K2 и K2 с variable projection на готовых match-прогонах.
- * Все режимы стартуют с одного patch и используют один словарь.
+ * Парный screening K1, K2, K2-VP и clip-aware K2-VP на готовых
+ * match-прогонах. Все режимы стартуют с одного patch и используют один
+ * словарь.
  * Новый coordinate descent не запускается, production-сервис не меняется.
  *
  * npx tsx src/dataset/block-pursuit-run.ts --dataset datasets/ref --out datasets/block-screen
@@ -55,6 +56,22 @@ interface BlockRunError {
   message: string;
 }
 
+interface CandidateMetricsReport {
+  globalSuppressionPercent: number;
+  windowedSuppressionPercent: number;
+  globalDelta: number;
+  windowedDelta: number;
+}
+
+interface ProposedExactCandidateReport extends CandidateMetricsReport {
+  step: number;
+  pass: number;
+}
+
+interface SavedResultReport extends CandidateMetricsReport {
+  status: BlockPursuitResult['status'];
+}
+
 interface ModeRunReport {
   blockSize: PursuitBlockSize;
   status: BlockPursuitResult['status'];
@@ -75,6 +92,10 @@ interface ModeRunReport {
   basisRenders: number;
   slotSetsEvaluated: number;
   variableProjection: boolean;
+  clipAwareNavigation: boolean;
+  clipObjectiveEvaluations: number;
+  proposedExact: ProposedExactCandidateReport | null;
+  saved: SavedResultReport;
   variableProjectionAudit?: BlockPursuitResult['variableProjection'];
   character: ReturnType<typeof compareCharacter>;
   bands: ReturnType<typeof compareWaveformBands>;
@@ -88,9 +109,14 @@ interface PairedBlockRun {
   k1: ModeRunReport;
   k2: ModeRunReport;
   k2Vp: ModeRunReport;
+  k2VpClip: ModeRunReport;
   pairGlobalDelta: number;
   vpMinusK2: number;
   vpMinusK1: number;
+  rawVpMinusClipVpProposedGlobal: number | null;
+  rawVpMinusClipVpProposedWindowed: number | null;
+  rawVpMinusClipVpSavedGlobal: number;
+  rawVpMinusClipVpSavedWindowed: number;
 }
 
 interface BlockTargetSummary {
@@ -99,6 +125,8 @@ interface BlockTargetSummary {
   k1MeanGlobalDelta: number;
   k2MeanGlobalDelta: number;
   k2VpMeanGlobalDelta: number;
+  k2VpClipMeanGlobalDelta: number;
+  meanRawVpMinusClipVpSavedGlobal: number;
   meanPairGlobalDelta: number;
   meanVpMinusK2: number;
   meanVpMinusK1: number;
@@ -107,6 +135,7 @@ interface BlockTargetSummary {
   k1Improved: number;
   k2Improved: number;
   k2VpImproved: number;
+  k2VpClipImproved: number;
   k2Wins: number;
   k2VpWinsAgainstK2: number;
   k2PassesScreen: boolean;
@@ -147,7 +176,7 @@ function sampleSd(values: number[]): number | null {
 }
 
 /**
- * Сводит результаты K1, K2 и K2-VP по одному таргету.
+ * Сводит результаты K1, K2, K2-VP и clip-aware K2-VP по таргету.
  *
  * @param slug - Имя таргета в датасете
  * @param runs - Парные прогоны всех доступных сидов этого таргета
@@ -177,6 +206,12 @@ export function summarizeBlockTarget(
     k1MeanGlobalDelta: mean(runs.map((run) => run.k1.globalDelta)),
     k2MeanGlobalDelta,
     k2VpMeanGlobalDelta,
+    k2VpClipMeanGlobalDelta: mean(
+      runs.map((run) => run.k2VpClip.globalDelta),
+    ),
+    meanRawVpMinusClipVpSavedGlobal: mean(
+      runs.map((run) => run.rawVpMinusClipVpSavedGlobal),
+    ),
     meanPairGlobalDelta: mean(pair),
     meanVpMinusK2: mean(runs.map((run) => run.vpMinusK2)),
     meanVpMinusK1: mean(runs.map((run) => run.vpMinusK1)),
@@ -189,6 +224,11 @@ export function summarizeBlockTarget(
     k2VpImproved: runs.filter(
       (run) =>
         run.k2Vp.status === 'refined' && run.k2Vp.globalDelta > 0,
+    ).length,
+    k2VpClipImproved: runs.filter(
+      (run) =>
+        run.k2VpClip.status === 'refined' &&
+        run.k2VpClip.globalDelta > 0,
     ).length,
     k2Wins: runs.filter((run) => run.pairGlobalDelta > 1e-9).length,
     k2VpWinsAgainstK2: runs.filter((run) => run.vpMinusK2 > 1e-9)
@@ -222,11 +262,12 @@ async function saveModeArtifacts(arg: {
 /**
  * Запускает один режим и проверяет его канонический WAV.
  *
- * @param arg - Общие параметры block pursuit и необязательный флаг VP
+ * @param arg - Общие параметры block pursuit и необязательные флаги VP
+ *   и clip-aware навигации
  * @returns Результат поиска и его длительность в миллисекундах
- * @remarks Без `variableProjection` выполняется стандартный K1/K2;
- *   значение `true` передаётся в `pursueResidualBlocks` без
- *   изменений.
+ * @remarks Без `variableProjection` выполняется стандартный K1/K2.
+ *   Clip-флаг передаётся только четвёртому режиму; canonical assert
+ *   одинаков для всех режимов.
  * @throws Error если WAV не совпадает с каноническим рендером patch
  */
 function executeBlockMode(arg: {
@@ -238,6 +279,7 @@ function executeBlockMode(arg: {
   maxBlocks: number;
   diverseShortlist: boolean;
   variableProjection?: boolean;
+  clipAwareNavigation?: boolean;
 }): { result: BlockPursuitResult; durationMs: number } {
   const started = Date.now();
   const result = pursueResidualBlocks(arg);
@@ -252,12 +294,84 @@ function executeBlockMode(arg: {
 }
 
 /**
+ * Находит лучший exact-кандидат среди победителей VP-проходов до guard.
+ * Сравнение повторяет `betterCandidate`: сначала global, затем windowed J.
+ */
+function findProposedExactCandidate(
+  result: BlockPursuitResult,
+): Omit<
+  ProposedExactCandidateReport,
+  'globalDelta' | 'windowedDelta'
+> | null {
+  let best: Omit<
+    ProposedExactCandidateReport,
+    'globalDelta' | 'windowedDelta'
+  > | null = null;
+  for (const attempt of result.variableProjection?.attempts ?? []) {
+    for (const pass of attempt.passes) {
+      const globalSuppressionPercent = pass.globalSuppressionPercent;
+      const windowedSuppressionPercent =
+        pass.windowedSuppressionPercent;
+      if (
+        globalSuppressionPercent === null ||
+        windowedSuppressionPercent === null
+      ) {
+        continue;
+      }
+      const candidate = {
+        step: attempt.step,
+        pass: pass.pass,
+        globalSuppressionPercent,
+        windowedSuppressionPercent,
+      };
+      if (best === null) {
+        best = candidate;
+        continue;
+      }
+      const globalDelta =
+        candidate.globalSuppressionPercent -
+        best.globalSuppressionPercent;
+      if (
+        globalDelta > 1e-9 ||
+        (Math.abs(globalDelta) <= 1e-9 &&
+          candidate.windowedSuppressionPercent >
+            best.windowedSuppressionPercent)
+      ) {
+        best = candidate;
+      }
+    }
+  }
+  return best;
+}
+
+/** Считает absolute global/J и их отличия от общего baseline. */
+function createCandidateMetricsReport(arg: {
+  globalSuppressionPercent: number;
+  windowedSuppressionPercent: number;
+  baseline: BlockPursuitResult['baseline'];
+}): CandidateMetricsReport {
+  return {
+    globalSuppressionPercent: arg.globalSuppressionPercent,
+    windowedSuppressionPercent: arg.windowedSuppressionPercent,
+    globalDelta:
+      arg.globalSuppressionPercent -
+      arg.baseline.globalSuppressionPercent,
+    windowedDelta:
+      arg.windowedSuppressionPercent -
+      arg.baseline.windowedSuppressionPercent,
+  };
+}
+
+/**
  * Строит DTO режима и измеряет характер итогового WAV.
  *
- * @param arg - Результат, target, параметры режима и пути артефактов
+ * @param arg - Результат, target, параметры режима, явный clip-флаг
+ *   и пути артефактов
  * @returns Метрики global/J, характер, стоимость и аудит VP
  * @remarks Полный `variableProjectionAudit` присутствует только при
- *   включённом VP; для обычных K1/K2 это поле опускается.
+ *   включённом VP. `proposedExact` выбирает лучший exact-победитель
+ *   проходов до guard, а `saved` описывает фактически сохранённый
+ *   результат. При unchanged обе saved-дельты равны нулю.
  */
 function createModeRunReport(arg: {
   result: BlockPursuitResult;
@@ -265,9 +379,30 @@ function createModeRunReport(arg: {
   sampleRate: number;
   blockSize: PursuitBlockSize;
   durationMs: number;
+  clipAwareNavigation: boolean;
   artifacts: { patch: string; wav: string };
 }): ModeRunReport {
   const { result } = arg;
+  const proposed = findProposedExactCandidate(result);
+  const proposedExact =
+    proposed === null
+      ? null
+      : {
+          ...proposed,
+          ...createCandidateMetricsReport({
+            ...proposed,
+            baseline: result.baseline,
+          }),
+        };
+  const saved: SavedResultReport = {
+    status: result.status,
+    ...createCandidateMetricsReport({
+      ...result.metrics,
+      baseline: result.baseline,
+    }),
+  };
+  const clipObjectiveEvaluations =
+    result.variableProjection?.clipObjectiveEvaluations ?? 0;
   return {
     blockSize: arg.blockSize,
     status: result.status,
@@ -275,16 +410,12 @@ function createModeRunReport(arg: {
     baselineGlobalSuppressionPercent:
       result.baseline.globalSuppressionPercent,
     globalSuppressionPercent: result.metrics.globalSuppressionPercent,
-    globalDelta:
-      result.metrics.globalSuppressionPercent -
-      result.baseline.globalSuppressionPercent,
+    globalDelta: saved.globalDelta,
     baselineWindowedSuppressionPercent:
       result.baseline.windowedSuppressionPercent,
     windowedSuppressionPercent:
       result.metrics.windowedSuppressionPercent,
-    windowedDelta:
-      result.metrics.windowedSuppressionPercent -
-      result.baseline.windowedSuppressionPercent,
+    windowedDelta: saved.windowedDelta,
     blocks: result.steps.length,
     replacements: result.replacementCount,
     durationMs: arg.durationMs,
@@ -294,6 +425,10 @@ function createModeRunReport(arg: {
     basisRenders: result.basisRenders,
     slotSetsEvaluated: result.slotSetsEvaluated,
     variableProjection: result.variableProjection !== undefined,
+    clipAwareNavigation: arg.clipAwareNavigation,
+    clipObjectiveEvaluations,
+    proposedExact,
+    saved,
     ...(result.variableProjection === undefined
       ? {}
       : { variableProjectionAudit: result.variableProjection }),
@@ -331,11 +466,11 @@ async function saveModeAudit(arg: {
 /**
  * Выполняет режим и сохраняет patch, WAV, отчёт и аудит.
  *
- * @param arg - Параметры поиска, флаг VP и каталог режима
+ * @param arg - Параметры поиска, флаги VP/clip и каталог режима
  * @returns DTO режима со ссылками на сохранённые артефакты
- * @remarks Для K2-VP в `audit.json` попадают пошаговые записи и
- *   сводка стоимости VP. Coordinate descent и production API здесь
- *   не запускаются.
+ * @remarks Для обоих VP-режимов в `audit.json` попадают пошаговые
+ *   записи, proposed/saved-сводка и стоимость. Coordinate descent и
+ *   production API здесь не запускаются.
  */
 async function processMode(arg: {
   patch: ArgCreateSynth;
@@ -346,6 +481,7 @@ async function processMode(arg: {
   maxBlocks: number;
   diverseShortlist: boolean;
   variableProjection?: boolean;
+  clipAwareNavigation?: boolean;
   directory: string;
 }): Promise<ModeRunReport> {
   const executed = executeBlockMode(arg);
@@ -360,6 +496,7 @@ async function processMode(arg: {
     sampleRate: arg.sampleRate,
     blockSize: arg.blockSize,
     durationMs: executed.durationMs,
+    clipAwareNavigation: arg.clipAwareNavigation ?? false,
     artifacts,
   });
   await saveModeAudit({
@@ -421,15 +558,16 @@ async function loadVerifiedMatchRun(arg: {
 }
 
 /**
- * Запускает K1, K2 и K2-VP от одного проверенного исходника.
+ * Запускает K1, K2, K2-VP и K2-VP-clip от проверенного исходника.
  *
  * @param arg - Координаты match-сида, manifest и параметры screening
- * @returns Отчёт трёх режимов или `null` для незавершённого match
- * @remarks K1 получает двойной лимит одиночных блоков, а K2 и K2-VP —
- *   один лимит пар, поэтому все режимы могут заменить одинаковое
- *   число слотов. Обычный K2 не задаёт флаг VP и использует
- *   значение по умолчанию `false`; третий режим явно включает VP.
- *   Все режимы получают один проверенный patch и target.
+ * @returns Отчёт четырёх режимов или `null` для незавершённого match
+ * @remarks K1 получает двойной лимит одиночных блоков, а остальные
+ *   режимы — один лимит пар, поэтому все режимы могут заменить
+ *   одинаковое число слотов. Третий режим включает VP, четвёртый
+ *   дополнительно включает clip-aware навигацию. Парные поля хранят
+ *   raw VP минус clip VP отдельно для proposed global/J и saved
+ *   global/J. Все режимы получают один проверенный patch и target.
  * @throws Error если исходник противоречит WAV или режимы получили
  *   разный baseline global/J
  */
@@ -475,6 +613,14 @@ async function processPair(arg: {
     variableProjection: true,
     directory: join(pairDir, 'k2-vp'),
   });
+  const k2VpClip = await processMode({
+    ...common,
+    maxBlocks: arg.maxBlocks,
+    blockSize: 2,
+    variableProjection: true,
+    clipAwareNavigation: true,
+    directory: join(pairDir, 'k2-vp-clip'),
+  });
   if (
     k1.baselineGlobalSuppressionPercent !==
       k2.baselineGlobalSuppressionPercent ||
@@ -483,12 +629,26 @@ async function processPair(arg: {
     k1.baselineGlobalSuppressionPercent !==
       k2Vp.baselineGlobalSuppressionPercent ||
     k1.baselineWindowedSuppressionPercent !==
-      k2Vp.baselineWindowedSuppressionPercent
+      k2Vp.baselineWindowedSuppressionPercent ||
+    k1.baselineGlobalSuppressionPercent !==
+      k2VpClip.baselineGlobalSuppressionPercent ||
+    k1.baselineWindowedSuppressionPercent !==
+      k2VpClip.baselineWindowedSuppressionPercent
   ) {
     throw new Error(
-      `K1, K2 и K2-VP получили разные baseline в ${pairDir}`,
+      `K1, K2, K2-VP и K2-VP-clip получили разные baseline в ${pairDir}`,
     );
   }
+  const proposedGlobal =
+    k2Vp.proposedExact === null || k2VpClip.proposedExact === null
+      ? null
+      : k2Vp.proposedExact.globalSuppressionPercent -
+        k2VpClip.proposedExact.globalSuppressionPercent;
+  const proposedWindowed =
+    k2Vp.proposedExact === null || k2VpClip.proposedExact === null
+      ? null
+      : k2Vp.proposedExact.windowedSuppressionPercent -
+        k2VpClip.proposedExact.windowedSuppressionPercent;
   return {
     slug: arg.slug,
     seed: arg.seed,
@@ -498,21 +658,30 @@ async function processPair(arg: {
     k1,
     k2,
     k2Vp,
+    k2VpClip,
     pairGlobalDelta:
       k2.globalSuppressionPercent - k1.globalSuppressionPercent,
     vpMinusK2:
       k2Vp.globalSuppressionPercent - k2.globalSuppressionPercent,
     vpMinusK1:
       k2Vp.globalSuppressionPercent - k1.globalSuppressionPercent,
+    rawVpMinusClipVpProposedGlobal: proposedGlobal,
+    rawVpMinusClipVpProposedWindowed: proposedWindowed,
+    rawVpMinusClipVpSavedGlobal:
+      k2Vp.saved.globalSuppressionPercent -
+      k2VpClip.saved.globalSuppressionPercent,
+    rawVpMinusClipVpSavedWindowed:
+      k2Vp.saved.windowedSuppressionPercent -
+      k2VpClip.saved.windowedSuppressionPercent,
   };
 }
 
 /**
- * Строит Markdown со значениями global трёх режимов и их разницами.
+ * Строит Markdown с четырьмя режимами и парой raw/clip VP.
  *
  * @param runs - Парные результаты по всем обработанным сидам
  * @param summaries - Сводки по таргетам для тех же прогонов
- * @param maxBlocks - Лимит пар K2/K2-VP;
+ * @param maxBlocks - Общий лимит пар K2 и обоих VP-режимов;
  *   K1 получает двойной лимит блоков
  * @returns Таблицы прогонов и таргетов с пояснением порога screening
  * @remarks Отчёт описывает offline-диагностику вне production. Порог
@@ -525,9 +694,9 @@ export function renderBlockReportMarkdown(
   maxBlocks: number,
 ): string {
   const lines = [
-    '# Screening K1, K2 и K2 с variable projection',
+    '# Screening K1, K2, K2-VP и clip-aware K2-VP',
     '',
-    `K1, K2 и K2-VP стартуют с одного match и используют один словарь v3. K1 выполняет до ${maxBlocks * 2} одиночных блоков, а K2 и K2-VP — до ${maxBlocks} пар с общим МНК 4×4, поэтому каждый режим может заменить не более ${maxBlocks * 2} слотов. K2-VP дополнительно делает пять проходов нелинейного уточнения выбранной пары и после каждого прохода проверяет полный global/J guard. Это offline-диагностика, не закон T35 и не подключение к production.`,
+    `K1, K2, K2-VP и K2-VP-clip стартуют с одного match и используют один словарь v3. K1 выполняет до ${maxBlocks * 2} одиночных блоков, а остальные режимы — до ${maxBlocks} пар с общим МНК 4×4, поэтому каждый режим может заменить не более ${maxBlocks * 2} слотов. Оба VP-режима делают пять проходов нелинейного уточнения выбранной пары и после каждого прохода проверяют полный global/J guard. Clip-режим выбирает направление и победителя по RSS полного клиппированного PCM, но сохраняет результат только через прежний guard. Это offline-диагностика, не закон T35 и не подключение к production.`,
     '',
     '| Таргет | Сид | Global до | K1 после | K1 Δ | K2 после | K2 Δ | K2−K1 | K2-VP после | K2-VP Δ | VP−K2 | VP−K1 | K1 с | K2 с | VP с |',
     '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
@@ -539,12 +708,26 @@ export function renderBlockReportMarkdown(
   }
   lines.push(
     '',
-    '| Таргет | Прогонов | K1 среднее Δ | K2 среднее Δ | K2-VP среднее Δ | K2−K1 среднее | VP−K2 среднее | VP−K1 среднее | K1 улучшено | K2 улучшено | VP улучшено | K2 выигрышей | VP выигрышей у K2 | K2 проходит screening |',
-    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
+    '### Raw VP против clip-aware VP',
+    '',
+    'Proposed описывает лучший exact-победитель проходов до guard. Saved описывает только итоговый canonical patch/WAV; при unchanged его дельта равна нулю. Во всех колонках разницы стоит raw VP минус clip VP.',
+    '',
+    '| Таргет | Сид | Proposed VP global | Proposed clip global | Proposed Δ global | Saved VP global | Saved clip global | Saved Δ global | Proposed Δ J | Saved Δ J | Clip evaluations | Clip basis | Clip exact | Clip objective | Clip с |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+  );
+  for (const run of runs) {
+    lines.push(
+      `| ${run.slug} | ${run.seed} | ${run.k2Vp.proposedExact?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${run.k2VpClip.proposedExact?.globalSuppressionPercent.toFixed(3) ?? '—'} | ${run.rawVpMinusClipVpProposedGlobal?.toFixed(3) ?? '—'} | ${run.k2Vp.saved.globalSuppressionPercent.toFixed(3)} | ${run.k2VpClip.saved.globalSuppressionPercent.toFixed(3)} | ${run.rawVpMinusClipVpSavedGlobal.toFixed(3)} | ${run.rawVpMinusClipVpProposedWindowed?.toFixed(3) ?? '—'} | ${run.rawVpMinusClipVpSavedWindowed.toFixed(3)} | ${run.k2VpClip.variableProjectionAudit?.evaluations ?? 0} | ${run.k2VpClip.basisRenders + (run.k2VpClip.variableProjectionAudit?.unitBasisRenders ?? 0)} | ${run.k2VpClip.exactEvaluations + (run.k2VpClip.variableProjectionAudit?.exactCandidates ?? 0)} | ${run.k2VpClip.clipObjectiveEvaluations} | ${(run.k2VpClip.durationMs / 1000).toFixed(1)} |`,
+    );
+  }
+  lines.push(
+    '',
+    '| Таргет | Прогонов | K1 среднее Δ | K2 среднее Δ | K2-VP среднее Δ | Clip-VP среднее Δ | VP−clip saved среднее | K2−K1 среднее | VP−K2 среднее | VP−K1 среднее | K1 улучшено | K2 улучшено | VP улучшено | Clip улучшено | K2 выигрышей | VP выигрышей у K2 | K2 проходит screening |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
   );
   for (const summary of summaries) {
     lines.push(
-      `| ${summary.slug} | ${summary.runs} | ${summary.k1MeanGlobalDelta.toFixed(3)} | ${summary.k2MeanGlobalDelta.toFixed(3)} | ${summary.k2VpMeanGlobalDelta.toFixed(3)} | ${summary.meanPairGlobalDelta.toFixed(3)} | ${summary.meanVpMinusK2.toFixed(3)} | ${summary.meanVpMinusK1.toFixed(3)} | ${summary.k1Improved} | ${summary.k2Improved} | ${summary.k2VpImproved} | ${summary.k2Wins} | ${summary.k2VpWinsAgainstK2} | ${summary.k2PassesScreen ? 'да' : 'нет'} |`,
+      `| ${summary.slug} | ${summary.runs} | ${summary.k1MeanGlobalDelta.toFixed(3)} | ${summary.k2MeanGlobalDelta.toFixed(3)} | ${summary.k2VpMeanGlobalDelta.toFixed(3)} | ${summary.k2VpClipMeanGlobalDelta.toFixed(3)} | ${summary.meanRawVpMinusClipVpSavedGlobal.toFixed(3)} | ${summary.meanPairGlobalDelta.toFixed(3)} | ${summary.meanVpMinusK2.toFixed(3)} | ${summary.meanVpMinusK1.toFixed(3)} | ${summary.k1Improved} | ${summary.k2Improved} | ${summary.k2VpImproved} | ${summary.k2VpClipImproved} | ${summary.k2Wins} | ${summary.k2VpWinsAgainstK2} | ${summary.k2PassesScreen ? 'да' : 'нет'} |`,
     );
   }
   lines.push(
@@ -694,10 +877,12 @@ async function runBlockScreening(
             `RESULT ${slug} seed=${seed} ` +
               `K1=${run.k1.globalDelta.toFixed(3)} K2=${run.k2.globalDelta.toFixed(3)} ` +
               `K2VP=${run.k2Vp.globalDelta.toFixed(3)} ` +
+              `K2VPclip=${run.k2VpClip.globalDelta.toFixed(3)} ` +
               `pair=${run.pairGlobalDelta.toFixed(3)} ` +
               `VP-K2=${run.vpMinusK2.toFixed(3)} VP-K1=${run.vpMinusK1.toFixed(3)} ` +
-              `K1status=${run.k1.status} K2status=${run.k2.status} VPstatus=${run.k2Vp.status} ` +
-              `seconds=${((run.k1.durationMs + run.k2.durationMs + run.k2Vp.durationMs) / 1000).toFixed(1)}`,
+              `VP-clipSaved=${run.rawVpMinusClipVpSavedGlobal.toFixed(3)} ` +
+              `K1status=${run.k1.status} K2status=${run.k2.status} VPstatus=${run.k2Vp.status} clipStatus=${run.k2VpClip.status} ` +
+              `seconds=${((run.k1.durationMs + run.k2.durationMs + run.k2Vp.durationMs + run.k2VpClip.durationMs) / 1000).toFixed(1)}`,
           );
         }
       } catch (error) {
@@ -736,9 +921,11 @@ function printBlockScreeningSummary(report: BlockReport): void {
       `SUMMARY ${summary.slug} runs=${summary.runs} ` +
         `K1=${summary.k1MeanGlobalDelta.toFixed(3)} K2=${summary.k2MeanGlobalDelta.toFixed(3)} ` +
         `K2VP=${summary.k2VpMeanGlobalDelta.toFixed(3)} ` +
+        `K2VPclip=${summary.k2VpClipMeanGlobalDelta.toFixed(3)} ` +
         `pair=${summary.meanPairGlobalDelta.toFixed(3)} ` +
         `VP-K2=${summary.meanVpMinusK2.toFixed(3)} VP-K1=${summary.meanVpMinusK1.toFixed(3)} ` +
-        `K1improved=${summary.k1Improved} K2improved=${summary.k2Improved} VPimproved=${summary.k2VpImproved} ` +
+        `VP-clipSaved=${summary.meanRawVpMinusClipVpSavedGlobal.toFixed(3)} ` +
+        `K1improved=${summary.k1Improved} K2improved=${summary.k2Improved} VPimproved=${summary.k2VpImproved} clipImproved=${summary.k2VpClipImproved} ` +
         `VPwins=${summary.k2VpWinsAgainstK2} pass=${summary.k2PassesScreen}`,
     );
   }
