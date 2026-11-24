@@ -71,6 +71,8 @@
 Эти команды нужны разработчикам для анализа датасета и проверки
 гипотез. Они не входят в обычный цикл работы `POST /api/enhance/job`.
 Обозначения и текущие статусы экспериментов раскрыты в плане.
+Первоисточники по VP, sinusoidal modeling, Prony/ESPRIT и проверке временных
+блоков собраны в `docs/method-references.md`; они не заменяют A/B на WAV.
 
 - Диагностика WAV по атаке, телу и хвосту, f0 и спаду до −20 дБ: `npx tsx src/audio-inspect.ts a.wav --compare b.wav`; это мера характера, не готовый закон качества
 - Кандидаты допусков Q4 по разбросу сидов: `npx tsx src/dataset/character-tolerances.ts --dataset datasets/reference-integral`; отчёт не назначает пороги автоматически
