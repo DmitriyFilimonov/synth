@@ -22,6 +22,8 @@ interface ArgMatch {
   outputWavPath: string;
   maxIterations?: number;
   initialVector?: readonly number[];
+  /** Неизменные onset по индексам слотов для offline delayed CD. */
+  fixedDelaySeconds?: readonly number[];
   onProgress?: ProgressCallback;
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
@@ -49,6 +51,8 @@ export interface GenerateOutputArgs {
   outputWavPath: string;
   history: { iteration: number; suppressionPercent: number }[];
   phaseModel?: PhaseModel;
+  /** Тот же sidecar должен участвовать в финальном patch и WAV. */
+  fixedDelaySeconds?: readonly number[];
 }
 
 export interface GenerateOutputResult {
@@ -59,7 +63,10 @@ export interface GenerateOutputResult {
 export const generateOutput = (
   arg: GenerateOutputArgs,
 ): GenerateOutputResult => {
-  const optimizedConfig = mapVectorToSynthConfig([...arg.vector]);
+  const optimizedConfig = mapVectorToSynthConfig(
+    [...arg.vector],
+    arg.fixedDelaySeconds,
+  );
 
   const synth = createSynth(optimizedConfig, {
     phaseModel: arg.phaseModel,
@@ -96,7 +103,8 @@ export const generateOutput = (
  * Подбирает осцилляторы под WAV и синтезирует звук по лучшему
  * вектору.
  *
- * @param arg - Пути к файлам, начальный вектор и настройки спуска
+ * @param arg - Пути к файлам, начальный вектор, настройки спуска и
+ *   необязательный fixed-delay sidecar для offline delayed CD
  * @returns Лучший вектор, конфигурация `ArgCreateSynth`, обе метрики,
  *   история и сведения о таргете
  * @throws Error если не удалось прочитать или записать файлы, а также
@@ -106,6 +114,8 @@ export const generateOutput = (
  *   равно нулю без неё. Поле `globalSuppressionPercent` содержит
  *   RMS-оценку всего сигнала; если оценка не удалась, функция
  *   возвращает `null` в этом поле и сохраняет остальной результат.
+ *   При наличии fixedDelaySeconds тот же массив участвует в спуске и
+ *   финальном patch/WAV; без него поведение обычного match прежнее.
  */
 export const match = (arg: ArgMatch): MatchResult => {
   console.log(`Reading target: ${arg.targetWavPath}`);
@@ -143,6 +153,7 @@ export const match = (arg: ArgMatch): MatchResult => {
     sampleRate: SAMPLE_RATE,
     maxIterations,
     onProgress: arg.onProgress,
+    fixedDelaySeconds: arg.fixedDelaySeconds,
     stepGrowthAdd: arg.stepGrowthAdd,
     stepDecayFactor: arg.stepDecayFactor,
   });
@@ -164,6 +175,7 @@ export const match = (arg: ArgMatch): MatchResult => {
     sampleRate: SAMPLE_RATE,
     outputWavPath: arg.outputWavPath,
     history,
+    fixedDelaySeconds: arg.fixedDelaySeconds,
   });
 
   console.log(`Generated: ${arg.outputWavPath}`);
@@ -185,7 +197,10 @@ export const match = (arg: ArgMatch): MatchResult => {
 
   return {
     optimizedVector: vector,
-    optimizedConfig: mapVectorToSynthConfig(vector),
+    optimizedConfig: mapVectorToSynthConfig(
+      vector,
+      arg.fixedDelaySeconds,
+    ),
     suppressionPercent: bestSuppression,
     globalSuppressionPercent,
     history,

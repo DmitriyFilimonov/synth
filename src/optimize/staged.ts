@@ -49,7 +49,9 @@ export type StagedOptimizeResult = OptimizeResult;
  * Прежде здесь было поэтапное усложнение длительности + HPO подбор
  * гиперпараметров. Многолетний опыт показал: staged и HPO стабильно
  * ничего не улучшают, поэтому обёртка сведена к одному вызову CD.
- * Имя `stagedOptimize` сохранено для существующих call-sites.
+ * Имя `stagedOptimize` сохранено для существующих call-sites. Optional
+ * `fixedDelaySeconds` передаётся в CD без изменения вектора и истории;
+ * верхний уровень ArgOptimize имеет приоритет над одноимённым полем config.
  */
 export const stagedOptimize = (
   arg: ArgStagedOptimize & {
@@ -62,6 +64,7 @@ export const stagedOptimize = (
     initialVector,
     maxIterations,
     onProgress,
+    fixedDelaySeconds,
     stepGrowthAdd,
     stepDecayFactor,
     config,
@@ -101,7 +104,12 @@ export const stagedOptimize = (
     wrappedProgress,
     stepGrowthAdd,
     stepDecayFactor,
-    config,
+    {
+      ...config,
+      ...(fixedDelaySeconds === undefined
+        ? {}
+        : { fixedDelaySeconds }),
+    },
   );
 
   const finalHistory = onProgress ? history : cdHistory;

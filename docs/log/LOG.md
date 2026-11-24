@@ -2,6 +2,24 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-24: delayed runner прошёл function review
+
+`runDelayedCdScreening` теперь сам задаёт parent attackBoost через `withAttackBoost` и восстанавливает состояние через `finally`; CLI больше не оборачивает вызов второй раз. Прямой тест с boost=3 сверяет baseline/final J обеих веток с независимым расчётом и проверяет восстановление после успеха и refined-ошибок.
+
+Отсутствие delayed candidate и canonical unchanged без onset стали записями `skips` с причиной `no eligible delayed pair`, а не ошибками. Они попадают в JSON/Markdown и не дают exit1. Если audit заявляет refined, потерянные patch/onset и несовпадающий WAV по-прежнему вызывают ошибку, а runner продолжает остальные сиды.
+
+`runArm` разделён на resolveArmInput, executeArmWorker, validateArmResult, measureArmResult и persistArmArtifacts; конфиг worker, solver и поля успешных patch/WAV/run/audit/history не изменены. Новый delayed CD-тест с explorationWindowStride=2 оставляет лучший delayed genome после rescaleScoresToCurrentMetric и сверяет финальный J с canonical WAV. Реальные CD/A/B не запускались.
+
+Проверки: 245/245 тестов, TypeScript, Prettier, target ESLint и diff check. Оба прежних default golden прошли. Known-answer runner повторил delayedDelta=20.304, controlDelta=45.266, delayed-control=72.365 и J=77.539; финальный WAV побайтово совпал с canonical render patch. Эти числа описывают только синтетический regression fixture.
+
+## 2026-11-24: подготовлен offline CD с неизменным onset
+
+`mapSynthConfigToVectorWithFixedDelays` извлекает прежний десятипараметровый вектор и отдельный `fixedDelaySeconds`; старый конвертер по-прежнему отклоняет ненулевой delay. Sidecar проходит через CD, `createWaveForm`, `WaveformCache`, scale fitting, worker и финальный canonical patch/WAV. Задержка привязана к исходному слоту, поэтому off/on, relocation, prune и random restart не стирают её. Модульного состояния для delay нет, а отсутствие sidecar сохранило golden обычного CD.
+
+`delayed-cd-run.ts` запускает delayed patch и исходный match с одинаковым явным бюджетом и seed. Он пишет patch/WAV/run/audit/history/checkpoints, повторно измеряет global/J по финальному WAV и сохраняет character/bands. Манифест задаёт phase и attackBoost, последний восстанавливается через `finally`. Пара с разным фактическим числом итераций получает ошибку. Команда первого screening использует `--iterations 5 --seeds 1,2,3,4`, но реальный CD/A/B в этой итерации не запускался. Это экспериментальная механика, а не доказанный выигрыш; production match/enhance/API не подключены.
+
+Проверки прошли: 241/241 тест, TypeScript и backend build, Prettier, target ESLint и diff check. Полный ESLint сохранил 70 прежних warning без ошибок. Known-answer runner использует только синтетический тон во временном каталоге и не является реальным A/B.
+
 ## 2026-11-24: v1.15.0 опубликована
 
 Аннотированный тег `v1.15.0` и master указывают на `ee5340303aedd720df31d12d8483365794315424`. Чистый клон прошёл 231/231 тест, backend и web build, Prettier и lint без ошибок. Выпуск содержит offline D/E, clip navigation, refit и clip-aware K2 seed selection с раздельными proposed/saved отчётами. Production match/enhance/API их не вызывает.

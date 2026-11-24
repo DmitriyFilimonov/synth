@@ -11,6 +11,7 @@ import {
   mapVectorToSynthConfig,
   mapVectorToSynthConfigForOsc,
 } from '../vector-to-synth-config';
+import { validateFixedDelaySeconds } from '../fixed-delay';
 
 /**
  * Multi-scale window sizes (seconds). Metric evaluates suppression on each
@@ -188,15 +189,24 @@ export const computeUsefulZone = (
   return { start, end, silentProbes, probeSize };
 };
 
+/** Опции рендера вектора, включая внешний fixed-delay sidecar. */
+export interface WaveformOptions extends SynthOptions {
+  /** Onset по индексам слотов; не входит в десятипараметровый вектор. */
+  fixedDelaySeconds?: readonly number[];
+}
+
 export const createWaveForm = (
   vectorValues: readonly number[],
   sampleRate: number,
   numSamples: number,
-  options: SynthOptions = {},
+  options: WaveformOptions = {},
 ): number[] => {
   const synth = createSynth(
-    mapVectorToSynthConfig([...vectorValues]),
-    options,
+    mapVectorToSynthConfig(
+      [...vectorValues],
+      options.fixedDelaySeconds,
+    ),
+    { phaseModel: options.phaseModel },
   );
   const samples: number[] = [];
   for (let i = 0; i < numSamples; i++) {
@@ -223,7 +233,7 @@ export const evaluateSuppression = (
   vectorValues: readonly number[],
   targetSignal: readonly number[],
   sampleRate: number,
-  options: SynthOptions = {},
+  options: WaveformOptions = {},
 ): number => {
   const generated = createWaveForm(
     vectorValues,
@@ -544,7 +554,9 @@ export const findOptimalScale = (
  * Аддитивный синтез линеен по осцилляторам: при изменении одного параметра
  * одного осциллятора пересинтезируется только его вклад (O(n) вместо O(n*m)),
  * сумма поддерживается инкрементально. Итоговая waveform клампится к [-1, 1]
- * и масштабируется так же, как в createSynth/createWaveForm.
+ * и масштабируется так же, как в createSynth/createWaveForm. Необязательный
+ * fixed-delay sidecar копируется в конструкторе и сохраняется при setParam
+ * и rebuild, включая отключённые слоты и полный random restart.
  */
 export class WaveformCache {
   private readonly sampleRate: number;
@@ -555,12 +567,14 @@ export class WaveformCache {
   private readonly enabled: boolean[];
   private readonly sum: Float64Array;
   private readonly phaseModel: PhaseModel;
+  private readonly fixedDelaySeconds?: readonly number[];
 
   constructor(
     initialGenome: readonly number[],
     sampleRate: number,
     numSamples: number,
     phaseModel: PhaseModel = 'legacy',
+    fixedDelaySeconds?: readonly number[],
   ) {
     this.sampleRate = sampleRate;
     this.phaseModel = phaseModel;
@@ -568,6 +582,14 @@ export class WaveformCache {
     this.numOsc = Math.floor(
       initialGenome.length / OSC_PARAMS_PER_OSCILLATOR,
     );
+    validateFixedDelaySeconds(
+      fixedDelaySeconds,
+      initialGenome.length / OSC_PARAMS_PER_OSCILLATOR,
+    );
+    this.fixedDelaySeconds =
+      fixedDelaySeconds === undefined
+        ? undefined
+        : [...fixedDelaySeconds];
     this.genome = [...initialGenome];
     this.contributions = [];
     this.enabled = [];
@@ -590,7 +612,11 @@ export class WaveformCache {
   }
 
   private synthesizeOsc(osc: number): Float64Array {
-    const config = mapVectorToSynthConfigForOsc(this.genome, osc);
+    const config = mapVectorToSynthConfigForOsc(
+      this.genome,
+      osc,
+      this.fixedDelaySeconds?.[osc],
+    );
     const synth = createOscillatorGroup(config, {
       phaseModel: this.phaseModel,
     });

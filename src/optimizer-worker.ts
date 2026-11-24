@@ -80,6 +80,8 @@ interface WorkerMessage {
   seed?: number;
   /** Модель фазы; без неё — legacy, поведение прежних прогонов. */
   phaseModel?: PhaseModel;
+  /** Fixed-delay sidecar; без него worker выполняет обычный match. */
+  fixedDelaySeconds?: readonly number[];
   /** Дополнительные параметры CD, включая анкеры для C4. */
   config?: Partial<CoordinateDescentConfig>;
 }
@@ -91,6 +93,8 @@ parentPort.on('message', (msg: WorkerMessage) => {
     const effectiveSeed = msg.seed ?? msg.config?.seed;
     const effectivePhaseModel =
       msg.phaseModel ?? msg.config?.phaseModel;
+    const effectiveFixedDelaySeconds =
+      msg.fixedDelaySeconds ?? msg.config?.fixedDelaySeconds;
 
     // Вес атаки задаётся на job. Каждый job поднимает свой worker-
     // поток, поэтому модульное состояние метрики здесь изолировано и
@@ -120,6 +124,9 @@ parentPort.on('message', (msg: WorkerMessage) => {
         ...(effectivePhaseModel !== undefined
           ? { phaseModel: effectivePhaseModel }
           : {}),
+        ...(effectiveFixedDelaySeconds !== undefined
+          ? { fixedDelaySeconds: effectiveFixedDelaySeconds }
+          : {}),
       },
       onProgress: (entry) => {
         const now = Date.now();
@@ -146,9 +153,13 @@ parentPort.on('message', (msg: WorkerMessage) => {
       outputWavPath: msg.outputWavPath,
       history,
       phaseModel: effectivePhaseModel,
+      fixedDelaySeconds: effectiveFixedDelaySeconds,
     });
 
-    const optimizedConfig = mapVectorToSynthConfig(vector);
+    const optimizedConfig = mapVectorToSynthConfig(
+      vector,
+      effectiveFixedDelaySeconds,
+    );
 
     // Честный глобальный suppression (1 - RMS(остаток)/RMS(таргет))
     // по финальному WAV — в отличие от surrogate J в истории.

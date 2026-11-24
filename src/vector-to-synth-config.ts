@@ -6,8 +6,7 @@ import {
   ampEnvConfigNormales as ampEnvNormales,
 } from './synth';
 import { VECTOR_PARAM_OFFSETS as OFFSET } from './vector-param-offsets';
-
-type VectorToSynthConfig = (vector: number[]) => ArgCreateSynth;
+import { validateFixedDelaySeconds } from './fixed-delay';
 
 const clip = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));
@@ -25,17 +24,30 @@ const denormalize = (arg: {
  * Денормализует вектор оптимизатора в полную конфигурацию синтезатора.
  *
  * @param vector - Нормализованные параметры осцилляторов
+ * @param fixedDelaySeconds - Необязательные задержки по индексам слотов;
+ *   длина должна равняться числу слотов исходного вектора
  * @returns Конфигурация ровно с MAX_OSCILLATORS осцилляторами
+ * @throws Error если sidecar имеет неверную длину или содержит задержку
+ *   вне конечного диапазона 0–0.5 с
  * @remarks Недостающие слоты читаются как нули, поэтому короткий вектор
- *   дополняется выключенными осцилляторами.
+ *   дополняется выключенными осцилляторами. Без sidecar возвращаемый объект
+ *   и PCM сохраняют прежний вид. Sidecar не входит в десятипараметровый
+ *   вектор и применяется даже к выключенным слотам.
  */
-export const mapVectorToSynthConfig: VectorToSynthConfig = (
-  vector,
-) => {
+export const mapVectorToSynthConfig = (
+  vector: readonly number[],
+  fixedDelaySeconds?: readonly number[],
+): ArgCreateSynth => {
+  validateFixedDelaySeconds(
+    fixedDelaySeconds,
+    vector.length / OSC_PARAMS_PER_OSCILLATOR,
+  );
   const oscillators = [];
 
   for (let i = 0; i < MAX_OSCILLATORS; i++) {
-    oscillators.push(mapVectorToSynthConfigForOsc(vector, i));
+    oscillators.push(
+      mapVectorToSynthConfigForOsc(vector, i, fixedDelaySeconds?.[i]),
+    );
   }
 
   return { oscillators };
@@ -46,15 +58,19 @@ export const mapVectorToSynthConfig: VectorToSynthConfig = (
  *
  * @param vector - Общий нормализованный вектор оптимизатора
  * @param oscIndex - Нулевой индекс нужного осциллятора
+ * @param delaySeconds - Необязательный onset именно этого слота
  * @returns Параметры osc и ampEnv в единицах конфигурации синтезатора
+ * @throws Error если delaySeconds не конечен или выходит за 0–0.5 с
  * @remarks Отсутствующие значения заменяются нулём, непрерывные
  *   параметры ограничиваются диапазоном [0, 1] перед денормализацией,
  *   а флаг on включается при значении от 0.5. Позиции берутся из
- *   VECTOR_PARAM_OFFSETS.
+ *   VECTOR_PARAM_OFFSETS. Отсутствие delaySeconds сохраняет прежнюю
+ *   форму результата без поля osc.delay.
  */
 export const mapVectorToSynthConfigForOsc = (
   vector: readonly number[],
   oscIndex: number,
+  delaySeconds?: number,
 ): {
   osc: {
     on: boolean;
@@ -63,6 +79,7 @@ export const mapVectorToSynthConfigForOsc = (
     slope: number;
     duration: number;
     phase: number;
+    delay?: number;
   };
   ampEnv: {
     duration: number;
@@ -71,6 +88,10 @@ export const mapVectorToSynthConfigForOsc = (
     startLevel: number;
   };
 } => {
+  validateFixedDelaySeconds(
+    delaySeconds === undefined ? undefined : [delaySeconds],
+    1,
+  );
   const i = oscIndex;
   const offset = i * OSC_PARAMS_PER_OSCILLATOR;
 
@@ -151,6 +172,7 @@ export const mapVectorToSynthConfigForOsc = (
       slope,
       duration,
       phase,
+      ...(delaySeconds === undefined ? {} : { delay: delaySeconds }),
     },
     ampEnv: {
       duration: ampEnvDuration,

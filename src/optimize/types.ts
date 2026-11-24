@@ -24,6 +24,12 @@ export interface ArgOptimize {
   maxIterations?: number;
   onProgress?: ProgressCallback;
   numOscillators?: number;
+  /**
+   * Неизменные onset по индексам слотов вне десятипараметрового вектора.
+   * Если поле задано одновременно с config.fixedDelaySeconds, верхний
+   * уровень явно имеет приоритет.
+   */
+  fixedDelaySeconds?: readonly number[];
   stepGrowthAdd?: number;
   stepDecayFactor?: number;
   config?: Partial<CoordinateDescentConfig>;

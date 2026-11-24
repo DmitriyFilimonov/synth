@@ -18,6 +18,7 @@ import type {
 } from './types';
 import type { PhaseModel } from '../synth';
 import { VECTOR_PARAM_OFFSETS as OFFSET } from '../vector-param-offsets';
+import { validateFixedDelaySeconds } from '../fixed-delay';
 
 /**
  * Конфигурация алгоритма coordinate descent.
@@ -66,6 +67,13 @@ export interface CoordinateDescentConfig {
    * `integral` — звучащая частота совпадает с огибающей частоты.
    */
   phaseModel: PhaseModel;
+  /**
+   * Неизменные onset по исходным индексам слотов, в секундах. Массив
+   * остаётся вне десятипараметрового генома и действует на каждый
+   * синтез кандидата, включая кэш, рестарты, relocation, pruning и
+   * scale fitting. Отсутствие поля сохраняет обычный match побитово.
+   */
+  fixedDelaySeconds?: readonly number[];
   /**
    * Неподвижные непрерывные параметры генома (индексы 1–9 внутри
    * каждого десятизначного слота). CD, пинки, рестарты, relocation
@@ -842,7 +850,10 @@ const rescaleScoresToCurrentMetric = (
       state.bestGenome,
       sampleRate,
       targetSignal.length,
-      { phaseModel: cfg.phaseModel },
+      {
+        phaseModel: cfg.phaseModel,
+        fixedDelaySeconds: cfg.fixedDelaySeconds,
+      },
     ),
     targetSignal,
     sampleRate,
@@ -1110,6 +1121,7 @@ interface ScaleFittingContext {
   usefulZone: UsefulZone;
   numOsc: number;
   phaseModel: PhaseModel;
+  fixedDelaySeconds?: readonly number[];
   frozenParameterIndices: ReadonlySet<number>;
 }
 
@@ -1122,6 +1134,7 @@ interface ScaleFittingContext {
  * @remarks Если закреплён хотя бы один startLevel, масштаб не
  *   применяется. Иначе функция отдельно синтезирует кандидата и
  *   переоценивает его, а не использует score промежуточного waveform.
+ *   Кандидат и перестроенный кэш получают тот же fixed-delay sidecar.
  *   При принятии она перестраивает основной кэш.
  */
 const applyScaleFitting = (
@@ -1134,6 +1147,7 @@ const applyScaleFitting = (
     usefulZone,
     numOsc,
     phaseModel,
+    fixedDelaySeconds,
     frozenParameterIndices,
   } = context;
   let { genome } = context;
@@ -1173,6 +1187,7 @@ const applyScaleFitting = (
       sampleRate,
       targetSignal.length,
       phaseModel,
+      fixedDelaySeconds,
     );
     const scaledScore = evaluateSuppressionWindowed(
       scaledCache.getWaveform(),
@@ -1629,7 +1644,8 @@ const runRestartSchedule = (
  * @param config - Переопределения CoordinateDescentConfig
  * @returns Оптимизированный вектор и история прогресса
  * @throws Error если frozenParameterIndices указывает вне генома,
- *   содержит нецелый индекс или индекс флага on/off
+ *   содержит нецелый индекс или индекс флага on/off, либо если
+ *   fixedDelaySeconds имеет неверную длину или значение вне 0–0.5 с
  * @remarks Циклы меняют шаги частоты, фазы и остальных параметров;
  *   плато вызывает пинки или сидируемые рестарты, а simulated annealing
  *   выключается в финальном цикле. После спуска функция возвращает
@@ -1637,7 +1653,9 @@ const runRestartSchedule = (
  *   затем восстанавливает лучший геном при необходимости. Анкеры
  *   остаются неизменными. При preserveOscillatorFlags=true сохраняются
  *   исходные флаги, а relocation и прунинг не запускаются. В возврате
- *   все флаги равны строго 0 или 1.
+ *   все флаги равны строго 0 или 1. Fixed-delay sidecar копируется на
+ *   входе, не попадает в vector/history и остаётся привязанным к исходным
+ *   индексам при любых операциях спуска.
  */
 export const coordinateDescent = (
   initialVector: readonly number[],
@@ -1657,6 +1675,10 @@ export const coordinateDescent = (
   const rng = createRng(cfg.seed);
   const genomeLength = initialVector.length;
   const numOsc = genomeLength / OSC_PARAMS;
+  validateFixedDelaySeconds(cfg.fixedDelaySeconds, numOsc);
+  if (cfg.fixedDelaySeconds !== undefined) {
+    cfg.fixedDelaySeconds = [...cfg.fixedDelaySeconds];
+  }
   const frozenParameterIndices = createFrozenParameterSet(
     cfg.frozenParameterIndices,
     genomeLength,
@@ -1672,6 +1694,7 @@ export const coordinateDescent = (
     sampleRate,
     targetSignal.length,
     cfg.phaseModel,
+    cfg.fixedDelaySeconds,
   );
   const currentBest = evaluateSuppressionWindowed(
     waveformCache.getWaveform(),
@@ -1737,6 +1760,7 @@ export const coordinateDescent = (
     usefulZone,
     numOsc,
     phaseModel: cfg.phaseModel,
+    fixedDelaySeconds: cfg.fixedDelaySeconds,
     frozenParameterIndices,
   });
   state.genome = scaled.genome;
@@ -1787,6 +1811,11 @@ export const optimize = (
     arg.onProgress,
     arg.stepGrowthAdd,
     arg.stepDecayFactor,
-    arg.config,
+    {
+      ...arg.config,
+      ...(arg.fixedDelaySeconds === undefined
+        ? {}
+        : { fixedDelaySeconds: arg.fixedDelaySeconds }),
+    },
   );
 };

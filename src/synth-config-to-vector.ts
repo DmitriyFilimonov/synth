@@ -6,6 +6,7 @@ import {
   ampEnvConfigNormales as ampEnvNormales,
 } from './synth';
 import { VECTOR_PARAM_OFFSETS as OFFSET } from './vector-param-offsets';
+import { validateFixedDelaySeconds } from './fixed-delay';
 
 /**
  * Нормализует конфигурацию синтезатора в вектор оптимизатора.
@@ -84,4 +85,45 @@ export const mapSynthConfigToVector = (
 
     return new Array<number>(OSC_PARAMS_PER_OSCILLATOR).fill(0);
   });
+};
+
+/** Вектор оптимизатора и отдельный неизменный onset каждого слота. */
+export interface SynthConfigVectorWithFixedDelays {
+  vector: number[];
+  fixedDelaySeconds: number[];
+}
+
+/**
+ * Извлекает десятипараметровый вектор и fixed-delay sidecar из патча.
+ *
+ * @param arg - Конфигурация с необязательным osc.delay у любого слота
+ * @returns Нормализованный вектор прежней длины 10×N и массив из N
+ *   задержек в исходном порядке осцилляторов
+ * @throws Error если хотя бы одна задержка не конечна или выходит за
+ *   диапазон 0–0.5 с
+ * @remarks Старый mapSynthConfigToVector намеренно остаётся строгим и
+ *   отклоняет ненулевой delay. Этот helper явно снимает delay только во
+ *   временной копии, а оригинальные значения возвращает отдельно. Поэтому
+ *   onset выключенного слота тоже сохраняется и восстановится при on/off.
+ */
+export const mapSynthConfigToVectorWithFixedDelays = (
+  arg: ArgCreateSynth,
+): SynthConfigVectorWithFixedDelays => {
+  const fixedDelaySeconds = arg.oscillators.map(
+    (group) => group.osc.delay ?? 0,
+  );
+  validateFixedDelaySeconds(
+    fixedDelaySeconds,
+    arg.oscillators.length,
+  );
+  const withoutDelays: ArgCreateSynth = {
+    oscillators: arg.oscillators.map((group) => ({
+      osc: { ...group.osc, delay: 0 },
+      ampEnv: { ...group.ampEnv },
+    })),
+  };
+  return {
+    vector: mapSynthConfigToVector(withoutDelays),
+    fixedDelaySeconds,
+  };
 };

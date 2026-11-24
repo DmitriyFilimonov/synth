@@ -56,6 +56,12 @@ interface MatchWorkerArgs {
   /** Модель фазы; без неё — legacy. */
   phaseModel?: PhaseModel;
   /**
+   * Неизменные onset по индексам слотов для offline delayed CD. Worker
+   * применяет их и при оптимизации, и при финальном patch/WAV. Без поля
+   * обычный match не меняется.
+   */
+  fixedDelaySeconds?: readonly number[];
+  /**
    * Переопределения CD, включая анкеры и сохранение флагов для C4.
    * Без этого поля worker ведёт обычный match. Пустой список
    * frozenParameterIndices и preserveOscillatorFlags=false сохраняют
@@ -96,7 +102,7 @@ function resolveWorkerPath(): {
  * промис с результатом прогона.
  *
  * @param arg - Параметры прогона: таргет, init-вектор, сид,
- *   конфиг CD, колбэки логов и прогресса
+ *   конфиг CD, optional fixed-delay sidecar и колбэки логов/прогресса
  * @returns Промис с историей, метриками suppression, лучшим вектором
  *   и конфигом синтезатора
  * @throws Error Отклоняет промис при ошибке worker'а или при его
@@ -106,7 +112,9 @@ function resolveWorkerPath(): {
  *   descent. После `done` или `error` функция завершает worker и
  *   игнорирует повторные события. Без `arg.config`, с пустым списком
  *   анкеров и preserveOscillatorFlags=false worker выполняет обычный
- *   match без изменений.
+ *   match без изменений. Если задан `arg.fixedDelaySeconds`, worker
+ *   использует его на каждом candidate evaluation и при сборке финального
+ *   synthConfig/WAV; одного bestVector для delayed patch недостаточно.
  */
 export function matchWithWorker(
   arg: MatchWorkerArgs,
@@ -182,6 +190,7 @@ export function matchWithWorker(
       stepDecayFactor: arg.stepDecayFactor,
       seed: arg.seed,
       phaseModel: arg.phaseModel,
+      fixedDelaySeconds: arg.fixedDelaySeconds,
       config: arg.config,
     });
   });
