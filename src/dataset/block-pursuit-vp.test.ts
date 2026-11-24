@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ArgCreateSynth, PhaseModel } from '../synth';
 import {
+  isBetterClipAwareNavigationCandidate,
   pursueResidualBlocks,
   type BlockPursuitResult,
 } from './block-pursuit';
+import { quantizeRaw } from './quadrature-refit';
 import { renderSamples } from './shared';
 
 /**
@@ -81,19 +83,23 @@ function render(
 }
 
 /**
- * Запускает обычный K2 и K2-VP от одного исходного патча и target.
+ * Запускает обычный K2, K2-VP и clip-aware K2-VP от одного исходника.
  *
  * @param arg - Исходный patch, эталонный source и модель фазы
- * @returns Результаты `fixed` без VP и `projected` с включённым VP
+ * @returns Результаты `fixed`, `projected` и `clipProjected`
  * @remarks `fixed` не передаёт `variableProjection` и проверяет его
- *   значение по умолчанию `false`. Оба режима получают один
+ *   значение по умолчанию `false`. Все режимы получают один
  *   `common`-объект, один словарный shortlist и лимит в один блок.
  */
 function runPair(arg: {
   patch: ArgCreateSynth;
   source: ArgCreateSynth;
   phaseModel?: PhaseModel;
-}): { fixed: BlockPursuitResult; projected: BlockPursuitResult } {
+}): {
+  fixed: BlockPursuitResult;
+  projected: BlockPursuitResult;
+  clipProjected: BlockPursuitResult;
+} {
   const common = {
     patch: arg.patch,
     target: render(arg.source, arg.phaseModel),
@@ -107,8 +113,54 @@ function runPair(arg: {
     ...common,
     variableProjection: true,
   });
-  return { fixed, projected };
+  const clipProjected = pursueResidualBlocks({
+    ...common,
+    variableProjection: true,
+    clipAwareNavigation: true,
+  });
+  return { fixed, projected, clipProjected };
 }
+
+/** Считает PCM RSS одного полного raw-отсчёта против 32767. */
+function clippedTrapRss(raw: number): { pcm: number; rss: number } {
+  const pcm = quantizeRaw(Float64Array.of(raw))[0] ?? 0;
+  const error = pcm - 32767;
+  return { pcm, rss: error * error };
+}
+
+test('clip-aware comparator avoids the raw-RSS clipping trap', () => {
+  const a = { name: 'A', ...clippedTrapRss(1.3) };
+  const b = { name: 'B', ...clippedTrapRss(0.9) };
+  const rawRss = (raw: number): number => ((raw - 1) * 32767) ** 2;
+  assert.ok(rawRss(0.9) < rawRss(1.3));
+  assert.deepEqual(a, { name: 'A', pcm: 32767, rss: 0 });
+  assert.deepEqual(b, {
+    name: 'B',
+    pcm: 29490,
+    rss: 10738729,
+  });
+  assert.equal(
+    isBetterClipAwareNavigationCandidate(
+      { clippedRss: a.rss },
+      { clippedRss: b.rss },
+    ),
+    true,
+  );
+  assert.equal(
+    isBetterClipAwareNavigationCandidate(
+      { clippedRss: b.rss },
+      { clippedRss: a.rss },
+    ),
+    false,
+  );
+  assert.equal(
+    isBetterClipAwareNavigationCandidate(
+      { clippedRss: a.rss },
+      { clippedRss: a.rss },
+    ),
+    false,
+  );
+});
 
 test('VP refines a rejected dictionary seed between frequency grids', () => {
   const source: ArgCreateSynth = {
@@ -145,8 +197,12 @@ test('VP refines a rejected dictionary seed between frequency grids', () => {
   assert.equal(dictionarySeed.status, 'refined');
   const patch = dictionarySeed.patch;
   const original = structuredClone(patch);
-  const { fixed, projected } = runPair({ patch, source });
+  const { fixed, projected, clipProjected } = runPair({
+    patch,
+    source,
+  });
   const audit = projected.variableProjection?.attempts[0];
+  const clipAudit = clipProjected.variableProjection?.attempts[0];
   assert.ok(
     audit !== undefined &&
       audit.seed !== null &&
@@ -173,6 +229,32 @@ test('VP refines a rejected dictionary seed between frequency grids', () => {
   assert.equal(audit?.passes.length, 5);
   assert.equal(audit?.exactCandidates, 5);
   assert.ok((audit?.evaluations ?? Infinity) <= 101);
+  assert.ok((clipAudit?.evaluations ?? Infinity) <= 101);
+  assert.equal(clipAudit?.exactCandidates, 5);
+  assert.ok(
+    (clipAudit?.unitBasisRenders ?? Infinity) <=
+      4 * ((clipAudit?.evaluations ?? 0) - 1),
+  );
+  assert.equal(
+    clipProjected.exactEvaluations,
+    projected.exactEvaluations,
+  );
+  assert.equal(clipProjected.basisRenders, projected.basisRenders);
+  assert.ok(
+    (clipAudit?.clipObjectiveEvaluations ?? Infinity) <=
+      (clipAudit?.evaluations ?? 0),
+  );
+  assert.ok(
+    clipAudit?.passes.every(
+      (pass) =>
+        Number.isFinite(pass.winnerGain) &&
+        Number.isFinite(pass.winnerClippedRss),
+    ),
+  );
+  assert.equal(
+    clipProjected.variableProjection?.clipObjectiveEvaluations,
+    clipAudit?.clipObjectiveEvaluations,
+  );
   assert.ok(
     audit?.passes.every((pass) => Number.isFinite(pass.winnerGain)),
   );
@@ -209,12 +291,13 @@ for (const phaseModel of ['integral', 'legacy'] as const) {
         }),
       ],
     };
-    const { fixed, projected } = runPair({
+    const { fixed, projected, clipProjected } = runPair({
       patch: { oscillators: [off(), off()] },
       source,
       phaseModel,
     });
     const audit = projected.variableProjection?.attempts[0];
+    const clipAudit = clipProjected.variableProjection?.attempts[0];
     assert.ok(
       audit !== undefined &&
         audit.seed !== null &&
@@ -236,6 +319,22 @@ for (const phaseModel of ['integral', 'legacy'] as const) {
         (entry, index) =>
           entry.freqStart !== audit.seed?.[index]?.freqStart &&
           entry.frequency === audit.seed?.[index]?.frequency,
+      ),
+    );
+    assert.ok((clipAudit?.evaluations ?? Infinity) <= 101);
+    assert.equal(clipAudit?.exactCandidates, 5);
+    assert.ok(
+      (clipAudit?.unitBasisRenders ?? Infinity) <=
+        4 * ((clipAudit?.evaluations ?? 0) - 1),
+    );
+    assert.equal(clipProjected.basisRenders, projected.basisRenders);
+    assert.ok(
+      (clipAudit?.clipObjectiveEvaluations ?? 0) > 0,
+      phaseModel,
+    );
+    assert.ok(
+      clipAudit?.passes.every((pass) =>
+        Number.isFinite(pass.winnerClippedRss),
       ),
     );
   });
@@ -276,8 +375,41 @@ test('default K2 is unchanged and rejected VP preserves an exact match determini
   const repeated = pursueResidualBlocks({
     ...common,
     variableProjection: true,
+    clipAwareNavigation: false,
   });
   assert.deepEqual(repeated, projected);
+  assert.equal(
+    projected.variableProjection?.clipObjectiveEvaluations,
+    undefined,
+  );
+  assert.ok(
+    projected.variableProjection?.attempts.every((attempt) =>
+      attempt.passes.every(
+        (pass) => pass.winnerClippedRss === undefined,
+      ),
+    ),
+  );
+  const nonVpClip = pursueResidualBlocks({
+    ...common,
+    clipAwareNavigation: true,
+  });
+  assert.deepEqual(nonVpClip, fixed);
+  const clipProjected = pursueResidualBlocks({
+    ...common,
+    variableProjection: true,
+    clipAwareNavigation: true,
+  });
+  assert.equal(clipProjected.status, 'unchanged');
+  assert.deepEqual(clipProjected.patch, source);
+  assert.deepEqual(clipProjected.samples, fixed.samples);
+  assert.ok(
+    (clipProjected.variableProjection?.clipObjectiveEvaluations ??
+      0) > 0,
+  );
+  assert.equal(
+    clipProjected.variableProjection?.attempts[0]?.exactCandidates,
+    5,
+  );
   assert.equal(projected.status, 'unchanged');
   assert.deepEqual(projected.patch, source);
   assert.deepEqual(projected.samples, fixed.samples);
