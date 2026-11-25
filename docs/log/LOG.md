@@ -9,6 +9,27 @@ OpenAlex и Wikipedia стали доступны через MCP. В `docs/metho
 ## 2026-11-24: обе цели и достаточность датасета зафиксированы явно
 
 `AGENTS.md` теперь называет реверс-синтез и улучшение сырых/плохих бочек двумя обязательными условиями завершения; эта правка сохранена отдельно в `dee8c9d`. План также фиксирует предел доказательности: восемь эталонов и повторные сиды позволяют продолжать structural search и screening, но сиды не являются независимыми звуками. После многократного выбора гипотез на одном наборе leave-one-target-out не равен новому holdout. Предварительные Q1–Q5 остаются возможны, однако общий закон качества нельзя объявить окончательно доказанным без явного обсуждения независимых реальных бочек. Новых записей одной бочки на разных высотах это не запрашивает.
+## 2026-11-25: joint-K получил строгий бюджет и полный synthetic work ledger
+
+Радиальная проекция сохраняет границу исходной нормы до fallback-направления. Поэтому нулевые initial coefficients на ненулевом базисе дают ровно MIN_LEVEL=0.001, а не 1. Нулевой target движет ненулевой initial к нижней границе и уменьшает фактический PCM RSS. Ненулевой numerical path не изменён.
+
+`maxInner` теперь ограничивает сами попытки. При нулевом бюджете solver оценивает initial state, но не строит Gram/Jacobi и возвращает `diagnostics: null`. После одного accepted с ненулевым RSS при `maxInner=1` второй набор уравнений не строится. Диагностика всегда принадлежит последнему реально построенному Gram. Основная функция управляет маской и stop-reason, а `proposeJointStep` и `backtrackQuantizedStep` отдельно строят bounded proposal и проверяют полный quantized PCM.
+
+Новый `structural-work.ts` не зависит от renderer или solver. Native basis записывает 2K*N в basis и отдельно учитывает finite-проверки. Solver добавляет validation, mixing, quantize, metric, Gram, mask и offset; `sampleWork.total` равен сумме всех категорий. Dense Gram, Jacobi и pseudo-inverse публикуются отдельно и не называются общим W. Общий optional ledger можно передать сначала renderer, затем solver; результат хранит snapshot.
+
+Known-count с K=2, N=3, одним backtrack, двумя accepted и одним mask change при `maxInner=2` фиксирует validation=27, mixing=48, quantize=12, metric=12, Gram=93, mask=18, offset=12 и basis=0 для заранее построенного базиса. Итог 222. Dense: Gram cell updates 40, Jacobi matrix entries 88, off-diagonal scans 66, rotations 35, rotation element updates 700, pseudo-inverse entries 48. Для maxInner=0/1 sampleWork равен 51/141, лишних уравнений нет.
+
+Новые контроли покрывают глобально поддерживаемый, но полностью masked атом с сохранением 0.02, appended gap, eigen-limit без pseudo-inverse и canonical max-boundary roundtrip с ненулевым fixedOffset в обеих фазовых моделях. В них PCM полного patch совпадает с solver PCM. Проверки: 34/34 новых и 60/60 связанных, всего 94/94; полный npm test primary прошёл 350/350. TypeScript, Prettier, target ESLint и diff check проходят. Реальных прогонов и production-подключения по-прежнему нет.
+
+## 2026-11-24: synthetic native atoms и generalized joint-K solver
+
+`structural-atom.ts` задаёт полную форму атома без преобразования в десятипараметровый vector: независимые `freqBase/freqStart`, обе огибающие, целые delay/attack и hardStop сохраняются в настоящем `ArgCreateSynth`. Нулевые optional-поля не появляются сами, выход за нормы synth отклоняется. Стабильный ключ учитывает всю форму. Candidate занимает только явно выбранные уникальные слоты, сохраняет остальные on/off/off-slot поля и отклоняет итог больше 50 ещё до solver.
+
+`joint-k-quadrature.ts` принимает ровно две квадратуры на атом для K=1..50, continuous normalized target и raw fixedOffset. Правая часть строится по `target−fixedOffset`, target не превращается в отдельный Int16. Нормированный masked Gram получает Jacobi-диагностику и truncated pseudo-inverse; при потере ранга возвращается минимальнормативное решение. Радиальная проекция держит уровни 0.001–1, а полный шаг не меняет выбранную границу через ulp-ошибку `a+(b−a)`. Каждая проба складывает весь fixedOffset с атомами, применяет production clip и квантует только candidate. Принимается лишь уменьшение фактического PCM RSS. Точный zero-support атом отклоняется, а временно полностью замаскированный атом сохраняет текущую пару. Счётчики работы и повторный результат детерминированы.
+
+Known-answer покрывают ортонормированные K=4/5/20/50, K=20 при N=2 и rank 2, обе фазовые модели native patch с близкими 73/73.2 Гц и далёким 6000 Гц, разные onset/durations/sweep/attack/hardStop/endLevel, восстановление после порчи только level/phase, сохранение optional-полей, replacement 20 из 50, отказ 40+20 и duplicate slots. Отдельные контроли ломают реализацию без вычитания fixedOffset, различают полный и standalone clip trap, доказывают непрерывность target и отклонение непрерывного улучшения на неизменном PCM. Beam, runner и production не реализованы; реальные A/B не запускались, закон качества не проверялся.
+
+Проверки: 24/24 новых теста и 60/60 связанных joint-projection/full-patch, всего 84/84. TypeScript, Prettier, target ESLint и diff check проходят без ошибок.
 
 ## 2026-11-24: direct match и граница следующего structural search
 
