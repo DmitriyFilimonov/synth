@@ -2,6 +2,14 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-25: structural dataset runner готов к проверенному запуску
+
+`structural-beam-run.ts` принимает раздельные source-base/target-dataset, slug, candidate-subdir и обязательный work-бюджет. До solver он проверяет completed run, пути и canonical source; phase/attackBoost действуют на весь paired run и восстанавливаются через finally. Beam и width 1 получают одинаковый W и independent residual proposer sessions. Runner атомарно сохраняет no-op, proposed/saved patch/WAV, history/audit/checkpoints, перечитывает сохранённые PCM и заново измеряет global/J. Report разделяет evaluator/expansion/dense/finalization, character/bands, path и warnings; rootSampleWork остаётся null, а не превращается в фиктивный ноль.
+
+Gate требует ровно четыре completed сида без errors/skips, минимум три улучшенных saved beam, mean global не ниже 4.6 п.п. и residual reduction не ниже 25%. Width1 не подменяет beam постфактум. Q4/production/CD не заявляются. Все четыре ревизии runner READY.
+
+Двенадцать known-answer проходят, связанный набор — 80/80. Отдельные контроли доказывают symlink-collision и exit codes: usage/seed errors дают 1, чистый NO GO без ошибок даёт 0 при gate.pass=false. Тест изменения входного SHA во время настоящего solver выявил, что successful branch checkpoint раньше записывался до ошибки. Теперь immutable-guard останавливает seed сразу после solver, completed runs не появляются и такого checkpoint нет. Это исправление не меняет PCM solver. Реальные прогоны ещё не запускались; финальный полный набор выполняет primary.
+
 ## 2026-11-25: residual proposer соединён с measured native beam
 
 `residual-structural-proposer.ts` сам измеряет residual subtraction, окна/Hann, radix-2 FFT, пики, полные shape variants и leave-one-out slot ranking. Он не использует прежний `buildPursuitDictionary`, чьи localEvaluations не описывали полную работу. Полный `StructuralAtomShape` сохраняет независимые частоты, sweep, обе огибающие и delay/attack/hardStop; группа не получает общий decay или onset.
