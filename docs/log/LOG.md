@@ -2,6 +2,18 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-25: OOM остановил structural screening; evaluated nodes освобождены от solo caches
+
+Реальные GrumU, BOg и water_15 не завершили ни одного сида: OOM-killer остановил каждый structural process примерно на 2.4 GB RSS. Завершённого real-результата и gate-вердикта нет. Это отказ инфраструктуры, а не NO GO по качеству; повторять реальные прогоны после memory fix в этой задаче не стали.
+
+До исправления каждый evaluated `NativeStructuralState` хранил 50 solo `Float64Array`. При N=22050 только они занимали 8 820 000 байт (8.41 MiB) на узел, а `evaluated`, `depths` и путь сохраняли узлы живыми. Теперь полный cache остаётся только у root для совместимости, а каждый evaluated node получает `contributions: null`. Для fixed offset evaluator по одному рендерит только старые активные selected slots текущего parent.patch. Новые selected solo-buffers живут лишь до сборки rawSum. Порядок вычитания и сложения прежний, поэтому rawSum/fixedOffset и canonical PCM не меняются.
+
+Evaluated node по-прежнему хранит три Float64Array длины N (`rawSum`, `fixedOffset`, `solver.raw`) и два Int16Array (`samples`, `solver.samples`): это 28N байт плюс patch и небольшие аудиты, или около 0.59 MiB при N=22050 вместо примерно 9.00 MiB вместе с прежним solo-cache. History ссылается на те же fixedOffset/solver и не получает contributions или их вторую копию; audit тоже не получил новые PCM-буферы. Basis и selected renders по-прежнему создают временную память O(KN), обе width-ветви хранят собственные evaluated nodes, а root сохраняет полный cache. Поэтому исправление убирает retained-причину OOM, но не обещает абсолютный RSS-потолок.
+
+Старые selected renders получили отдельный `canonicalWork.parentContributionRenders`. Для parent без cache proposal estimate добавляет K*N, фактическая стоимость входит в тот же evaluator W, а expansion estimate/cost не меняются. Root с полным cache не выполняет новую работу: прежний exact K2 count 114 и остальные synthetic числа сохранены.
+
+Новый memory-regression прогоняет 50 active atoms на N=2048 до глубины 3. Beam и width-1 удерживают 15 и 9 evaluated nodes; все 24 имеют `contributions === null`. Независимые renders побитово подтверждают rawSum/fixedOffset, canonical patch/PCM, proposed/saved и width control. `parentContributionRenders` равен 49 152 у beam и 24 576 у width-1; used W равен 1 216 512 и 724 992 при общем бюджете 1 216 512. Ни estimate, ни W не превышены. В отдельном focused запуске диагностика показала RSS 126.2 MiB и прирост 17.4 MiB на bounded fixture; это не порог и не доказательство RSS на реальных WAV. Native прошёл 18/18, связанный native/proposer/beam/solver/runner набор — 101/101, полный `npm test` — 428/428. TypeScript build, Prettier, target ESLint и `git diff --check` прошли без ошибок.
+
 ## 2026-11-25: реальный structural screening запущен
 
 После no-op preflight 12/12 canonical входов запущены GrumU A+B2, BOg delayed и water_15 на сидах 1–4. Все используют runner-коммит `83feea8`, beamWidth=4, maxDepth=20, maxGroupSize=20, maxInner=12, maxBacktracks=16 и W=20000000000 на сид на ветвь. Каталоги `structural-beam-{grumu,bog,water15}-v1` содержат launch.json с SHA, command context и PID; логи лежат в `/tmp/opencode/structural-beam-*-v1.log`. Width1 получает тот же W и independent proposer session. Gate заранее сохранён: 4 completed без errors/skips, минимум 3 improved saved beam, mean global ≥4.6 п.п., residual RMS reduction ≥25% и все guards. Первый сид ещё не завершён на момент записи, поэтому никакого качества или gate-результата не заявлено. Бюджет после результата не увеличивается.

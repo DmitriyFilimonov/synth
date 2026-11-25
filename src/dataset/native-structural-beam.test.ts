@@ -13,11 +13,13 @@ import {
   runNativeStructuralBeam,
   runNativeStructuralBeamWithWidthControl,
   type NativeStructuralBeamOptions,
+  type NativeStructuralBeamResult,
   type NativeStructuralCanonicalAssert,
+  type NativeStructuralNode,
   type NativeStructuralProposal,
   type NativeStructuralProposeResult,
 } from './native-structural-beam';
-import { renderForTarget } from './quadrature-refit';
+import { renderForTarget, renderGroup } from './quadrature-refit';
 import {
   patchFromStructuralCandidate,
   type StructuralAtomShape,
@@ -410,8 +412,11 @@ test('fixedOffset subtracts selected delayed atoms once and preserves untouched 
   const history = result.history[0];
   assert.ok(history !== undefined);
   const expectedOffset = new Float64Array(result.root.value.rawSum);
+  const rootContributions = result.root.value.contributions;
+  assert.ok(rootContributions !== null);
   for (const slot of slots) {
-    const previous = result.root.value.contributions[slot];
+    const previous: Float64Array | null | undefined =
+      rootContributions[slot];
     assert.ok(previous !== null && previous !== undefined);
     for (let sample = 0; sample < sampleCount; sample += 1) {
       expectedOffset[sample] =
@@ -873,6 +878,7 @@ test('small native K2 has an exact full basis+solver+canonical work count', () =
   });
   assert.deepEqual(evaluation.canonicalWork, {
     fixedOffsetCopy: 3,
+    parentContributionRenders: 0,
     selectedContributionRenders: 6,
     rawSumAssembly: 9,
     canonicalRender: 3,
@@ -1511,4 +1517,252 @@ test('width control creates independent stateful sessions with equal initial bud
       assert.equal(expansion.cost, expansionCost);
     }
   }
+});
+
+/** Независимо повторяет прежнюю fixed-offset сумму без retained solo-cache. */
+function assertNativeMemoryLayout(
+  result: NativeStructuralBeamResult,
+  sampleCount: number,
+  phaseModel: PhaseModel,
+): void {
+  assert.ok(result.root.value.contributions !== null);
+  assert.ok(
+    result.evaluated.every(
+      (node) => node.value.contributions === null,
+    ),
+  );
+  const nodesByKey = new Map<string, NativeStructuralNode>([
+    [result.root.nodeKey, result.root],
+    ...result.evaluated.map(
+      (node): [string, NativeStructuralNode] => [node.nodeKey, node],
+    ),
+  ]);
+  const expectedSums = new Map<string, Float64Array>();
+  const rootRaw = new Float64Array(sampleCount);
+  for (const group of result.root.value.patch.oscillators) {
+    if (!group.osc.on) {
+      continue;
+    }
+    const contribution = renderGroup(group, sampleCount, phaseModel);
+    for (let sample = 0; sample < sampleCount; sample += 1) {
+      rootRaw[sample] =
+        (rootRaw[sample] ?? 0) + (contribution[sample] ?? 0);
+    }
+  }
+  assert.deepEqual(result.root.value.rawSum, rootRaw);
+  expectedSums.set(result.root.nodeKey, rootRaw);
+
+  for (const [index, node] of result.evaluated.entries()) {
+    const evaluation = node.value.evaluation;
+    assert.ok(evaluation !== null);
+    const parentKey = node.parentKey;
+    assert.ok(parentKey !== null);
+    const parent = nodesByKey.get(parentKey);
+    assert.ok(parent !== undefined);
+    const parentRaw = expectedSums.get(parentKey);
+    assert.ok(parentRaw !== undefined);
+    const expectedOffset = new Float64Array(parentRaw);
+    let activeParentSlots = 0;
+    for (const slot of evaluation.proposal.slots) {
+      const previousGroup = parent.value.patch.oscillators[slot];
+      if (previousGroup?.osc.on !== true) {
+        continue;
+      }
+      const previous = renderGroup(
+        previousGroup,
+        sampleCount,
+        phaseModel,
+      );
+      for (let sample = 0; sample < sampleCount; sample += 1) {
+        expectedOffset[sample] =
+          (expectedOffset[sample] ?? 0) - (previous[sample] ?? 0);
+      }
+      activeParentSlots += 1;
+    }
+    assert.deepEqual(evaluation.fixedOffset, expectedOffset);
+
+    const expectedRaw = new Float64Array(expectedOffset);
+    for (const slot of evaluation.proposal.slots) {
+      const group = node.value.patch.oscillators[slot];
+      assert.ok(group !== undefined && group.osc.on);
+      const contribution = renderGroup(
+        group,
+        sampleCount,
+        phaseModel,
+      );
+      for (let sample = 0; sample < sampleCount; sample += 1) {
+        expectedRaw[sample] =
+          (expectedRaw[sample] ?? 0) + (contribution[sample] ?? 0);
+      }
+    }
+    assert.deepEqual(node.value.rawSum, expectedRaw);
+    expectedSums.set(node.nodeKey, expectedRaw);
+
+    const missingParentCache = parent.value.contributions === null;
+    assert.equal(
+      evaluation.canonicalWork.parentContributionRenders,
+      missingParentCache ? activeParentSlots * sampleCount : 0,
+    );
+    const baseEstimate = estimateStructuralCandidateWork({
+      sampleCount,
+      atomCount: evaluation.proposal.slots.length,
+      maxInner: 0,
+      maxBacktracks: 0,
+    });
+    assert.equal(
+      node.estimatedWork,
+      baseEstimate +
+        (missingParentCache
+          ? evaluation.proposal.slots.length * sampleCount
+          : 0),
+    );
+    const canonicalWork = evaluation.canonicalWork;
+    assert.equal(
+      canonicalWork.total,
+      canonicalWork.fixedOffsetCopy +
+        canonicalWork.parentContributionRenders +
+        canonicalWork.selectedContributionRenders +
+        canonicalWork.rawSumAssembly +
+        canonicalWork.canonicalRender +
+        canonicalWork.canonicalAssertion +
+        canonicalWork.canonicalMetrics,
+    );
+    assert.equal(
+      node.cost,
+      evaluation.sampleWork.total + canonicalWork.total,
+    );
+    assert.ok(node.cost <= node.estimatedWork);
+    const canonicalSamples = renderForTarget(
+      node.value.patch,
+      sampleCount,
+      phaseModel,
+    );
+    assert.deepEqual(node.value.samples, canonicalSamples);
+    assertPatchMatchesWav(
+      node.value.patch,
+      node.value.samples,
+      phaseModel,
+      SAMPLE_RATE,
+      sampleCount,
+    );
+
+    const history = result.history[index];
+    assert.ok(history !== undefined);
+    assert.equal(history.fixedOffset, evaluation.fixedOffset);
+    assert.equal(history.solver, evaluation.solver);
+    assert.equal('contributions' in history, false);
+  }
+
+  assert.ok(result.proposed !== null);
+  const proposedNode = nodesByKey.get(result.proposed.nodeKey);
+  assert.ok(proposedNode !== undefined);
+  assert.deepEqual(result.proposed.patch, proposedNode.value.patch);
+  assert.deepEqual(
+    result.proposed.samples,
+    proposedNode.value.samples,
+  );
+  assert.deepEqual(
+    result.samples,
+    renderForTarget(result.patch, sampleCount, phaseModel),
+  );
+  assertPatchMatchesWav(
+    result.patch,
+    result.samples,
+    phaseModel,
+    SAMPLE_RATE,
+    sampleCount,
+  );
+  assert.equal(result.expansionWork, 0);
+  assert.equal(result.evaluatorWork, result.work.used);
+  assert.equal(
+    result.evaluatorWork,
+    result.history.reduce((sum, entry) => sum + entry.cost, 0),
+  );
+  assert.ok(result.work.used <= result.work.budget);
+  assert.equal(
+    result.work.unused,
+    result.work.budget - result.work.used,
+  );
+  assert.deepEqual(result.skips.budget, []);
+}
+
+test('evaluated nodes release solo caches without changing sums, PCM, W or width control', (t) => {
+  const sampleCount = 2048;
+  const atomCount = 2;
+  const phaseModel: PhaseModel = 'legacy';
+  const source: ArgCreateSynth = {
+    oscillators: Array.from({ length: 50 }, (_, index) =>
+      tone(
+        45 + index * 11,
+        0.004 + (index % 4) * 0.001,
+        (index * 0.37) % TWO_PI,
+      ),
+    ),
+  };
+  const target = renderForTarget(source, sampleCount, phaseModel);
+  const baseEstimate = estimateStructuralCandidateWork({
+    sampleCount,
+    atomCount,
+    maxInner: 0,
+    maxBacktracks: 0,
+  });
+  const workBudget =
+    3 * baseEstimate + 12 * (baseEstimate + atomCount * sampleCount);
+  const rssBefore = process.memoryUsage().rss;
+  const control = runNativeStructuralBeamWithWidthControl({
+    patch: source,
+    target,
+    phaseModel,
+    beamWidth: 2,
+    maxDepth: 3,
+    maxGroupSize: atomCount,
+    workBudget,
+    maxInner: 0,
+    maxBacktracks: 0,
+    propose: (parent) => {
+      const firstSlot = (parent.depth * 3) % 47;
+      const slots = [firstSlot, firstSlot + 1];
+      return [0, 1, 2].map((variant) => ({
+        slots,
+        shapes: slots.map((slot, atom) =>
+          shape(
+            65 + slot * 9 + variant * 17 + atom * 3,
+            parent.depth + variant + atom,
+          ),
+        ),
+      }));
+    },
+  });
+
+  assert.equal(control.beam.root.value, control.width1.root.value);
+  assert.equal(control.beam.root.value.contributions?.length, 50);
+  assert.equal(control.beam.evaluated.length, 15);
+  assert.equal(control.width1.evaluated.length, 9);
+  assert.equal(control.beam.work.used, workBudget);
+  assert.equal(
+    control.width1.work.used,
+    3 * baseEstimate + 6 * (baseEstimate + atomCount * sampleCount),
+  );
+  for (const [result, deepCandidates] of [
+    [control.beam, 12],
+    [control.width1, 6],
+  ] as const) {
+    assert.equal(
+      result.history.reduce(
+        (sum, entry) =>
+          sum + entry.canonicalWork.parentContributionRenders,
+        0,
+      ),
+      deepCandidates * atomCount * sampleCount,
+    );
+  }
+  assertNativeMemoryLayout(control.beam, sampleCount, phaseModel);
+  assertNativeMemoryLayout(control.width1, sampleCount, phaseModel);
+  const rssAfter = process.memoryUsage().rss;
+  t.diagnostic(
+    `bounded 50-atom fixture retained 24 evaluated nodes; ` +
+      `RSS ${(rssAfter / 2 ** 20).toFixed(1)} MiB ` +
+      `(delta ${((rssAfter - rssBefore) / 2 ** 20).toFixed(1)} MiB); ` +
+      'диагностика без абсолютного RSS-порога',
+  );
 });

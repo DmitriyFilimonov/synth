@@ -65,13 +65,21 @@ export interface NativeStructuralState {
   metrics: RefitMetrics;
   /** Сумма canonical contribution без clip; off slots не добавляют энергию. */
   rawSum: Float64Array;
-  /** По одному cached contribution на слот; off slot хранит null. */
-  contributions: readonly (Float64Array | null)[];
+  /**
+   * Полный solo-cache есть только у root для совместимости. Evaluated node
+   * хранит null и не удерживает 50 буферов длины N. При null evaluator
+   * рендерит по одному только старые selected contributions parent.patch.
+   */
+  contributions: readonly (Float64Array | null)[] | null;
   /** Root хранит null, а evaluated node — весь solver/canonical аудит. */
   evaluation: NativeStructuralEvaluation | null;
 }
 
-/** Parent с metadata пути, переданный injected `propose(parent)`. */
+/**
+ * Parent с metadata пути, переданный injected `propose(parent)`.
+ * Proposer читает patch/PCM напрямую: contributions равен null у evaluated
+ * parent, а полный root cache не является обязательным входным контрактом.
+ */
 export interface NativeStructuralParent extends NativeStructuralState {
   depth: number;
   nodeKey: string;
@@ -144,6 +152,8 @@ export type NativeStructuralProposerSessionFactory =
 /** Раздельный учёт canonical N-проходов вне solver ledger. */
 export interface NativeStructuralCanonicalWork {
   fixedOffsetCopy: number;
+  /** Старые selected renders, нужные только при parent.contributions=null. */
+  parentContributionRenders: number;
   selectedContributionRenders: number;
   rawSumAssembly: number;
   canonicalRender: number;
@@ -393,8 +403,9 @@ function assertWorkBudget(value: number): void {
  * rawSum, полный render, повторный assert и независимые global/J. На каждую
  * inner-попытку отводятся все masked norms/dots, `maxBacktracks + 1` полных
  * objective и mask comparison. Поэтому bound покрывает и accepted mask change,
- * и rejected backtracks последней попытки. Dense P×P/Jacobi сюда не
- * складываются.
+ * и rejected backtracks последней попытки. Это базовая оценка для root;
+ * `prepareNativeStructuralProposal` дополнительно добавляет `atomCount * N`
+ * для parent без cached contributions. Dense P×P/Jacobi сюда не складываются.
  */
 export function estimateStructuralCandidateWork(arg: {
   sampleCount: number;
@@ -732,16 +743,21 @@ function prepareNativeStructuralProposal(
     structuralAtomShapeKey(shape),
   );
   const key = JSON.stringify([parent.nodeKey, slots, shapeKeys]);
+  const parentContributionEstimate =
+    parent.value.contributions === null
+      ? atomCount * context.target.length
+      : 0;
   return {
     key,
     value: { slots, shapes },
     groupSize: atomCount,
-    estimatedWork: estimateStructuralCandidateWork({
-      sampleCount: context.target.length,
-      atomCount,
-      maxInner: context.maxInner,
-      maxBacktracks: context.maxBacktracks,
-    }),
+    estimatedWork:
+      estimateStructuralCandidateWork({
+        sampleCount: context.target.length,
+        atomCount,
+        maxInner: context.maxInner,
+        maxBacktracks: context.maxBacktracks,
+      }) + parentContributionEstimate,
   };
 }
 
@@ -749,6 +765,7 @@ function prepareNativeStructuralProposal(
 function emptyCanonicalWork(): NativeStructuralCanonicalWork {
   return {
     fixedOffsetCopy: 0,
+    parentContributionRenders: 0,
     selectedContributionRenders: 0,
     rawSumAssembly: 0,
     canonicalRender: 0,
@@ -770,18 +787,36 @@ function addCanonicalWork(
   work.total += added;
 }
 
-/** Вычитает старые selected contributions ровно один раз из parent rawSum. */
+/**
+ * Вычитает старые selected contributions ровно один раз из parent rawSum.
+ * Без root cache каждый активный selected group рендерится отдельно и его
+ * временный solo-buffer освобождается на следующей итерации. Полный набор
+ * contributions для evaluated parent не создаётся.
+ */
 function nativeFixedOffset(arg: {
   parent: NativeStructuralState;
   slots: readonly number[];
+  phaseModel: PhaseModel;
   ledger: StructuralWorkLedger;
   canonicalWork: NativeStructuralCanonicalWork;
 }): Float64Array {
   const sampleCount = arg.parent.rawSum.length;
   const fixedOffset = new Float64Array(arg.parent.rawSum);
   addCanonicalWork(arg.canonicalWork, 'fixedOffsetCopy', sampleCount);
+  const cached = arg.parent.contributions;
   for (const slot of arg.slots) {
-    const previous = arg.parent.contributions[slot] ?? null;
+    let previous = cached?.[slot] ?? null;
+    if (cached === null) {
+      const group = arg.parent.patch.oscillators[slot];
+      if (group?.osc.on === true) {
+        previous = renderGroup(group, sampleCount, arg.phaseModel);
+        addCanonicalWork(
+          arg.canonicalWork,
+          'parentContributionRenders',
+          sampleCount,
+        );
+      }
+    }
     if (previous === null) {
       continue;
     }
@@ -814,21 +849,21 @@ function initialNativeCoefficients(
   return coefficients;
 }
 
-/** Рендерит новые selected groups и собирает следующий canonical rawSum. */
-function nextNativeContributions(arg: {
-  parent: NativeStructuralState;
+/**
+ * Рендерит новые selected groups и собирает следующий canonical rawSum.
+ * Solo-buffers живут только до возврата функции: evaluated state получает
+ * rawSum, но не клонирует и не сохраняет полный contributions array.
+ */
+function nextNativeRawSum(arg: {
   patch: ArgCreateSynth;
   proposal: NativeStructuralProposal;
   fixedOffset: Float64Array;
   phaseModel: PhaseModel;
   canonicalWork: NativeStructuralCanonicalWork;
-}): {
-  contributions: (Float64Array | null)[];
-  rawSum: Float64Array;
-} {
+}): Float64Array {
   const sampleCount = arg.fixedOffset.length;
-  const contributions = [...arg.parent.contributions];
-  const selected: Float64Array[] = [];
+  const rawSum = new Float64Array(arg.fixedOffset);
+  addCanonicalWork(arg.canonicalWork, 'rawSumAssembly', sampleCount);
   for (const slot of arg.proposal.slots) {
     const group = arg.patch.oscillators[slot];
     if (group === undefined) {
@@ -839,18 +874,11 @@ function nextNativeContributions(arg: {
       sampleCount,
       arg.phaseModel,
     );
-    contributions[slot] = contribution;
-    selected.push(contribution);
     addCanonicalWork(
       arg.canonicalWork,
       'selectedContributionRenders',
       sampleCount,
     );
-  }
-  contributions.length = arg.patch.oscillators.length;
-  const rawSum = new Float64Array(arg.fixedOffset);
-  addCanonicalWork(arg.canonicalWork, 'rawSumAssembly', sampleCount);
-  for (const contribution of selected) {
     for (let sample = 0; sample < sampleCount; sample += 1) {
       rawSum[sample] =
         (rawSum[sample] ?? 0) + (contribution[sample] ?? 0);
@@ -861,7 +889,7 @@ function nextNativeContributions(arg: {
       sampleCount,
     );
   }
-  return { contributions, rawSum };
+  return rawSum;
 }
 
 /** Выполняет basis+solver, затем независимо измеряет canonical patch/PCM. */
@@ -876,6 +904,7 @@ function evaluateNativeStructuralCandidate(
   const fixedOffset = nativeFixedOffset({
     parent: parent.value,
     slots: candidate.value.slots,
+    phaseModel: context.phaseModel,
     ledger,
     canonicalWork,
   });
@@ -903,8 +932,7 @@ function evaluateNativeStructuralCandidate(
     shapes: candidate.value.shapes,
     coefficients: solver.coefficients,
   });
-  const { contributions, rawSum } = nextNativeContributions({
-    parent: parent.value,
+  const rawSum = nextNativeRawSum({
     patch,
     proposal: candidate.value,
     fixedOffset,
@@ -964,7 +992,7 @@ function evaluateNativeStructuralCandidate(
       samples,
       metrics,
       rawSum,
-      contributions,
+      contributions: null,
       evaluation,
     },
     score: metrics,
@@ -1278,9 +1306,13 @@ function executeNativeStructuralBeam(
  * @returns Saved patch/WAV, лучший proposed candidate и полный аудит
  * @throws Error при невалидном входе, нарушении estimate/W или ошибке
  *   proposer/evaluator
- * @remarks Proposer получает patch/PCM/global/J/rawSum/contributions
- * текущего узла. Каждый proposal заново решает все 2K коэффициенты
- * против `target−fixedOffset`. `bestAny` включает root, а `proposed`
+ * @remarks Proposer получает patch/PCM/global/J/rawSum текущего узла.
+ * Полный contributions cache остаётся только у root; evaluated parent
+ * передаёт null, поэтому proposer использует patch напрямую. Evaluator
+ * при необходимости перерендеривает только старые selected slots и
+ * добавляет их верхнюю стоимость K*N к candidate estimate. Каждый proposal
+ * заново решает все 2K коэффициенты против `target−fixedOffset`.
+ * `bestAny` включает root, а `proposed`
  * сохраняет лучший evaluated candidate даже тогда, когда saved guard
  * возвращает исходник.
  * `work.used = evaluatorWork + expansionWork <= workBudget`, а
