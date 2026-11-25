@@ -194,6 +194,9 @@ CD сохраняет прежний return `{vector,history}` и default golden
 Частотные производные integral-фазы проходят через canonical `createCyclePhase`, поэтому используют ту же таблицу трапеций и интерполяцию. Отдельные ветки сохраняют attack, clamp, hard support, амплитудный хвост endLevel и частотный хвост MIN. Finite guards отклоняют нечисловой результат. Нормированный MGS сообщает rank, нулевые, повторные и почти коллинеарные столбцы; на горячем пути будущего solver диагностику можно отключить.
 
 Семь known-answer тестов сравнивают значения с `createOscillatorGroup`, все семь осей с центральными разностями в гладких точках обеих фаз, а kink проверяют односторонне. Отдельно покрыты смешанный patch с off-слотом, неизменность входа и вырожденные столбцы. Проверки: 7/7 профильных тестов с независимыми central differences через canonical renderer, полный комплекс 274/274, TypeScript, Prettier, target ESLint и diff check. Реальные A/B/CD и nonlinear solver не запускались: это фундамент гипотезы T36, не результат и не закон качества.
+## 2026-11-24: v1.17.0 опубликована
+
+Аннотированный тег `v1.17.0` и master указывают на `21ae21082af70407e9898609573fb8d8692bb509`. Чистый клон прошёл 267/267 тестов, backend и web build, Prettier и lint без ошибок. Выпуск содержит offline localized high/transient-атом и ulp-исправление. GrumU v2 получил NO GO: mean saved +0.015092 п.п., improved 2/4 и character WARN на обоих accepted. Это воспроизводимый отрицательный результат, не улучшение production.
 
 ## 2026-11-24: localized high-атом получил NO GO на GrumU
 
