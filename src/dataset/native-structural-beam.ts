@@ -41,14 +41,29 @@ import {
 import {
   runStructuralBeam,
   type StructuralBeamCandidate,
+  type StructuralBeamCompactResult,
   type StructuralBeamEvaluation,
   type StructuralBeamNode,
+  type StructuralBeamOptions,
   type StructuralBeamResult,
 } from './structural-beam';
+import {
+  aggregateNativeStructuralDenseWork,
+  compactNativeStructuralHistory,
+  compactNativeStructuralValue,
+  type NativeStructuralAuditState,
+  type NativeStructuralCompactHistoryEntry,
+  type NativeStructuralCompactNode,
+} from './native-structural-audit';
 import {
   normalizeStructuralExpansion,
   type StructuralExpansionResult,
 } from './structural-expansion';
+import {
+  jsonArrayOrderToken,
+  jsonStringOrderToken,
+  orderTokenFromRaw,
+} from './structural-key-order';
 import {
   addStructuralSampleWork,
   createStructuralWorkLedger,
@@ -57,6 +72,14 @@ import {
   type StructuralSampleWork,
   type StructuralWorkLedger,
 } from './structural-work';
+
+export type {
+  JointKQuadratureAudit,
+  NativeStructuralAuditState,
+  NativeStructuralCompactHistoryEntry,
+  NativeStructuralCompactNode,
+  NativeStructuralEvaluationAudit,
+} from './native-structural-audit';
 
 /** Canonical native-состояние, которое proposer получает без vector conversion. */
 export interface NativeStructuralState {
@@ -237,6 +260,8 @@ export interface NativeStructuralBeamBaseOptions {
    * `assertPatchMatchesWav`. Production runner сюда не подключается.
    */
   assertCanonical?: NativeStructuralCanonicalAssert;
+  /** Полностью legacy full audit остаётся режимом по умолчанию. */
+  auditMode?: 'full';
 }
 
 /**
@@ -249,23 +274,38 @@ export interface NativeStructuralBeamBaseOptions {
  * `propose` или внутри session, относится только к measured
  * expansion и использует те же caller-defined единицы W.
  */
-export type NativeStructuralBeamOptions =
-  NativeStructuralBeamBaseOptions &
-    (
-      | {
-          propose: NativeStructuralPropose;
-          estimateExpansion?: NativeStructuralExpansionEstimate;
-          createProposerSession?: never;
-        }
-      | {
-          propose?: never;
-          estimateExpansion?: never;
-          createProposerSession: NativeStructuralProposerSessionFactory;
-        }
-    );
+export type NativeStructuralProposerOptions =
+  | {
+      propose: NativeStructuralPropose;
+      estimateExpansion?: NativeStructuralExpansionEstimate;
+      createProposerSession?: never;
+    }
+  | {
+      propose?: never;
+      estimateExpansion?: never;
+      createProposerSession: NativeStructuralProposerSessionFactory;
+    };
 
-/** Saved fallback, proposed candidate и полный beam/work аудит. */
-export interface NativeStructuralBeamResult {
+/** Прежний full/default вход без обязательного режима. */
+export type NativeStructuralBeamOptions =
+  NativeStructuralBeamBaseOptions & NativeStructuralProposerOptions;
+
+/**
+ * Opt-in вход с bounded IDs и light evaluated/depths/path/history.
+ * Exact legacy ordering остаётся в скрытых lazy order tokens.
+ */
+export type NativeStructuralCompactBeamOptions = Omit<
+  NativeStructuralBeamBaseOptions,
+  'auditMode'
+> & {
+  auditMode: 'compact';
+} & NativeStructuralProposerOptions;
+
+type AnyNativeStructuralBeamOptions =
+  NativeStructuralBeamOptions | NativeStructuralCompactBeamOptions;
+
+/** Общий saved/proposed/root/work результат обоих режимов аудита. */
+interface NativeStructuralBeamResultCommon {
   status: 'refined' | 'unchanged';
   patch: ArgCreateSynth;
   samples: Int16Array;
@@ -276,15 +316,6 @@ export interface NativeStructuralBeamResult {
   canonicalError: string | null;
   root: NativeStructuralNode;
   bestAny: NativeStructuralNode;
-  bestPath: NativeStructuralNode[];
-  /** Короткий alias того же пути от root до bestAny. */
-  path: NativeStructuralNode[];
-  depths: StructuralBeamResult<
-    NativeStructuralState,
-    RefitMetrics
-  >['depths'];
-  evaluated: NativeStructuralNode[];
-  history: NativeStructuralHistoryEntry[];
   work: StructuralBeamResult<
     NativeStructuralState,
     RefitMetrics
@@ -330,10 +361,48 @@ export interface NativeStructuralBeamResult {
   finalizationSampleWork: number;
 }
 
-/** Две ветви делят один prepared canonical root и исходный W. */
+/**
+ * Полностью legacy full audit с canonical values у всех evaluated nodes,
+ * recursive keys и raw-string ordering.
+ */
+export interface NativeStructuralBeamResult extends NativeStructuralBeamResultCommon {
+  bestPath: NativeStructuralNode[];
+  /** Короткий alias того же пути от root до bestAny. */
+  path: NativeStructuralNode[];
+  depths: StructuralBeamResult<
+    NativeStructuralState,
+    RefitMetrics
+  >['depths'];
+  evaluated: NativeStructuralNode[];
+  history: NativeStructuralHistoryEntry[];
+}
+
+/**
+ * Compact audit хранит light history без N-мерных arrays и order tokens;
+ * подробные root/bestAny/proposed/saved остаются отдельно.
+ */
+export interface CompactNativeStructuralBeamResult extends NativeStructuralBeamResultCommon {
+  bestPath: NativeStructuralCompactNode[];
+  path: NativeStructuralCompactNode[];
+  depths: StructuralBeamCompactResult<
+    NativeStructuralState,
+    RefitMetrics,
+    NativeStructuralAuditState
+  >['depths'];
+  evaluated: NativeStructuralCompactNode[];
+  history: NativeStructuralCompactHistoryEntry[];
+}
+
+/** Две полные ветви делят один prepared canonical root и исходный W. */
 export interface NativeStructuralWidthControlResult {
   beam: NativeStructuralBeamResult;
   width1: NativeStructuralBeamResult;
+}
+
+/** Две compact-ветви с независимыми proposer sessions и light history. */
+export interface CompactNativeStructuralWidthControlResult {
+  beam: CompactNativeStructuralBeamResult;
+  width1: CompactNativeStructuralBeamResult;
 }
 
 type PreparedNativeProposer =
@@ -503,7 +572,7 @@ function assertFiniteMetrics(metrics: RefitMetrics): void {
 
 /** Проверяет взаимно исключающие stateless и session-factory входы. */
 function prepareNativeProposer(
-  options: NativeStructuralBeamOptions,
+  options: AnyNativeStructuralBeamOptions,
 ): PreparedNativeProposer {
   const direct = options.propose;
   const factory = options.createProposerSession;
@@ -574,12 +643,19 @@ function createNativeProposerSession(
 
 /** Проверяет вход и один раз нормализует continuous target для solver. */
 function prepareNativeStructuralRun(
-  options: NativeStructuralBeamOptions,
+  options: AnyNativeStructuralBeamOptions,
 ): PreparedNativeRun {
   assertInteger(options.beamWidth, 'beamWidth', 1);
   assertInteger(options.maxDepth, 'maxDepth', 0);
   assertInteger(options.maxGroupSize, 'maxGroupSize', 1);
   assertWorkBudget(options.workBudget);
+  if (
+    options.auditMode !== undefined &&
+    options.auditMode !== 'full' &&
+    options.auditMode !== 'compact'
+  ) {
+    throw new Error('Invalid native structural audit mode');
+  }
   const maxInner =
     options.maxInner ?? DEFAULT_JOINT_K_QUADRATURE_OPTIONS.maxInner;
   const maxBacktracks =
@@ -742,23 +818,34 @@ function prepareNativeStructuralProposal(
   const shapeKeys = shapes.map((shape) =>
     structuralAtomShapeKey(shape),
   );
+  // Full получает прежний recursive parent key. Compact использует bounded ID,
+  // но отдельный orderToken ниже повторяет legacy JSON точно и не копирует rope.
   const key = JSON.stringify([parent.nodeKey, slots, shapeKeys]);
   const parentContributionEstimate =
     parent.value.contributions === null
       ? atomCount * context.target.length
       : 0;
-  return {
-    key,
-    value: { slots, shapes },
-    groupSize: atomCount,
-    estimatedWork:
-      estimateStructuralCandidateWork({
-        sampleCount: context.target.length,
-        atomCount,
-        maxInner: context.maxInner,
-        maxBacktracks: context.maxBacktracks,
-      }) + parentContributionEstimate,
-  };
+  const candidate: StructuralBeamCandidate<NativeStructuralProposal> =
+    {
+      key,
+      value: { slots, shapes },
+      groupSize: atomCount,
+      estimatedWork:
+        estimateStructuralCandidateWork({
+          sampleCount: context.target.length,
+          atomCount,
+          maxInner: context.maxInner,
+          maxBacktracks: context.maxBacktracks,
+        }) + parentContributionEstimate,
+    };
+  if (parent.orderToken !== undefined) {
+    candidate.orderToken = jsonArrayOrderToken([
+      jsonStringOrderToken(parent.orderToken),
+      orderTokenFromRaw(JSON.stringify(slots)),
+      orderTokenFromRaw(JSON.stringify(shapeKeys)),
+    ]);
+  }
+  return candidate;
 }
 
 /** Создаёт пустой canonical ledger; total не смешивается с dense-work. */
@@ -1023,6 +1110,14 @@ function proposedFromNode(
   };
 }
 
+type NativeStructuralSearchResult =
+  | StructuralBeamResult<NativeStructuralState, RefitMetrics>
+  | StructuralBeamCompactResult<
+      NativeStructuralState,
+      RefitMetrics,
+      NativeStructuralAuditState
+    >;
+
 /** Если root лучше всех, всё равно сохраняет лучший evaluated для аудита. */
 function bestEvaluatedNode(
   result: StructuralBeamResult<NativeStructuralState, RefitMetrics>,
@@ -1061,12 +1156,13 @@ function unchangedNativeResult(arg: {
 
 /** Повторно рендерит победителя и отделяет proposed от saved после guard. */
 function finalizeNativeStructuralCandidate(
-  result: StructuralBeamResult<NativeStructuralState, RefitMetrics>,
+  result: NativeStructuralSearchResult,
   context: PreparedNativeRun,
+  bestEvaluated: NativeStructuralNode | null,
 ): FinalizedNativeStructuralResult {
   const proposedNode =
     result.bestAny.candidateKey === null
-      ? bestEvaluatedNode(result)
+      ? bestEvaluated
       : result.bestAny;
   const proposed =
     proposedNode === null ? null : proposedFromNode(proposedNode);
@@ -1151,31 +1247,6 @@ function finalizeNativeStructuralCandidate(
   };
 }
 
-/** Суммирует только dense categories; candidate W остаётся N-pass величиной. */
-function aggregateDenseWork(
-  evaluated: readonly NativeStructuralNode[],
-): StructuralDenseWork {
-  const total = createStructuralWorkLedger().denseWork;
-  const categories: (keyof StructuralDenseWork)[] = [
-    'gramCellUpdates',
-    'jacobiMatrixEntries',
-    'jacobiOffDiagonalScans',
-    'jacobiRotations',
-    'jacobiRotationElementUpdates',
-    'pseudoInverseEntries',
-  ];
-  for (const node of evaluated) {
-    const work = node.value.evaluation?.denseWork;
-    if (work === undefined) {
-      continue;
-    }
-    for (const category of categories) {
-      total[category] += work[category];
-    }
-  }
-  return total;
-}
-
 /** Разворачивает evaluator audit в отдельную историю вызовов. */
 function nativeHistory(
   evaluated: readonly NativeStructuralNode[],
@@ -1217,22 +1288,41 @@ function nativeStructuralParent(
   };
 }
 
-/** Запускает scheduler с новой proposer session и независимым ledger ветви. */
+/** Запускает compact scheduler и сохраняет только light history ветви. */
 function executeNativeStructuralBeam(
   context: PreparedNativeRun,
   beamWidth: number,
   maxDepth: number,
   maxGroupSize: number,
   workBudget: number,
-): NativeStructuralBeamResult {
+  auditMode: 'compact',
+): CompactNativeStructuralBeamResult;
+/** Запускает прежний full scheduler без compact lifecycle. */
+function executeNativeStructuralBeam(
+  context: PreparedNativeRun,
+  beamWidth: number,
+  maxDepth: number,
+  maxGroupSize: number,
+  workBudget: number,
+  auditMode: 'full',
+): NativeStructuralBeamResult;
+/** Разделяет полный поисковый state и выбранное представление истории. */
+function executeNativeStructuralBeam(
+  context: PreparedNativeRun,
+  beamWidth: number,
+  maxDepth: number,
+  maxGroupSize: number,
+  workBudget: number,
+  auditMode: 'full' | 'compact',
+): NativeStructuralBeamResult | CompactNativeStructuralBeamResult {
   const proposer = createNativeProposerSession(context);
   const propose = proposer.propose;
   const estimateExpansion = proposer.estimateExpansion;
-  const beam = runStructuralBeam<
+  const schedulerOptions: StructuralBeamOptions<
     NativeStructuralState,
     RefitMetrics,
     NativeStructuralProposal
-  >({
+  > = {
     root: {
       key: ROOT_KEY,
       value: context.rootState,
@@ -1264,9 +1354,44 @@ function executeNativeStructuralBeam(
     evaluate: (candidate, parent) =>
       evaluateNativeStructuralCandidate(candidate, parent, context),
     compareScores: compareNativeScores,
-  });
-  const finalized = finalizeNativeStructuralCandidate(beam, context);
-  return {
+  };
+  let beam: NativeStructuralSearchResult;
+  let bestEvaluated: NativeStructuralNode | null = null;
+  if (auditMode === 'compact') {
+    beam = runStructuralBeam<
+      NativeStructuralState,
+      RefitMetrics,
+      NativeStructuralProposal,
+      NativeStructuralAuditState
+    >({
+      ...schedulerOptions,
+      compact: {
+        compactValue: compactNativeStructuralValue,
+        onEvaluated: (node) => {
+          if (
+            bestEvaluated === null ||
+            compareNativeScores(node.score, bestEvaluated.score) > 0
+          ) {
+            bestEvaluated = { ...node };
+          }
+        },
+      },
+    });
+  } else {
+    const fullBeam = runStructuralBeam<
+      NativeStructuralState,
+      RefitMetrics,
+      NativeStructuralProposal
+    >(schedulerOptions);
+    beam = fullBeam;
+    bestEvaluated = bestEvaluatedNode(fullBeam);
+  }
+  const finalized = finalizeNativeStructuralCandidate(
+    beam,
+    context,
+    bestEvaluated,
+  );
+  const common = {
     status: finalized.status,
     patch: finalized.patch,
     samples: finalized.samples,
@@ -1277,11 +1402,6 @@ function executeNativeStructuralBeam(
     canonicalError: finalized.canonicalError,
     root: beam.root,
     bestAny: beam.bestAny,
-    bestPath: beam.bestPath,
-    path: beam.bestPath,
-    depths: beam.depths,
-    evaluated: beam.evaluated,
-    history: nativeHistory(beam.evaluated),
     work: beam.work,
     evaluatorWork: beam.evaluatorWork,
     expansionWork: beam.expansionWork,
@@ -1292,8 +1412,38 @@ function executeNativeStructuralBeam(
       expansionBudget: beam.skippedExpansionBudget,
       groupSize: beam.skippedGroupSize,
     },
-    denseWork: aggregateDenseWork(beam.evaluated),
     finalizationSampleWork: finalized.finalizationSampleWork,
+  };
+  if (auditMode === 'compact') {
+    const compactBeam = beam as StructuralBeamCompactResult<
+      NativeStructuralState,
+      RefitMetrics,
+      NativeStructuralAuditState
+    >;
+    return {
+      ...common,
+      bestPath: compactBeam.bestPath,
+      path: compactBeam.bestPath,
+      depths: compactBeam.depths,
+      evaluated: compactBeam.evaluated,
+      history: compactNativeStructuralHistory(compactBeam.evaluated),
+      denseWork: aggregateNativeStructuralDenseWork(
+        compactBeam.evaluated,
+      ),
+    };
+  }
+  const fullBeam = beam as StructuralBeamResult<
+    NativeStructuralState,
+    RefitMetrics
+  >;
+  return {
+    ...common,
+    bestPath: fullBeam.bestPath,
+    path: fullBeam.bestPath,
+    depths: fullBeam.depths,
+    evaluated: fullBeam.evaluated,
+    history: nativeHistory(fullBeam.evaluated),
+    denseWork: aggregateNativeStructuralDenseWork(fullBeam.evaluated),
   };
 }
 
@@ -1301,9 +1451,10 @@ function executeNativeStructuralBeam(
  * Запускает deterministic native synthetic beam от canonical source
  * baseline.
  *
- * @param options - Исходный patch/PCM, пределы beam/W и источник
- *   proposals
- * @returns Saved patch/WAV, лучший proposed candidate и полный аудит
+ * @param options - Исходный patch/PCM, пределы beam/W, источник proposals
+ *   и audit mode
+ * @returns Saved patch/WAV, лучший proposed candidate и выбранный full или
+ *   compact audit
  * @throws Error при невалидном входе, нарушении estimate/W или ошибке
  *   proposer/evaluator
  * @remarks Proposer получает patch/PCM/global/J/rawSum текущего узла.
@@ -1321,17 +1472,47 @@ function executeNativeStructuralBeam(
  * generic estimate/W guard. Dense-work, proposer work и одноразовый
  * финальный guard опубликованы отдельно. CD и реальные runner'ы не
  * вызываются.
+ *
+ * По умолчанию `auditMode='full'` полностью сохраняет legacy-путь: прежние
+ * buffers, recursive keys, raw-string ordering и history; order tokens и
+ * compact adapter не используются.
+ *
+ * При `compact` bounded public IDs служат только identity. Non-enumerable
+ * `orderToken` и `candidateOrderToken` хранят lazy persistent ropes точного
+ * legacy ordering. Light evaluated/depths/path/history не содержат N-мерные
+ * fixedOffset/rawSum/raw/PCM или order tokens. Root, bestAny, proposed и saved
+ * остаются полными; proposer получает полные retained parents. Compact меняет
+ * только хранение аудита и не меняет W, evaluator/proposer calls, solver или
+ * saved guard.
  */
 export function runNativeStructuralBeam(
+  options: NativeStructuralCompactBeamOptions,
+): CompactNativeStructuralBeamResult;
+export function runNativeStructuralBeam(
   options: NativeStructuralBeamOptions,
-): NativeStructuralBeamResult {
+): NativeStructuralBeamResult;
+export function runNativeStructuralBeam(
+  options: AnyNativeStructuralBeamOptions,
+): NativeStructuralBeamResult | CompactNativeStructuralBeamResult {
   const context = prepareNativeStructuralRun(options);
+  const auditMode = options.auditMode ?? 'full';
+  if (auditMode === 'compact') {
+    return executeNativeStructuralBeam(
+      context,
+      options.beamWidth,
+      options.maxDepth,
+      options.maxGroupSize,
+      options.workBudget,
+      'compact',
+    );
+  }
   return executeNativeStructuralBeam(
     context,
     options.beamWidth,
     options.maxDepth,
     options.maxGroupSize,
     options.workBudget,
+    'full',
   );
 }
 
@@ -1339,8 +1520,10 @@ export function runNativeStructuralBeam(
  * Сравнивает заданную ширину с width-1 от одного canonical root и
  * одного W.
  *
- * @param options - Общий canonical вход и правила обоих beam-запусков
- * @returns Результаты заданной ширины и независимой width-1 ветви
+ * @param options - Общий canonical вход, audit mode и правила обоих
+ *   запусков
+ * @returns Full или compact результаты заданной ширины и независимой
+ *   width-1 ветви
  * @throws Error при невалидном входе, нарушении estimate/W или ошибке
  *   proposer/evaluator
  * @remarks Обе ветви получают одинаковые expansion rules и W, но
@@ -1349,18 +1532,48 @@ export function runNativeStructuralBeam(
  * каждой ветви, поэтому stateful budget/history первой ветви не влияет
  * на вторую. Прямой stateless `propose` сохраняется. Общий root
  * подготавливается один раз; scheduler не переиспользует score или
- * PCM другой ветви.
+ * PCM другой ветви. Выбранный `auditMode` действует на обе ветви и не меняет
+ * W, solver calls или saved guard.
  */
 export function runNativeStructuralBeamWithWidthControl(
+  options: NativeStructuralCompactBeamOptions,
+): CompactNativeStructuralWidthControlResult;
+export function runNativeStructuralBeamWithWidthControl(
   options: NativeStructuralBeamOptions,
-): NativeStructuralWidthControlResult {
+): NativeStructuralWidthControlResult;
+export function runNativeStructuralBeamWithWidthControl(
+  options: AnyNativeStructuralBeamOptions,
+):
+  | NativeStructuralWidthControlResult
+  | CompactNativeStructuralWidthControlResult {
   const context = prepareNativeStructuralRun(options);
+  const auditMode = options.auditMode ?? 'full';
+  if (auditMode === 'compact') {
+    const beam = executeNativeStructuralBeam(
+      context,
+      options.beamWidth,
+      options.maxDepth,
+      options.maxGroupSize,
+      options.workBudget,
+      'compact',
+    );
+    const width1 = executeNativeStructuralBeam(
+      context,
+      1,
+      options.maxDepth,
+      options.maxGroupSize,
+      options.workBudget,
+      'compact',
+    );
+    return { beam, width1 };
+  }
   const beam = executeNativeStructuralBeam(
     context,
     options.beamWidth,
     options.maxDepth,
     options.maxGroupSize,
     options.workBudget,
+    'full',
   );
   const width1 = executeNativeStructuralBeam(
     context,
@@ -1368,6 +1581,7 @@ export function runNativeStructuralBeamWithWidthControl(
     options.maxDepth,
     options.maxGroupSize,
     options.workBudget,
+    'full',
   );
   return { beam, width1 };
 }

@@ -30,7 +30,7 @@ import { writeWav } from '../write-wav';
 import { assertPatchMatchesWav } from './beat-transfer-run';
 import {
   runNativeStructuralBeamWithWidthControl,
-  type NativeStructuralBeamOptions,
+  type NativeStructuralCompactBeamOptions,
   type NativeStructuralProposal,
 } from './native-structural-beam';
 import { measureMetrics, renderForTarget } from './quadrature-refit';
@@ -561,6 +561,7 @@ test('generic source and separate target produce actual canonical native candida
     assert.equal(branch.algorithmOptions.maxDepth, 1);
     assert.equal(branch.algorithmOptions.maxInner, 1);
     assert.equal(branch.algorithmOptions.maxBacktracks, 0);
+    assert.equal(branch.algorithmOptions.auditMode, 'compact');
     assert.ok(branch.work.used > 0);
     assert.ok(branch.work.used <= TEST_WORK_BUDGET);
     assert.equal(
@@ -635,7 +636,26 @@ test('generic source and separate target produce actual canonical native candida
       branch.history,
     );
     assert.equal(history.length, 1);
-    assert.ok(Array.isArray(history[0]?.fixedOffset));
+    const historyEntry = history[0];
+    assert.ok(historyEntry !== undefined);
+    assert.equal('fixedOffset' in historyEntry, false);
+    assert.equal('rawSum' in historyEntry, false);
+    const solver = historyEntry.solver;
+    assert.ok(typeof solver === 'object' && solver !== null);
+    const compactSolver = solver as Record<string, unknown>;
+    assert.equal('raw' in compactSolver, false);
+    assert.equal('samples' in compactSolver, false);
+    assert.equal('basis' in compactSolver, false);
+    assert.ok(Array.isArray(compactSolver.coefficients));
+    assert.ok(Array.isArray(compactSolver.fits));
+    assert.equal(typeof compactSolver.stopReason, 'string');
+    const metrics = historyEntry.metrics;
+    assert.ok(typeof metrics === 'object' && metrics !== null);
+    assert.equal(
+      typeof (metrics as Record<string, unknown>)
+        .globalSuppressionPercent,
+      'number',
+    );
     const audit = await readJson<Record<string, unknown>>(
       branch.audit,
     );
@@ -1093,7 +1113,7 @@ test('native options still use one factory per branch when runner captures snaps
   const root = await createTempRoot();
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const tree = await writeSyntheticSeed({ root, seed: 1 });
-  const factories: NativeStructuralBeamOptions[] = [];
+  const factories: NativeStructuralCompactBeamOptions[] = [];
   const dependencies = knownAnswerDependencies(tree, {
     runBeam: (options) => {
       factories.push(options);
@@ -1112,6 +1132,7 @@ test('native options still use one factory per branch when runner captures snaps
     'function',
   );
   assert.equal(nativeOptions.propose, undefined);
+  assert.equal(nativeOptions.auditMode, 'compact');
   assert.equal(nativeOptions.workBudget, TEST_WORK_BUDGET);
   const run = report.runs[0];
   assert.ok(run !== undefined);
@@ -1238,8 +1259,64 @@ test('automatic residual FFT drives a real native candidate without injections o
     assert.ok(branch.work.evaluatorWork > 0);
     assert.equal(branch.work.expansionWork, branch.proposer.cost);
     assert.equal(branch.work.finalizationSampleWork, 5 * sampleCount);
+    assert.equal(branch.guards.canonical, true);
+    assert.equal(branch.guards.global, true);
+    assert.equal(branch.guards.windowed, true);
+    assert.equal(branch.guards.immutable, true);
     assert.equal(branch.guards.work, true);
+    assert.equal(branch.algorithmOptions.auditMode, 'compact');
+
+    const savedPatch = await readJson<ArgCreateSynth>(branch.patch);
+    const savedWav = readWav(branch.wav);
+    assertPatchMatchesWav(
+      savedPatch,
+      savedWav.samples,
+      tree.phaseModel,
+      SAMPLE_RATE,
+      sampleCount,
+    );
+    const targetValues = Array.from(targetSamples);
+    const remeasured = await withAttackBoost(tree.attackBoost, () =>
+      measureMetrics(
+        savedWav.samples,
+        targetValues,
+        SAMPLE_RATE,
+        computeUsefulZone(targetValues, SAMPLE_RATE),
+      ),
+    );
+    assert.equal(
+      branch.saved.globalSuppressionPercent,
+      remeasured.globalSuppressionPercent,
+    );
+    assert.equal(
+      branch.saved.windowedSuppressionPercent,
+      remeasured.windowedSuppressionPercent,
+    );
+    const historyText = await readFile(branch.history, 'utf8');
+    const auditText = await readFile(branch.audit, 'utf8');
+    for (const text of [historyText, auditText]) {
+      assert.equal(text.includes('"fixedOffset"'), false);
+      assert.equal(text.includes('"rawSum"'), false);
+      assert.equal(text.includes('"raw":'), false);
+      assert.equal(text.includes('"samples":'), false);
+    }
+    const checkpoint = await readJson<{
+      finished: boolean;
+      report: { seed: number };
+    }>(branch.checkpoint);
+    assert.equal(checkpoint.finished, true);
+    assert.equal(checkpoint.report.seed, 1);
   }
+  const savedReport = await readJson<StructuralBeamScreeningReport>(
+    join(tree.outDir, 'report.json'),
+  );
+  const checkpoint = await readJson<StructuralBeamScreeningReport>(
+    join(tree.outDir, 'checkpoint.json'),
+  );
+  assert.equal(savedReport.finished, true);
+  assert.equal(checkpoint.finished, true);
+  assert.equal(savedReport.errors.length, 0);
+  assert.equal(savedReport.runs.length, 1);
 });
 
 test('main returns 1 for usage and seed errors but 0 for clean NO GO', async (t) => {

@@ -4,8 +4,11 @@
  *
  * Runner читает canonical source из одного дерева, а target и phase/attackBoost
  * из независимого target dataset. Beam и width-1 получают одинаковый W и
- * независимые residual proposer sessions. Runner не вызывает CD, match,
- * enhance или production API и не выносит вердикт Q4.
+ * независимые residual proposer sessions. Runner всегда выбирает compact
+ * native audit, поэтому history не сериализует N-мерные candidate buffers
+ * или order tokens. Compact не меняет W, solver calls, canonical guards или
+ * gate. Runner не вызывает CD, match, enhance или production API и не выносит
+ * вердикт Q4.
  *
  * npx tsx src/dataset/structural-beam-run.ts \
  *   --source-base datasets/block --target-dataset datasets/reference \
@@ -49,8 +52,11 @@ import { writeWav } from '../write-wav';
 import { assertPatchMatchesWav } from './beat-transfer-run';
 import {
   runNativeStructuralBeamWithWidthControl,
-  type NativeStructuralBeamResult,
-  type NativeStructuralHistoryEntry,
+  type CompactNativeStructuralBeamResult,
+  type CompactNativeStructuralWidthControlResult,
+  type NativeStructuralCompactBeamOptions,
+  type NativeStructuralCompactHistoryEntry,
+  type NativeStructuralCompactNode,
   type NativeStructuralNode,
   type NativeStructuralProposed,
 } from './native-structural-beam';
@@ -102,7 +108,9 @@ export interface StructuralBeamCliOptions {
  */
 export interface StructuralBeamRunDependencies {
   /** Позволяет проверить no-op и восстановление attackBoost после ошибки. */
-  runBeam?: typeof runNativeStructuralBeamWithWidthControl;
+  runBeam?: (
+    options: NativeStructuralCompactBeamOptions,
+  ) => CompactNativeStructuralWidthControlResult;
   /** Может задать known-answer windows/shapes/injections; target защищён. */
   configureProposer?: (
     options: ResidualStructuralProposerOptions,
@@ -213,8 +221,8 @@ export interface StructuralBeamBranchReport {
   saved: StructuralBeamMeasurement;
   work: StructuralBeamWorkReport;
   proposer: ResidualStructuralProposerSnapshot;
-  expansions: NativeStructuralBeamResult['expansions'];
-  skips: NativeStructuralBeamResult['skips'];
+  expansions: CompactNativeStructuralBeamResult['expansions'];
+  skips: CompactNativeStructuralBeamResult['skips'];
   path: StructuralBeamPathEntry[];
   rejectionReason: string | null;
   canonicalError: string | null;
@@ -227,6 +235,8 @@ export interface StructuralBeamBranchReport {
     maxInner: number;
     maxBacktracks: number;
     workBudget: number;
+    /** Runner всегда освобождает N-мерные buffers evaluated history. */
+    auditMode: 'compact';
   };
 }
 
@@ -851,7 +861,7 @@ function emptyDenseWork(): StructuralDenseWork {
 
 /** Оставляет в path только metadata и canonical score. */
 function summarizeNode(
-  node: NativeStructuralNode,
+  node: NativeStructuralNode | NativeStructuralCompactNode,
 ): StructuralBeamPathEntry {
   return {
     nodeKey: node.nodeKey,
@@ -1023,19 +1033,11 @@ async function saveAndMeasureCanonical(arg: {
   };
 }
 
-/** Преобразует typed arrays solver в обычные JSON-массивы без numeric keys. */
+/** Сохраняет уже компактную историю без offset/raw/PCM сериализации. */
 function serializableHistory(
-  history: readonly NativeStructuralHistoryEntry[],
+  history: readonly NativeStructuralCompactHistoryEntry[],
 ): unknown[] {
-  return history.map((entry) => ({
-    ...entry,
-    fixedOffset: Array.from(entry.fixedOffset),
-    solver: {
-      ...entry.solver,
-      raw: Array.from(entry.solver.raw),
-      samples: Array.from(entry.solver.samples),
-    },
-  }));
+  return history.map((entry) => ({ ...entry }));
 }
 
 /** Независимые данные ветви, общие для native и no-op. */
@@ -1049,16 +1051,16 @@ interface BranchExecution {
   canonicalError: string | null;
   work: StructuralBeamWorkReport;
   proposer: ResidualStructuralProposerSnapshot;
-  expansions: NativeStructuralBeamResult['expansions'];
-  skips: NativeStructuralBeamResult['skips'];
+  expansions: CompactNativeStructuralBeamResult['expansions'];
+  skips: CompactNativeStructuralBeamResult['skips'];
   path: StructuralBeamPathEntry[];
-  history: NativeStructuralHistoryEntry[];
-  native: NativeStructuralBeamResult | null;
+  history: NativeStructuralCompactHistoryEntry[];
+  native: CompactNativeStructuralBeamResult | null;
 }
 
 /** Отделяет native W от root, dense и одноразового finalization. */
 function nativeWork(
-  result: NativeStructuralBeamResult,
+  result: CompactNativeStructuralBeamResult,
 ): StructuralBeamWorkReport {
   return {
     budget: result.work.budget,
@@ -1076,7 +1078,7 @@ function nativeWork(
 
 /** Снимает сохраняемую часть native ветви, не копируя root PCM в audit. */
 function executionFromNative(
-  result: NativeStructuralBeamResult,
+  result: CompactNativeStructuralBeamResult,
   proposer: ResidualStructuralProposerSnapshot,
 ): BranchExecution {
   return {
@@ -1207,9 +1209,12 @@ function executionWarnings(execution: BranchExecution): string[] {
   return warnings;
 }
 
-/** Полный audit без дублирования больших root/evaluated PCM buffers. */
+/**
+ * Сохраняет compact audit без дублирования root/evaluated PCM buffers
+ * и без order tokens.
+ */
 function nativeAudit(
-  result: NativeStructuralBeamResult | null,
+  result: CompactNativeStructuralBeamResult | null,
 ): unknown {
   if (result === null) {
     return null;
@@ -1386,6 +1391,7 @@ async function saveBranch(arg: {
       maxInner: arg.options.maxInner,
       maxBacktracks: arg.options.maxBacktracks,
       workBudget: arg.options.workBudget,
+      auditMode: 'compact',
     },
   };
   await writeJsonAtomic(
@@ -1418,7 +1424,7 @@ interface CapturedProposer {
 /** Сверяет записанные propose calls с expansion audit конкретной ветви. */
 function proposerCaptureMatches(
   captured: CapturedProposer,
-  result: NativeStructuralBeamResult,
+  result: CompactNativeStructuralBeamResult,
 ): boolean {
   const snapshot = captured.session.snapshot();
   return (
@@ -1444,8 +1450,8 @@ function proposerCaptureMatches(
  */
 function assignProposerSnapshots(
   captures: readonly CapturedProposer[],
-  beam: NativeStructuralBeamResult,
-  width1: NativeStructuralBeamResult,
+  beam: CompactNativeStructuralBeamResult,
+  width1: CompactNativeStructuralBeamResult,
 ): {
   beam: ResidualStructuralProposerSnapshot;
   width1: ResidualStructuralProposerSnapshot;
@@ -1741,6 +1747,7 @@ async function processSeed(arg: {
       workBudget: arg.options.workBudget,
       maxInner: arg.options.maxInner,
       maxBacktracks: arg.options.maxBacktracks,
+      auditMode: 'compact',
       createProposerSession: createCapturedFactory({
         target: loaded.target,
         sampleRate: loaded.sampleRate,
@@ -1900,6 +1907,7 @@ function makeReport(arg: {
       maxInner: arg.options.maxInner,
       maxBacktracks: arg.options.maxBacktracks,
       workBudget: arg.options.workBudget,
+      auditMode: 'compact',
     },
     gate: evaluateFullGate({
       options: arg.options,
@@ -2004,10 +2012,12 @@ async function checkpointReport(arg: {
  * @returns Финальный report даже при ошибках отдельных сидов
  * @throws Error при невалидном manifest/out либо сбое checkpoint; `finally`
  *   всегда восстанавливает прежний attackBoost
- * @remarks Missing/not completed original run становится skip. Corrupt run,
- *   canonical mismatch и прочие ошибки попадают в report, а CLI завершается
- *   с exit code 1. После каждого сида runner атомарно пишет checkpoints и не
- *   удаляет чужие или частично записанные файлы.
+ * @remarks Обе native ветви всегда используют compact audit без N-мерных
+ *   history buffers и order tokens; W, solver calls, canonical guards и gate
+ *   остаются прежними. Missing/not completed original run становится skip.
+ *   Corrupt run, canonical mismatch и прочие ошибки попадают в report, а CLI
+ *   завершается с exit code 1. После каждого сида runner атомарно пишет
+ *   checkpoints и не удаляет чужие или частично записанные файлы.
  */
 export async function runStructuralBeamScreening(
   options: StructuralBeamCliOptions,

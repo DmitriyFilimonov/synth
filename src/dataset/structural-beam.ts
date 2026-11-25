@@ -13,6 +13,13 @@ import {
   type StructuralExpansionRecord as StructuralBeamExpansionRecord,
   type StructuralExpansionResult as GenericStructuralExpansionResult,
 } from './structural-expansion';
+import {
+  compareOrderTokens,
+  jsonArrayOrderToken,
+  jsonStringOrderToken,
+  orderTokenFromRaw,
+  type StructuralKeyOrderToken,
+} from './structural-key-order';
 
 export type {
   StructuralExpansionBudgetSkip as StructuralBeamExpansionBudgetSkip,
@@ -36,6 +43,11 @@ export interface StructuralBeamCandidate<Value> {
    * вызывает повторный evaluator.
    */
   key: string;
+  /**
+   * Lazy exact legacy candidate-key ordering для compact; full игнорирует
+   * это поле. Если его нет, compact строит token из `candidate.key`.
+   */
+  orderToken?: StructuralKeyOrderToken;
   value: Value;
   /** Число компонентов группы; scheduler не ограничивает её парой. */
   groupSize: number;
@@ -70,8 +82,22 @@ export interface StructuralBeamEvaluation<Value, Score> {
 
 /** Сохранённый узел вместе с происхождением и фактической стоимостью. */
 export interface StructuralBeamNode<Value, Score> {
-  /** Стабильный key конкретного пути к canonical candidate. */
+  /**
+   * Full хранит legacy recursive key, compact — bounded sequence identity.
+   * Compact ID не задаёт ordering. У root вместо ID сохраняется исходный
+   * `root.key`.
+   */
   nodeKey: string;
+  /**
+   * Non-enumerable lazy rope точного legacy recursive JSON key compact node;
+   * full его не создаёт. Light evaluated/history nodes token не получают.
+   */
+  orderToken?: StructuralKeyOrderToken;
+  /**
+   * Non-enumerable lazy rope точного candidate key для candidate-first
+   * comparator. Light evaluated/history nodes token не получают.
+   */
+  candidateOrderToken?: StructuralKeyOrderToken;
   /** Canonical candidate key; у исходного узла равен `null`. */
   candidateKey: string | null;
   /** Key parent-узла; у исходного узла равен `null`. */
@@ -111,10 +137,33 @@ export interface StructuralBeamWorkLedger {
   skippedBudget: StructuralBeamBudgetSkip[];
 }
 
+/**
+ * Лёгкий узел compact-аудита.
+ *
+ * Metadata и score повторяют полный узел, а `value` создаёт injected
+ * compaction adapter. Scheduler никогда не передаёт этот узел в expand или
+ * evaluator: им нужны полные retained values. Runtime snapshot не содержит
+ * `orderToken` и `candidateOrderToken`.
+ */
+export type StructuralBeamCompactNode<Value, Score, AuditValue> =
+  Omit<StructuralBeamNode<Value, Score>, 'value'> & {
+    value: AuditValue;
+  };
+
 /** Лучшие retained-узлы одной глубины в порядке beam-ранжирования. */
 export interface StructuralBeamDepth<Value, Score> {
   depth: number;
   nodes: StructuralBeamNode<Value, Score>[];
+}
+
+/** Лёгкие retained-узлы одной глубины compact-аудита. */
+export interface StructuralBeamCompactDepth<
+  Value,
+  Score,
+  AuditValue,
+> {
+  depth: number;
+  nodes: StructuralBeamCompactNode<Value, Score, AuditValue>[];
 }
 
 /** Полный deterministic результат поиска. */
@@ -139,6 +188,30 @@ export interface StructuralBeamResult<Value, Score> {
   /**
    * Expansions, пропущенные до callback из-за conservative estimate.
    */
+  skippedExpansionBudget: StructuralBeamExpansionBudgetSkip[];
+  skippedGroupSize: StructuralBeamGroupSizeSkip[];
+}
+
+/**
+ * Результат opt-in compact-аудита без heavy history всего поиска.
+ *
+ * Root и `bestAny` остаются полными для finalization. Путь, depths и evaluated
+ * содержат только значения, возвращённые compaction adapter.
+ */
+export interface StructuralBeamCompactResult<
+  Value,
+  Score,
+  AuditValue,
+> {
+  root: StructuralBeamNode<Value, Score>;
+  bestAny: StructuralBeamNode<Value, Score>;
+  bestPath: StructuralBeamCompactNode<Value, Score, AuditValue>[];
+  depths: StructuralBeamCompactDepth<Value, Score, AuditValue>[];
+  evaluated: StructuralBeamCompactNode<Value, Score, AuditValue>[];
+  work: StructuralBeamWorkLedger;
+  evaluatorWork: number;
+  expansionWork: number;
+  expansions: StructuralBeamExpansionRecord[];
   skippedExpansionBudget: StructuralBeamExpansionBudgetSkip[];
   skippedGroupSize: StructuralBeamGroupSizeSkip[];
 }
@@ -193,10 +266,51 @@ export interface StructuralBeamOptions<
   compareScores: (a: Score, b: Score) => number;
 }
 
+/** Разделяет lifecycle полного узла и его лёгкого audit-снимка. */
+export interface StructuralBeamCompaction<Value, Score, AuditValue> {
+  /**
+   * Убирает caller-owned heavy state из одного узла аудита.
+   *
+   * Вызывается для root один раз и для каждого evaluated node сразу после его
+   * evaluator. Возвращаемое значение не должно ссылаться на освобождаемые
+   * N-мерные buffers, если caller рассчитывает на bounded history.
+   *
+   * @param value - Полное canonical value текущего узла
+   * @param node - Metadata и score того же узла
+   * @returns Лёгкое значение для evaluated/depths/path
+   */
+  compactValue: (
+    value: Value,
+    node: Readonly<StructuralBeamNode<Value, Score>>,
+  ) => AuditValue;
+  /**
+   * Сохраняет отдельного подробного победителя до освобождения node.
+   *
+   * Hook видит полный evaluated node, но не становится parent и не меняет
+   * порядок поиска. Он нужен, когда root выиграл `bestAny`, а лучший evaluated
+   * candidate всё равно требуется для proposed/finalization.
+   *
+   * @param node - Полный evaluated node до освобождения heavy state
+   */
+  onEvaluated?: (node: StructuralBeamNode<Value, Score>) => void;
+}
+
+/** Вход beam с явно включённым compact-аудитом. */
+export type StructuralBeamCompactOptions<
+  Value,
+  Score,
+  CandidateValue,
+  AuditValue,
+> = StructuralBeamOptions<Value, Score, CandidateValue> & {
+  compact: StructuralBeamCompaction<Value, Score, AuditValue>;
+};
+
 interface CandidateProposal<Value, Score, CandidateValue> {
   candidate: StructuralBeamCandidate<CandidateValue>;
   parent: StructuralBeamNode<Value, Score>;
   sequence: number;
+  candidateOrderToken?: StructuralKeyOrderToken;
+  parentOrderToken?: StructuralKeyOrderToken;
 }
 
 /** Внутренние фактические суммы; публичный legacy `work` не расширяется. */
@@ -248,12 +362,88 @@ function assertCandidate<Value>(
   assertWork(candidate.estimatedWork, 'candidate.estimatedWork');
 }
 
-/** Строит однозначный key пути без небезопасной склейки строк. */
-function childNodeKey<Value, Score, CandidateValue>(
+const NODE_SEQUENCE_WIDTH = 20;
+
+/**
+ * Строит bounded identity evaluated node по порядку evaluator calls.
+ *
+ * Формат ID: `<root-length>:<root-key>:<20-значный sequence>`.
+ * Parent/candidate strings в ID не входят, поэтому его длина не зависит от
+ * глубины или размера proposal. ID служит только identity: orderedProposals
+ * и compareNodes используют отдельный exact legacy order token, а не sequence.
+ * Parent chain сохраняется через `parentKey`.
+ *
+ * @param rootKey - Исходный key корня текущего запуска
+ * @param sequence - Порядковый номер фактического evaluator call
+ * @returns Bounded public identity evaluated node
+ */
+function childNodeKey(rootKey: string, sequence: number): string {
+  return `${rootKey.length}:${rootKey}:${String(sequence).padStart(NODE_SEQUENCE_WIDTH, '0')}`;
+}
+
+/** Восстанавливает прежний full legacy recursive key без изменений. */
+function legacyChildNodeKey<Value, Score, CandidateValue>(
   parent: StructuralBeamNode<Value, Score>,
   candidate: StructuralBeamCandidate<CandidateValue>,
 ): string {
   return JSON.stringify([parent.nodeKey, candidate.key]);
+}
+
+/**
+ * Сохраняет оба lazy exact token как non-enumerable свойства полного node.
+ * Public JSON/audit serialization эти свойства не видит.
+ */
+function defineOrderTokens(
+  node: StructuralBeamNode<unknown, unknown>,
+  orderToken: StructuralKeyOrderToken,
+  candidateOrderToken: StructuralKeyOrderToken,
+): void {
+  Object.defineProperties(node, {
+    orderToken: { value: orderToken, enumerable: false },
+    candidateOrderToken: {
+      value: candidateOrderToken,
+      enumerable: false,
+    },
+  });
+}
+
+/** Возвращает обязательный compact node token без fallback на public ID. */
+function requiredNodeOrderToken(
+  node: StructuralBeamNode<unknown, unknown>,
+): StructuralKeyOrderToken {
+  const token = node.orderToken;
+  if (token === undefined) {
+    throw new Error(
+      'Compact structural node has no legacy order token',
+    );
+  }
+  return token;
+}
+
+/** Возвращает обязательный compact candidate token без public-key ordering. */
+function requiredCandidateOrderToken(
+  node: StructuralBeamNode<unknown, unknown>,
+): StructuralKeyOrderToken {
+  const token = node.candidateOrderToken;
+  if (token === undefined) {
+    throw new Error(
+      'Compact structural node has no candidate order token',
+    );
+  }
+  return token;
+}
+
+/** Сохраняет heavy bestAny и оба exact tokens при compact snapshot. */
+function cloneNodeWithOrderTokens<Value, Score>(
+  node: StructuralBeamNode<Value, Score>,
+): StructuralBeamNode<Value, Score> {
+  const clone = { ...node };
+  defineOrderTokens(
+    clone,
+    requiredNodeOrderToken(node),
+    requiredCandidateOrderToken(node),
+  );
+  return clone;
 }
 
 /**
@@ -313,10 +503,22 @@ function expandStructuralParents<Value, Score, CandidateValue>(arg: {
     arg.totals.used = charge.used;
     arg.totals.expansionWork = charge.expansionWork;
     const candidateKeys: string[] = [];
+    const compact = 'compact' in arg.options;
+    const parentOrderToken = compact
+      ? requiredNodeOrderToken(parent)
+      : undefined;
     for (const candidate of expansion.candidates) {
       assertCandidate(candidate);
       candidateKeys.push(candidate.key);
-      proposals.push({ candidate, parent, sequence });
+      proposals.push({
+        candidate,
+        parent,
+        sequence,
+        candidateOrderToken: compact
+          ? (candidate.orderToken ?? orderTokenFromRaw(candidate.key))
+          : undefined,
+        parentOrderToken,
+      });
       sequence += 1;
     }
     candidateKeys.sort(compareText);
@@ -335,12 +537,14 @@ function expandStructuralParents<Value, Score, CandidateValue>(arg: {
  * Сравнивает узлы: сначала injected score, затем глубину и stable keys.
  *
  * При равном score более мелкий узел выигрывает bestAny. Внутри одной
- * глубины лексикографически меньшие candidateKey и nodeKey идут первыми.
+ * глубины full сравнивает raw candidateKey и nodeKey, а compact — точные
+ * legacy tokens; bounded public ID в сравнении не участвует.
  */
 function compareNodes<Value, Score>(
   a: StructuralBeamNode<Value, Score>,
   b: StructuralBeamNode<Value, Score>,
   compareScores: (a: Score, b: Score) => number,
+  compact = false,
 ): number {
   const scoreOrder = compareScores(a.score, b.score);
   if (!Number.isFinite(scoreOrder)) {
@@ -352,32 +556,44 @@ function compareNodes<Value, Score>(
   if (a.depth !== b.depth) {
     return b.depth - a.depth;
   }
-  const candidateOrder = compareText(
-    a.candidateKey ?? '',
-    b.candidateKey ?? '',
-  );
+  const candidateOrder = compact
+    ? compareOrderTokens(
+        requiredCandidateOrderToken(a),
+        requiredCandidateOrderToken(b),
+      )
+    : compareText(a.candidateKey ?? '', b.candidateKey ?? '');
   if (candidateOrder !== 0) {
     return -candidateOrder;
   }
-  return -compareText(a.nodeKey, b.nodeKey);
+  return compact
+    ? -compareOrderTokens(
+        requiredNodeOrderToken(a),
+        requiredNodeOrderToken(b),
+      )
+    : -compareText(a.nodeKey, b.nodeKey);
 }
 
 /** Сортирует копию предложений, не меняя массивы источника кандидатов. */
 function orderedProposals<Value, Score, CandidateValue>(
   proposals: CandidateProposal<Value, Score, CandidateValue>[],
+  compact = false,
 ): CandidateProposal<Value, Score, CandidateValue>[] {
   return [...proposals].sort((a, b) => {
-    const candidateOrder = compareText(
-      a.candidate.key,
-      b.candidate.key,
-    );
+    const candidateOrder = compact
+      ? compareOrderTokens(
+          a.candidateOrderToken ?? orderTokenFromRaw(a.candidate.key),
+          b.candidateOrderToken ?? orderTokenFromRaw(b.candidate.key),
+        )
+      : compareText(a.candidate.key, b.candidate.key);
     if (candidateOrder !== 0) {
       return candidateOrder;
     }
-    const parentOrder = compareText(
-      a.parent.nodeKey,
-      b.parent.nodeKey,
-    );
+    const parentOrder = compact
+      ? compareOrderTokens(
+          a.parentOrderToken ?? requiredNodeOrderToken(a.parent),
+          b.parentOrderToken ?? requiredNodeOrderToken(b.parent),
+        )
+      : compareText(a.parent.nodeKey, b.parent.nodeKey);
     if (parentOrder !== 0) {
       return parentOrder;
     }
@@ -385,22 +601,74 @@ function orderedProposals<Value, Score, CandidateValue>(
   });
 }
 
-/** Восстанавливает путь через сохранённые parent keys. */
-function buildBestPath<Value, Score>(
-  root: StructuralBeamNode<Value, Score>,
-  bestAny: StructuralBeamNode<Value, Score>,
-  evaluated: StructuralBeamNode<Value, Score>[],
-): StructuralBeamNode<Value, Score>[] {
-  const nodesByKey = new Map<
-    string,
-    StructuralBeamNode<Value, Score>
-  >();
+/**
+ * Создаёт лёгкий snapshot, сохраняя canonical metadata без изменений.
+ * Явный список полей не переносит non-enumerable order tokens в light history.
+ */
+function compactStructuralNode<Value, Score, AuditValue>(
+  node: StructuralBeamNode<Value, Score>,
+  compaction: StructuralBeamCompaction<Value, Score, AuditValue>,
+): StructuralBeamCompactNode<Value, Score, AuditValue> {
+  return {
+    nodeKey: node.nodeKey,
+    candidateKey: node.candidateKey,
+    parentKey: node.parentKey,
+    depth: node.depth,
+    value: compaction.compactValue(node.value, node),
+    score: node.score,
+    groupSize: node.groupSize,
+    estimatedWork: node.estimatedWork,
+    cost: node.cost,
+  };
+}
+
+interface CompactRetainedChild<Value, Score, AuditValue> {
+  node: StructuralBeamNode<Value, Score>;
+  audit: StructuralBeamCompactNode<Value, Score, AuditValue>;
+}
+
+/**
+ * Оставляет полные values только у будущих retained parents.
+ *
+ * Остальные children освобождаются сразу, а не после сортировки всей глубины.
+ * Компаратор и tie-break те же, что у полного режима; общий evaluated order
+ * по-прежнему задаёт `orderedProposals`, а не это ранжирование.
+ */
+function retainCompactChild<Value, Score, AuditValue>(
+  retained: CompactRetainedChild<Value, Score, AuditValue>[],
+  child: CompactRetainedChild<Value, Score, AuditValue>,
+  beamWidth: number,
+  compareScores: (a: Score, b: Score) => number,
+): CompactRetainedChild<Value, Score, AuditValue>[] {
+  return [...retained, child]
+    .sort((a, b) => compareNodes(b.node, a.node, compareScores, true))
+    .slice(0, beamWidth);
+}
+
+interface StructuralBeamPathNode {
+  nodeKey: string;
+  parentKey: string | null;
+}
+
+/** Восстанавливает путь через сохранённые parent keys полного или light audit. */
+function buildBestPath<Node extends StructuralBeamPathNode>(
+  root: Node,
+  bestAny: StructuralBeamPathNode,
+  evaluated: readonly Node[],
+): Node[] {
+  const nodesByKey = new Map<string, Node>();
   nodesByKey.set(root.nodeKey, root);
   for (const node of evaluated) {
     nodesByKey.set(node.nodeKey, node);
   }
-  const path: StructuralBeamNode<Value, Score>[] = [];
-  let current: StructuralBeamNode<Value, Score> | undefined = bestAny;
+  const first = nodesByKey.get(bestAny.nodeKey);
+  if (first === undefined) {
+    throw new Error(
+      'Structural beam best node is missing from history',
+    );
+  }
+  const path: Node[] = [];
+  let current: Node | undefined = first;
   while (current !== undefined) {
     path.unshift(current);
     if (current.parentKey === null) {
@@ -418,10 +686,10 @@ function buildBestPath<Value, Score>(
  * Запускает generic beam search поверх injected candidates и
  * evaluator.
  *
- * @param options - Root, пределы beam/W и callbacks предметной
- *   области
- * @returns Полный deterministic результат с раздельным учётом
- *   evaluator и expansion
+ * @param options - Root, пределы beam/W, callbacks предметной области и
+ *   optional compact adapter
+ * @returns Прежний full результат либо opt-in compact audit с раздельным
+ *   учётом evaluator и expansion
  * @throws Error при невалидных параметрах, ключах, estimate/cost или
  *   превышении conservative estimate/W; ошибки callbacks пробрасываются
  *   без изменений
@@ -448,14 +716,57 @@ function buildBestPath<Value, Score>(
  * и не изменяет входные массивы, nodes или candidates. Payload остаётся
  * caller-owned, поэтому callbacks должны читать его как readonly, если
  * требуется сквозная неизменность.
+ *
+ * Без `compact` сохраняется полностью legacy-поведение: все nodes хранят
+ * canonical values и recursive keys, comparator читает raw strings, tokens
+ * не создаются, а compact adapter не вызывается.
+ *
+ * Compact использует bounded public IDs только как identity. Non-enumerable
+ * `orderToken` и `candidateOrderToken` хранят lazy persistent ropes и повторяют
+ * exact legacy candidate-first/parent-first ordering и dedup owner без
+ * развёртывания recursive strings. Light evaluated/depths/bestPath и
+ * производная history не получают tokens. Adapter вызывается сразу после
+ * каждого evaluator; scheduler хранит полные values только у retained parents,
+ * текущих лучших children и отдельного bestAny. Compact не меняет candidate
+ * order, score, dedup, W или solver calls.
  */
+export function runStructuralBeam<
+  Value,
+  Score,
+  CandidateValue = Value,
+  AuditValue = Value,
+>(
+  options: StructuralBeamCompactOptions<
+    Value,
+    Score,
+    CandidateValue,
+    AuditValue
+  >,
+): StructuralBeamCompactResult<Value, Score, AuditValue>;
 export function runStructuralBeam<
   Value,
   Score,
   CandidateValue = Value,
 >(
   options: StructuralBeamOptions<Value, Score, CandidateValue>,
-): StructuralBeamResult<Value, Score> {
+): StructuralBeamResult<Value, Score>;
+export function runStructuralBeam<
+  Value,
+  Score,
+  CandidateValue = Value,
+  AuditValue = Value,
+>(
+  options:
+    | StructuralBeamOptions<Value, Score, CandidateValue>
+    | StructuralBeamCompactOptions<
+        Value,
+        Score,
+        CandidateValue,
+        AuditValue
+      >,
+):
+  | StructuralBeamResult<Value, Score>
+  | StructuralBeamCompactResult<Value, Score, AuditValue> {
   assertInteger(options.beamWidth, 'beamWidth', 1);
   assertInteger(options.maxDepth, 'maxDepth', 0);
   assertInteger(options.maxGroupSize, 'maxGroupSize', 1);
@@ -467,6 +778,8 @@ export function runStructuralBeam<
     throw new Error('Structural beam root key must be non-empty');
   }
 
+  const compaction =
+    'compact' in options ? options.compact : undefined;
   const root: StructuralBeamNode<Value, Score> = {
     nodeKey: options.root.key,
     candidateKey: null,
@@ -478,10 +791,32 @@ export function runStructuralBeam<
     estimatedWork: 0,
     cost: 0,
   };
+  if (compaction !== undefined) {
+    defineOrderTokens(
+      root,
+      orderTokenFromRaw(options.root.key),
+      orderTokenFromRaw(''),
+    );
+  }
+  const compactRoot =
+    compaction === undefined
+      ? null
+      : compactStructuralNode(root, compaction);
   const depths: StructuralBeamDepth<Value, Score>[] = [
     { depth: 0, nodes: [root] },
   ];
+  const compactDepths: StructuralBeamCompactDepth<
+    Value,
+    Score,
+    AuditValue
+  >[] =
+    compactRoot === null ? [] : [{ depth: 0, nodes: [compactRoot] }];
   const evaluated: StructuralBeamNode<Value, Score>[] = [];
+  const compactEvaluated: StructuralBeamCompactNode<
+    Value,
+    Score,
+    AuditValue
+  >[] = [];
   const expansions: StructuralBeamExpansionRecord[] = [];
   const skippedBudget: StructuralBeamBudgetSkip[] = [];
   const skippedExpansionBudget: StructuralBeamExpansionBudgetSkip[] =
@@ -496,6 +831,7 @@ export function runStructuralBeam<
   };
   let bestAny = root;
   let parents = [root];
+  let evaluatedSequence = 0;
 
   for (let depth = 1; depth <= options.maxDepth; depth += 1) {
     const expanded = expandStructuralParents({
@@ -510,7 +846,16 @@ export function runStructuralBeam<
     skippedExpansionBudget.push(...expanded.skippedBudget);
 
     const children: StructuralBeamNode<Value, Score>[] = [];
-    for (const proposal of orderedProposals(proposals)) {
+    let compactChildren: CompactRetainedChild<
+      Value,
+      Score,
+      AuditValue
+    >[] = [];
+    let childCount = 0;
+    for (const proposal of orderedProposals(
+      proposals,
+      compaction !== undefined,
+    )) {
       const { candidate, parent } = proposal;
       if (seenCandidateKeys.has(candidate.key)) {
         continue;
@@ -554,8 +899,12 @@ export function runStructuralBeam<
       }
       totals.used += evaluation.cost;
       totals.evaluatorWork += evaluation.cost;
+      evaluatedSequence += 1;
       const node: StructuralBeamNode<Value, Score> = {
-        nodeKey: childNodeKey(parent, candidate),
+        nodeKey:
+          compaction === undefined
+            ? legacyChildNodeKey(parent, candidate)
+            : childNodeKey(options.root.key, evaluatedSequence),
         candidateKey: candidate.key,
         parentKey: parent.nodeKey,
         depth,
@@ -565,35 +914,104 @@ export function runStructuralBeam<
         estimatedWork: candidate.estimatedWork,
         cost: evaluation.cost,
       };
-      children.push(node);
-      evaluated.push(node);
-      if (compareNodes(node, bestAny, options.compareScores) > 0) {
-        bestAny = node;
+      if (compaction !== undefined) {
+        const candidateOrderToken =
+          proposal.candidateOrderToken ??
+          orderTokenFromRaw(candidate.key);
+        const parentOrderToken =
+          proposal.parentOrderToken ?? requiredNodeOrderToken(parent);
+        defineOrderTokens(
+          node,
+          jsonArrayOrderToken([
+            jsonStringOrderToken(parentOrderToken),
+            jsonStringOrderToken(candidateOrderToken),
+          ]),
+          candidateOrderToken,
+        );
+      }
+      childCount += 1;
+      let audit: StructuralBeamCompactNode<
+        Value,
+        Score,
+        AuditValue
+      > | null = null;
+      if (compaction === undefined) {
+        children.push(node);
+        evaluated.push(node);
+      } else {
+        audit = compactStructuralNode(node, compaction);
+        compactEvaluated.push(audit);
+      }
+      if (
+        compareNodes(
+          node,
+          bestAny,
+          options.compareScores,
+          compaction !== undefined,
+        ) > 0
+      ) {
+        bestAny =
+          compaction === undefined
+            ? node
+            : cloneNodeWithOrderTokens(node);
+      }
+      if (compaction !== undefined && audit !== null) {
+        compaction.onEvaluated?.(node);
+        compactChildren = retainCompactChild(
+          compactChildren,
+          { node, audit },
+          options.beamWidth,
+          options.compareScores,
+        );
       }
     }
 
-    if (children.length === 0) {
+    if (childCount === 0) {
       break;
     }
-    children.sort((a, b) =>
-      compareNodes(b, a, options.compareScores),
-    );
-    parents = children.slice(0, options.beamWidth);
-    depths.push({ depth, nodes: [...parents] });
+    if (compaction === undefined) {
+      children.sort((a, b) =>
+        compareNodes(b, a, options.compareScores),
+      );
+      parents = children.slice(0, options.beamWidth);
+      depths.push({ depth, nodes: [...parents] });
+    } else {
+      parents = compactChildren.map((child) => child.node);
+      compactDepths.push({
+        depth,
+        nodes: compactChildren.map((child) => child.audit),
+      });
+    }
   }
 
+  const work: StructuralBeamWorkLedger = {
+    budget: options.workBudget,
+    used: totals.used,
+    unused: options.workBudget - totals.used,
+    skippedBudget,
+  };
+  if (compaction !== undefined && compactRoot !== null) {
+    return {
+      root,
+      bestAny,
+      bestPath: buildBestPath(compactRoot, bestAny, compactEvaluated),
+      depths: compactDepths,
+      evaluated: compactEvaluated,
+      work,
+      evaluatorWork: totals.evaluatorWork,
+      expansionWork: totals.expansionWork,
+      expansions,
+      skippedExpansionBudget,
+      skippedGroupSize,
+    };
+  }
   return {
     root,
     bestAny,
     bestPath: buildBestPath(root, bestAny, evaluated),
     depths,
     evaluated,
-    work: {
-      budget: options.workBudget,
-      used: totals.used,
-      unused: options.workBudget - totals.used,
-      skippedBudget,
-    },
+    work,
     evaluatorWork: totals.evaluatorWork,
     expansionWork: totals.expansionWork,
     expansions,

@@ -3,10 +3,14 @@ import { test } from 'node:test';
 import {
   runStructuralBeam,
   type StructuralBeamCandidate,
+  type StructuralBeamEvaluation,
+  type StructuralBeamExpansionRecord,
+  type StructuralBeamExpansionResult,
   type StructuralBeamNode,
   type StructuralBeamOptions,
   type StructuralBeamResult,
 } from './structural-beam';
+import { stringifyOrderToken } from './structural-key-order';
 
 type NumberCandidate = StructuralBeamCandidate<string>;
 type NumberNode = StructuralBeamNode<string, number>;
@@ -20,6 +24,35 @@ function candidate(
   estimatedWork = 1,
 ): NumberCandidate {
   return { key, value: key, groupSize, estimatedWork };
+}
+
+/** Сравнивает bestAny semantics и exact legacy token compact узла. */
+function assertCompactBestAny<Value, Score>(
+  full: StructuralBeamNode<Value, Score>,
+  compact: StructuralBeamNode<Value, Score>,
+): void {
+  assert.equal(compact.candidateKey, full.candidateKey);
+  assert.equal(compact.depth, full.depth);
+  assert.deepEqual(compact.score, full.score);
+  assert.equal(compact.groupSize, full.groupSize);
+  assert.equal(compact.estimatedWork, full.estimatedWork);
+  assert.equal(compact.cost, full.cost);
+  assert.deepEqual(compact.value, full.value);
+  const token = compact.orderToken;
+  assert.ok(token !== undefined);
+  assert.equal(stringifyOrderToken(token), full.nodeKey);
+}
+
+/** Сравнивает expansion semantics без identity parent node. */
+function expansionSemantics(
+  expansion: StructuralBeamExpansionRecord,
+): unknown {
+  return {
+    depth: expansion.depth,
+    estimatedWork: expansion.estimatedWork,
+    cost: expansion.cost,
+    candidateKeys: expansion.candidateKeys,
+  };
 }
 
 /** Возвращает читаемое имя synthetic node для проверки точных путей. */
@@ -936,62 +969,79 @@ test('an empty measured expansion charges cost and records parent once', () => {
   assert.equal(result.work.unused, 3);
 });
 
+/** Создаёт measured duplicates fixture с точным callback order. */
+function measuredDuplicateOptions(): {
+  options: NumberOptions;
+  events: string[];
+} {
+  const events: string[] = [];
+  return {
+    events,
+    options: {
+      root: { key: 'empty', value: 'empty', score: 0 },
+      beamWidth: 2,
+      maxDepth: 2,
+      maxGroupSize: 2,
+      workBudget: 20,
+      estimateExpansion: (parent): number => {
+        events.push(`estimate:${parent.value}`);
+        return 2;
+      },
+      expand: (parent): StructuralBeamExpansionResult<string> => {
+        events.push(`expand:${parent.value}`);
+        if (parent.value === 'empty') {
+          return {
+            candidates: [
+              candidate('tie-B'),
+              candidate('tie-A'),
+              candidate('tie-A'),
+            ],
+            cost: 1,
+          };
+        }
+        if (parent.value === 'tie-A') {
+          return {
+            candidates: [candidate('leaf'), candidate('leaf')],
+            cost: 1,
+          };
+        }
+        return {
+          candidates: [candidate('leaf'), candidate('B-leaf')],
+          cost: 1,
+        };
+      },
+      evaluate: (
+        next,
+        parent,
+      ): StructuralBeamEvaluation<string, number> => {
+        events.push(`evaluate:${parent.value}:${next.key}`);
+        const scores = new Map([
+          ['tie-A', 10],
+          ['tie-B', 9],
+          ['leaf', 11],
+          ['B-leaf', 8],
+        ]);
+        return {
+          value: next.value,
+          score: scores.get(next.key) ?? 0,
+          cost: 1,
+        };
+      },
+      compareScores: descending,
+    },
+  };
+}
+
 /** Прогоняет measured duplicates и сохраняет точный callback order. */
 function runMeasuredDuplicateFixture(): {
   result: NumberResult;
   events: string[];
 } {
-  const events: string[] = [];
-  const result = runStructuralBeam({
-    root: { key: 'empty', value: 'empty', score: 0 },
-    beamWidth: 2,
-    maxDepth: 2,
-    maxGroupSize: 2,
-    workBudget: 20,
-    estimateExpansion: (parent) => {
-      events.push(`estimate:${parent.value}`);
-      return 2;
-    },
-    expand: (parent) => {
-      events.push(`expand:${parent.value}`);
-      if (parent.value === 'empty') {
-        return {
-          candidates: [
-            candidate('tie-B'),
-            candidate('tie-A'),
-            candidate('tie-A'),
-          ],
-          cost: 1,
-        };
-      }
-      if (parent.value === 'tie-A') {
-        return {
-          candidates: [candidate('leaf'), candidate('leaf')],
-          cost: 1,
-        };
-      }
-      return {
-        candidates: [candidate('leaf'), candidate('B-leaf')],
-        cost: 1,
-      };
-    },
-    evaluate: (next, parent) => {
-      events.push(`evaluate:${parent.value}:${next.key}`);
-      const scores = new Map([
-        ['tie-A', 10],
-        ['tie-B', 9],
-        ['leaf', 11],
-        ['B-leaf', 8],
-      ]);
-      return {
-        value: next.value,
-        score: scores.get(next.key) ?? 0,
-        cost: 1,
-      };
-    },
-    compareScores: descending,
-  });
-  return { result, events };
+  const fixture = measuredDuplicateOptions();
+  return {
+    result: runStructuralBeam(fixture.options),
+    events: fixture.events,
+  };
 }
 
 test('measured duplicates preserve path, work and call order across runs', () => {
@@ -1039,4 +1089,479 @@ test('measured duplicates preserve path, work and call order across runs', () =>
   assert.equal(first.result.evaluatorWork, 4);
   assert.equal(first.result.work.used, 7);
   assert.equal(first.result.work.unused, 13);
+});
+
+test('compact preserves measured duplicates, ties and expansion charging', () => {
+  const fullFixture = measuredDuplicateOptions();
+  const full = runStructuralBeam(fullFixture.options);
+  const compactFixture = measuredDuplicateOptions();
+  const compact = runStructuralBeam<
+    string,
+    number,
+    string,
+    { length: number }
+  >({
+    ...compactFixture.options,
+    compact: {
+      compactValue: (value) => ({ length: value.length }),
+    },
+  });
+  const semantics = (
+    node: Pick<
+      NumberNode,
+      | 'candidateKey'
+      | 'depth'
+      | 'score'
+      | 'groupSize'
+      | 'estimatedWork'
+      | 'cost'
+    >,
+  ): unknown => ({
+    candidateKey: node.candidateKey,
+    depth: node.depth,
+    score: node.score,
+    groupSize: node.groupSize,
+    estimatedWork: node.estimatedWork,
+    cost: node.cost,
+  });
+
+  assert.deepEqual(compactFixture.events, fullFixture.events);
+  assert.deepEqual(
+    compact.evaluated.map(semantics),
+    full.evaluated.map(semantics),
+  );
+  assert.deepEqual(
+    compact.bestPath.map(semantics),
+    full.bestPath.map(semantics),
+  );
+  assert.deepEqual(
+    compact.depths.map((level) => ({
+      depth: level.depth,
+      nodes: level.nodes.map(semantics),
+    })),
+    full.depths.map((level) => ({
+      depth: level.depth,
+      nodes: level.nodes.map(semantics),
+    })),
+  );
+  assertCompactBestAny(full.bestAny, compact.bestAny);
+  assert.deepEqual(compact.work, full.work);
+  assert.deepEqual(
+    compact.expansions.map(expansionSemantics),
+    full.expansions.map(expansionSemantics),
+  );
+  assert.equal(compact.expansionWork, full.expansionWork);
+  assert.equal(compact.evaluatorWork, full.evaluatorWork);
+});
+
+interface HeavyBeamValue {
+  name: string;
+  pcm: Float64Array;
+}
+
+/** Строит одинаковый measured fixture с N-мерным payload для A/B. */
+function heavyBeamOptions(beamWidth: number): {
+  options: StructuralBeamOptions<HeavyBeamValue, number>;
+  events: string[];
+} {
+  const value = (name: string): HeavyBeamValue => ({
+    name,
+    pcm: new Float64Array(128).fill(name.length),
+  });
+  const candidate = (
+    name: string,
+    groupSize = 1,
+    estimatedWork = 1,
+  ): StructuralBeamCandidate<HeavyBeamValue> => ({
+    key: name,
+    value: value(name),
+    groupSize,
+    estimatedWork,
+  });
+  const scores = new Map([
+    ['A', 50],
+    ['B', 40],
+    ['C', 30],
+    ['A+B', 60],
+    ['A+C', 55],
+    ['B+C', 90],
+  ]);
+  const expansions = new Map<
+    string,
+    StructuralBeamCandidate<HeavyBeamValue>[]
+  >([
+    ['empty', [candidate('A'), candidate('B'), candidate('C')]],
+    ['A', [candidate('A+B', 2), candidate('A+C', 2)]],
+    ['B', [candidate('B+C', 2)]],
+    ['C', []],
+  ]);
+  const events: string[] = [];
+  return {
+    events,
+    options: {
+      root: { key: 'empty', value: value('empty'), score: 0 },
+      beamWidth,
+      maxDepth: 2,
+      maxGroupSize: 2,
+      workBudget: 20,
+      estimateExpansion: (parent): number => {
+        events.push(`estimate:${parent.value.name}`);
+        return 0;
+      },
+      expand: (
+        parent,
+      ): StructuralBeamExpansionResult<HeavyBeamValue> => {
+        events.push(`expand:${parent.value.name}`);
+        return expansions.get(parent.value.name) ?? [];
+      },
+      evaluate: (
+        next,
+        parent,
+      ): StructuralBeamEvaluation<HeavyBeamValue, number> => {
+        events.push(`evaluate:${parent.value.name}:${next.key}`);
+        const score = scores.get(next.key);
+        assert.ok(score !== undefined);
+        return { value: next.value, score, cost: 1 };
+      },
+      compareScores: descending,
+    },
+  };
+}
+
+/** Оставляет только search semantics для сравнения full и compact узлов. */
+function beamNodeSemantics(
+  node: Pick<
+    StructuralBeamNode<HeavyBeamValue, number>,
+    | 'candidateKey'
+    | 'depth'
+    | 'score'
+    | 'groupSize'
+    | 'estimatedWork'
+    | 'cost'
+  >,
+): unknown {
+  return {
+    candidateKey: node.candidateKey,
+    depth: node.depth,
+    score: node.score,
+    groupSize: node.groupSize,
+    estimatedWork: node.estimatedWork,
+    cost: node.cost,
+  };
+}
+
+test('compact lifecycle matches full order, paths, width and work without heavy history', () => {
+  for (const beamWidth of [1, 2]) {
+    const fullFixture = heavyBeamOptions(beamWidth);
+    const full = runStructuralBeam(fullFixture.options);
+    const compactFixture = heavyBeamOptions(beamWidth);
+    const compacted: string[] = [];
+    const evaluatedHook: string[] = [];
+    const legacyOrder: string[] = [];
+    const compact = runStructuralBeam<
+      HeavyBeamValue,
+      number,
+      HeavyBeamValue,
+      { name: string }
+    >({
+      ...compactFixture.options,
+      compact: {
+        compactValue: (value, node) => {
+          compacted.push(node.nodeKey);
+          return { name: value.name };
+        },
+        onEvaluated: (node) => {
+          evaluatedHook.push(node.nodeKey);
+          const token = node.orderToken;
+          assert.ok(token !== undefined);
+          legacyOrder.push(stringifyOrderToken(token));
+        },
+      },
+    });
+
+    assert.deepEqual(compactFixture.events, fullFixture.events);
+    assert.deepEqual(
+      compact.evaluated.map(beamNodeSemantics),
+      full.evaluated.map(beamNodeSemantics),
+    );
+    assert.deepEqual(
+      compact.bestPath.map(beamNodeSemantics),
+      full.bestPath.map(beamNodeSemantics),
+    );
+    assert.deepEqual(
+      compact.depths.map((level) => ({
+        depth: level.depth,
+        nodes: level.nodes.map(beamNodeSemantics),
+      })),
+      full.depths.map((level) => ({
+        depth: level.depth,
+        nodes: level.nodes.map(beamNodeSemantics),
+      })),
+    );
+    assertCompactBestAny(full.bestAny, compact.bestAny);
+    assert.deepEqual(compact.work, full.work);
+    assert.equal(compact.evaluatorWork, full.evaluatorWork);
+    assert.equal(compact.expansionWork, full.expansionWork);
+    assert.deepEqual(
+      compact.expansions.map(expansionSemantics),
+      full.expansions.map(expansionSemantics),
+    );
+    assert.deepEqual(
+      compact.skippedExpansionBudget,
+      full.skippedExpansionBudget,
+    );
+    assert.deepEqual(compact.skippedGroupSize, full.skippedGroupSize);
+    assert.deepEqual(evaluatedHook, compacted.slice(1));
+    assert.deepEqual(
+      compacted.slice(1),
+      compact.evaluated.map((node) => node.nodeKey),
+    );
+    assert.deepEqual(
+      legacyOrder,
+      full.evaluated.map((node) => node.nodeKey),
+    );
+    assert.ok(
+      full.evaluated.every((node) => node.value.pcm.length === 128),
+    );
+    assert.ok(
+      compact.evaluated.every(
+        (node) =>
+          Object.keys(node.value).length === 1 &&
+          !('pcm' in node.value),
+      ),
+    );
+    assert.equal(compact.bestAny.value.pcm.length, 128);
+  }
+});
+
+interface DeepChainValue {
+  depth: number;
+}
+
+/** Создаёт 24-уровневую цепь с длинными, но одинаковыми candidate keys. */
+function deepChainOptions(): {
+  options: StructuralBeamOptions<DeepChainValue, number>;
+  events: string[];
+} {
+  const events: string[] = [];
+  const candidate = (
+    depth: number,
+  ): StructuralBeamCandidate<DeepChainValue> => ({
+    key: `${'x'.repeat(180)}:${String(depth).padStart(2, '0')}`,
+    value: { depth },
+    groupSize: 1,
+    estimatedWork: 1,
+  });
+  return {
+    events,
+    options: {
+      root: { key: 'deep-root', value: { depth: 0 }, score: 0 },
+      beamWidth: 1,
+      maxDepth: 24,
+      maxGroupSize: 1,
+      workBudget: 24,
+      expand: (
+        parent,
+      ): StructuralBeamExpansionResult<DeepChainValue> => {
+        const depth = parent.value.depth + 1;
+        events.push(`expand:${depth}`);
+        return [candidate(depth)];
+      },
+      evaluate: (
+        next,
+      ): StructuralBeamEvaluation<DeepChainValue, number> => {
+        events.push(`evaluate:${next.value.depth}`);
+        return {
+          value: next.value,
+          score: next.value.depth,
+          cost: 1,
+        };
+      },
+      compareScores: descending,
+    },
+  };
+}
+
+test('bounded identities preserve a depth24 chain, order, path and work', (t) => {
+  const fullFixture = deepChainOptions();
+  const full = runStructuralBeam(fullFixture.options);
+  const compactFixture = deepChainOptions();
+  const compact = runStructuralBeam<
+    DeepChainValue,
+    number,
+    DeepChainValue,
+    DeepChainValue
+  >({
+    ...compactFixture.options,
+    compact: { compactValue: (value) => ({ ...value }) },
+  });
+
+  assert.deepEqual(compactFixture.events, fullFixture.events);
+  assert.equal(full.evaluated.length, 24);
+  assert.equal(full.bestPath.length, 25);
+  assert.equal(full.bestAny.score, 24);
+  assert.equal(full.bestAny.depth, 24);
+  assert.equal(full.work.used, 24);
+  assert.equal(full.work.unused, 0);
+  assert.equal(full.evaluatorWork, 24);
+  assert.equal(full.expansionWork, 0);
+  assert.equal(
+    new Set(full.evaluated.map((node) => node.nodeKey)).size,
+    24,
+  );
+  for (const result of [full, compact]) {
+    for (const node of result.evaluated) {
+      assert.equal(node.candidateKey?.length, 183);
+    }
+    assert.equal(result.bestPath.length, 25);
+    for (let index = 1; index < result.bestPath.length; index += 1) {
+      const node = result.bestPath[index];
+      const parent = result.bestPath[index - 1];
+      assert.ok(node !== undefined && parent !== undefined);
+      assert.equal(node.depth, index);
+      assert.equal(node.parentKey, parent.nodeKey);
+    }
+    assert.deepEqual(result.work, full.work);
+  }
+  for (const node of compact.evaluated) {
+    assert.ok(node.nodeKey.length <= 40, node.nodeKey);
+    assert.ok((node.parentKey ?? '').length <= 40);
+  }
+  const semantics = (node: {
+    candidateKey: string | null;
+    depth: number;
+    score: number;
+    groupSize: number;
+    estimatedWork: number;
+    cost: number;
+  }): unknown => ({
+    candidateKey: node.candidateKey,
+    depth: node.depth,
+    score: node.score,
+    groupSize: node.groupSize,
+    estimatedWork: node.estimatedWork,
+    cost: node.cost,
+  });
+  assert.deepEqual(
+    compact.evaluated.map(semantics),
+    full.evaluated.map(semantics),
+  );
+  assert.deepEqual(
+    compact.bestPath.map(semantics),
+    full.bestPath.map(semantics),
+  );
+  assertCompactBestAny(full.bestAny, compact.bestAny);
+  const maxNodeKey = Math.max(
+    ...compact.evaluated.map((node) => node.nodeKey.length),
+  );
+  const maxParentKey = Math.max(
+    ...compact.evaluated.map((node) => node.parentKey?.length ?? 0),
+  );
+  t.diagnostic(
+    `generic depth24: max node key=${maxNodeKey}, ` +
+      `max parent key=${maxParentKey}, candidate key=183, evaluations=24`,
+  );
+});
+
+/** Создаёт parent-first dedup regression B:a, A:z и общий X/Y. */
+function parentFirstDedupOptions(): {
+  options: NumberOptions;
+  events: string[];
+} {
+  const events: string[] = [];
+  const expansions = new Map<string, NumberCandidate[]>([
+    ['empty', [candidate('A'), candidate('B')]],
+    ['A', [candidate('z')]],
+    ['B', [candidate('a')]],
+    ['A:z', [candidate('X'), candidate('Y', 1, 10)]],
+    ['B:a', [candidate('X'), candidate('Y', 1, 10)]],
+  ]);
+  return {
+    events,
+    options: {
+      root: { key: 'empty', value: 'empty', score: 0 },
+      beamWidth: 2,
+      maxDepth: 3,
+      maxGroupSize: 1,
+      workBudget: 10,
+      expand: (parent): StructuralBeamExpansionResult<string> =>
+        expansions.get(parent.value) ?? [],
+      evaluate: (
+        next,
+        parent,
+      ): StructuralBeamEvaluation<string, number> => {
+        events.push(`${parent.value}:${next.key}`);
+        const value =
+          parent.depth === 0
+            ? next.key
+            : `${parent.value}:${next.key}`;
+        return {
+          value,
+          score: next.key === 'X' ? 100 : 10,
+          cost: 1,
+        };
+      },
+      compareScores: descending,
+    },
+  };
+}
+
+test('legacy full and compact keep parent-first dedup owner and budget skips', () => {
+  const fullFixture = parentFirstDedupOptions();
+  const full = runStructuralBeam(fullFixture.options);
+  const compactFixture = parentFirstDedupOptions();
+  const compact = runStructuralBeam<string, number, string, string>({
+    ...compactFixture.options,
+    compact: { compactValue: (value) => value },
+  });
+  const expectedCalls = ['empty:A', 'empty:B', 'B:a', 'A:z', 'A:z:X'];
+
+  assert.deepEqual(fullFixture.events, expectedCalls);
+  assert.deepEqual(compactFixture.events, expectedCalls);
+  assert.deepEqual(full.evaluated.map(nodeName), [
+    'A',
+    'B',
+    'a',
+    'z',
+    'X',
+  ]);
+  assert.deepEqual(compact.evaluated.map(nodeName), [
+    'A',
+    'B',
+    'a',
+    'z',
+    'X',
+  ]);
+  for (const result of [full, compact]) {
+    assert.equal(result.bestAny.value, 'A:z:X');
+    assert.equal(result.bestAny.score, 100);
+    assert.deepEqual(result.bestPath.map(nodeName), [
+      'empty',
+      'A',
+      'z',
+      'X',
+    ]);
+    assert.equal(result.work.used, 5);
+    assert.equal(result.work.unused, 5);
+    assert.equal(result.evaluatorWork, 5);
+    assert.equal(result.expansionWork, 0);
+    assert.equal(result.work.skippedBudget.length, 1);
+    const skip = result.work.skippedBudget[0];
+    assert.ok(skip !== undefined);
+    assert.equal(skip.parentKey, result.bestAny.parentKey);
+    assert.equal(skip.candidateKey, 'Y');
+    assert.equal(skip.depth, 3);
+    assert.equal(skip.estimatedWork, 10);
+    assert.equal(skip.remainingWork, 5);
+  }
+  assertCompactBestAny(full.bestAny, compact.bestAny);
+  assert.ok(
+    full.evaluated.every((node) => node.orderToken === undefined),
+  );
+  assert.ok(
+    compact.evaluated.every(
+      (node) =>
+        !('orderToken' in node) && !('candidateOrderToken' in node),
+    ),
+  );
 });

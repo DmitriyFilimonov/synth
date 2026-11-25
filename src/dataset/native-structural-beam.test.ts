@@ -12,13 +12,21 @@ import {
   passesNativeStructuralGuard,
   runNativeStructuralBeam,
   runNativeStructuralBeamWithWidthControl,
+  type CompactNativeStructuralBeamResult,
+  type CompactNativeStructuralWidthControlResult,
   type NativeStructuralBeamOptions,
   type NativeStructuralBeamResult,
   type NativeStructuralCanonicalAssert,
+  type NativeStructuralCompactNode,
   type NativeStructuralNode,
+  type NativeStructuralParent,
   type NativeStructuralProposal,
   type NativeStructuralProposeResult,
+  type NativeStructuralProposerSession,
+  type NativeStructuralWidthControlResult,
 } from './native-structural-beam';
+import { compactNativeSolver } from './native-structural-audit';
+import { stringifyOrderToken } from './structural-key-order';
 import { renderForTarget, renderGroup } from './quadrature-refit';
 import {
   patchFromStructuralCandidate,
@@ -672,6 +680,73 @@ test('a candidate worse than exact root stays proposed but saved returns source'
   assert.equal(result.finalizationSampleWork, 0);
 });
 
+test('compact root bestAny keeps a full proposed candidate and light history', () => {
+  const source: ArgCreateSynth = {
+    oscillators: [tone(73, 0.2, 0.4)],
+  };
+  const sourceGroup = source.oscillators[0];
+  assert.ok(sourceGroup !== undefined);
+  const sampleCount = 256;
+  const target = renderForTarget(source, sampleCount, 'legacy');
+  const wrongShape = {
+    ...shapeFromTone(sourceGroup),
+    freqBase: 91,
+    freqStart: 117,
+  };
+  const result = runNativeStructuralBeam({
+    patch: source,
+    target,
+    beamWidth: 1,
+    maxDepth: 1,
+    maxGroupSize: 1,
+    workBudget: estimateStructuralCandidateWork({
+      sampleCount,
+      atomCount: 1,
+      maxInner: 0,
+      maxBacktracks: 0,
+    }),
+    maxInner: 0,
+    maxBacktracks: 0,
+    auditMode: 'compact',
+    propose: () => [{ slots: [0], shapes: [wrongShape] }],
+  });
+
+  assert.equal(result.status, 'unchanged');
+  assert.equal(result.bestAny, result.root);
+  assert.equal(result.bestPath.length, 1);
+  assert.equal(result.bestPath[0]?.candidateKey, null);
+  assert.equal(result.evaluated.length, 1);
+  assert.ok(result.proposed !== null);
+  assert.equal(result.proposed.depth, 1);
+  assert.equal(result.proposed.samples.length, sampleCount);
+  assert.equal(
+    result.proposed.evaluation.fixedOffset.length,
+    sampleCount,
+  );
+  assert.equal(
+    result.proposed.evaluation.solver.raw.length,
+    sampleCount,
+  );
+  assertPatchMatchesWav(
+    result.proposed.patch,
+    result.proposed.samples,
+    'legacy',
+    SAMPLE_RATE,
+    sampleCount,
+  );
+  assert.deepEqual(result.samples, target);
+  assert.deepEqual(typedBufferPaths(result.evaluated), []);
+  assert.deepEqual(typedBufferPaths(result.history), []);
+  assert.deepEqual(typedBufferPaths(result.depths), []);
+  assert.deepEqual(typedBufferPaths(result.bestPath), []);
+  const history = result.history[0];
+  assert.ok(history !== undefined);
+  assert.equal('fixedOffset' in history, false);
+  assert.equal('raw' in history.solver, false);
+  assert.equal('samples' in history.solver, false);
+  assert.equal(result.finalizationSampleWork, 0);
+});
+
 test('native J-floor fallback keeps source and exposes global-only proposed gain', () => {
   const truth: ArgCreateSynth = {
     oscillators: [tone(73, 0.4, 0.37)],
@@ -818,6 +893,14 @@ test('guard thresholds and actual-above-estimate failure are explicit', () => {
         estimatedWork: 10,
       }),
     /exceeded estimate: 11 > 10/,
+  );
+  const invalidAudit = {
+    ...knownCountFixture().options,
+    auditMode: 'invalid',
+  } as unknown as NativeStructuralBeamOptions;
+  assert.throws(
+    () => runNativeStructuralBeam(invalidAudit),
+    /Invalid native structural audit mode/,
   );
 });
 
@@ -1519,6 +1602,492 @@ test('width control creates independent stateful sessions with equal initial bud
   }
 });
 
+test('native compact depth20 keeps bounded keys and canonical results', (t) => {
+  const sampleCount = 8;
+  const fixture = coefficientFixture(1, 'legacy', sampleCount);
+  const baseEstimate = estimateStructuralCandidateWork({
+    sampleCount,
+    atomCount: 1,
+    maxInner: 8,
+    maxBacktracks: 16,
+  });
+  const calls: number[] = [];
+  const result = runNativeStructuralBeam({
+    patch: fixture.source,
+    target: fixture.target,
+    phaseModel: 'legacy',
+    beamWidth: 1,
+    maxDepth: 20,
+    maxGroupSize: 1,
+    workBudget: baseEstimate + 19 * (baseEstimate + sampleCount),
+    maxInner: 8,
+    maxBacktracks: 16,
+    auditMode: 'compact',
+    propose: (parent) => {
+      calls.push(parent.depth + 1);
+      return [fixture.proposal];
+    },
+  });
+
+  const expectedOrder = Array.from(
+    { length: 20 },
+    (_, index) => index + 1,
+  );
+  assert.deepEqual(calls, expectedOrder);
+  assert.equal(result.evaluated.length, 20);
+  assert.equal(
+    new Set(result.evaluated.map((node) => node.candidateKey)).size,
+    20,
+  );
+  assert.deepEqual(
+    result.evaluated.map((node) => node.depth),
+    expectedOrder,
+  );
+  assert.equal(result.bestPath.length, result.bestAny.depth + 1);
+  for (const node of result.evaluated) {
+    assert.ok(node.nodeKey.length <= 64, node.nodeKey);
+    assert.ok((node.parentKey ?? '').length <= 64);
+    assert.ok((node.candidateKey ?? '').length <= 1024);
+    assert.equal('orderToken' in node, false);
+    assert.equal('candidateOrderToken' in node, false);
+  }
+  for (let index = 1; index < result.bestPath.length; index += 1) {
+    const node = result.bestPath[index];
+    const parent = result.bestPath[index - 1];
+    assert.ok(node !== undefined && parent !== undefined);
+    assert.equal(node.parentKey, parent.nodeKey);
+  }
+  assert.ok(result.work.used <= result.work.budget);
+  assert.equal(
+    result.work.unused,
+    result.work.budget - result.work.used,
+  );
+  assert.equal(result.status, 'refined');
+  assert.equal(result.finalizationSampleWork, 5 * sampleCount);
+  assertPatchMatchesWav(
+    result.patch,
+    result.samples,
+    'legacy',
+    SAMPLE_RATE,
+    sampleCount,
+  );
+  assert.ok(result.proposed !== null);
+  assertPatchMatchesWav(
+    result.proposed.patch,
+    result.proposed.samples,
+    'legacy',
+    SAMPLE_RATE,
+    sampleCount,
+  );
+  const maxNodeKey = Math.max(
+    ...result.evaluated.map((node) => node.nodeKey.length),
+  );
+  const maxCandidateKey = Math.max(
+    ...result.evaluated.map((node) => node.candidateKey?.length ?? 0),
+  );
+  t.diagnostic(
+    `native compact depth20: max node/parent key=${maxNodeKey}, ` +
+      `max candidate key=${maxCandidateKey}, evaluations=20`,
+  );
+});
+
+test('native parent-first ordering and duplicate candidates match legacy full', () => {
+  const sampleCount = 32;
+  const shapes = [
+    shape(73, 0),
+    shape(137, 1),
+    shape(239, 2),
+    shape(331, 3),
+    shape(479, 4),
+  ] as const;
+  const slots = [0, 1, 2, 3, 4];
+  const known = fixtureCoefficients(5);
+  const source = offSource();
+  const truth = patchFromStructuralCandidate(source, {
+    slots,
+    shapes,
+    coefficients: known.truth,
+  });
+  const target = renderForTarget(truth, sampleCount, 'legacy');
+  const estimate = estimateStructuralCandidateWork({
+    sampleCount,
+    atomCount: 1,
+    maxInner: 0,
+    maxBacktracks: 0,
+  });
+  const propose = (
+    parent: NativeStructuralParent,
+  ): NativeStructuralProposal[] => {
+    if (parent.depth === 0) {
+      return [
+        { slots: [0], shapes: [shapes[0]] },
+        { slots: [1], shapes: [shapes[1]] },
+      ];
+    }
+    if (parent.depth === 1) {
+      return parent.evaluation?.proposal.slots[0] === 0
+        ? [{ slots: [2], shapes: [shapes[2]] }]
+        : [{ slots: [3], shapes: [shapes[3]] }];
+    }
+    const repeated = {
+      slots: [4],
+      shapes: [shapes[4]],
+    };
+    return [repeated, repeated];
+  };
+  const common = {
+    patch: source,
+    target,
+    phaseModel: 'legacy' as const,
+    beamWidth: 2,
+    maxDepth: 3,
+    maxGroupSize: 1,
+    workBudget: 6 * (estimate + sampleCount),
+    maxInner: 0,
+    maxBacktracks: 0,
+    propose,
+  };
+  const full = runNativeStructuralBeam(common);
+  const compact = runNativeStructuralBeam({
+    ...common,
+    auditMode: 'compact',
+  });
+  const evaluatedSlots = (
+    result:
+      NativeStructuralBeamResult | CompactNativeStructuralBeamResult,
+  ): number[] =>
+    result.evaluated.map(
+      (node) => node.value.evaluation?.proposal.slots[0] ?? -1,
+    );
+
+  assert.deepEqual(evaluatedSlots(full), [0, 1, 2, 3, 4, 4]);
+  assert.deepEqual(evaluatedSlots(compact), [0, 1, 2, 3, 4, 4]);
+  assert.equal(full.evaluated.length, 6);
+  assert.equal(compact.evaluated.length, 6);
+  assertNativeCompactParity(full, compact, sampleCount);
+});
+
+interface NativeParitySessionSnapshot {
+  estimates: string[];
+  calls: Array<{
+    parentKey: string;
+    depth: number;
+    proposals: NativeStructuralProposal[];
+  }>;
+}
+
+/** Запускает одинаковый measured width fixture в full режиме. */
+function runNativeParityFixture(auditMode: 'full'): {
+  control: NativeStructuralWidthControlResult;
+  sessions: NativeParitySessionSnapshot[];
+};
+/** Запускает одинаковый measured width fixture в compact режиме. */
+function runNativeParityFixture(auditMode: 'compact'): {
+  control: CompactNativeStructuralWidthControlResult;
+  sessions: NativeParitySessionSnapshot[];
+};
+/** Независимо записывает proposal snapshots обеих width-сессий. */
+function runNativeParityFixture(auditMode: 'full' | 'compact'): {
+  control:
+    | NativeStructuralWidthControlResult
+    | CompactNativeStructuralWidthControlResult;
+  sessions: NativeParitySessionSnapshot[];
+} {
+  const fixture = widthControlFixture();
+  const statelessPropose = fixture.options.propose;
+  assert.ok(statelessPropose !== undefined);
+  const expansionCost = 7;
+  const sessions: NativeParitySessionSnapshot[] = [];
+  const common = {
+    patch: fixture.source,
+    target: fixture.target,
+    beamWidth: fixture.options.beamWidth,
+    maxDepth: fixture.options.maxDepth,
+    maxGroupSize: fixture.options.maxGroupSize,
+    workBudget: fixture.options.workBudget + 3 * expansionCost,
+    maxInner: fixture.options.maxInner,
+    maxBacktracks: fixture.options.maxBacktracks,
+    createProposerSession: (): NativeStructuralProposerSession => {
+      const snapshot: NativeParitySessionSnapshot = {
+        estimates: [],
+        calls: [],
+      };
+      sessions.push(snapshot);
+      return {
+        estimateExpansion: (
+          parent: NativeStructuralParent,
+        ): number => {
+          snapshot.estimates.push(parent.nodeKey);
+          return expansionCost;
+        },
+        propose: (
+          parent: NativeStructuralParent,
+        ): NativeStructuralProposeResult => {
+          const proposals = statelessPropose(parent);
+          if (!Array.isArray(proposals)) {
+            throw new Error('Expected legacy native proposals');
+          }
+          snapshot.calls.push({
+            parentKey: parent.nodeKey,
+            depth: parent.depth,
+            proposals: structuredClone(
+              proposals,
+            ) as NativeStructuralProposal[],
+          });
+          return { candidates: proposals, cost: expansionCost };
+        },
+      };
+    },
+  };
+  if (auditMode === 'compact') {
+    return {
+      control: runNativeStructuralBeamWithWidthControl({
+        ...common,
+        auditMode: 'compact',
+      }),
+      sessions,
+    };
+  }
+  return {
+    control: runNativeStructuralBeamWithWidthControl(common),
+    sessions,
+  };
+}
+
+/** Сравнивает только metadata и canonical score полного/light узла. */
+function nativeNodeSemantics(
+  node: NativeStructuralNode | NativeStructuralCompactNode,
+): unknown {
+  return {
+    depth: node.depth,
+    score: node.score,
+    groupSize: node.groupSize,
+    estimatedWork: node.estimatedWork,
+    cost: node.cost,
+  };
+}
+
+/** Строит ожидаемую compact history из полного результата того же fixture. */
+function expectedCompactHistory(
+  result:
+    NativeStructuralBeamResult | CompactNativeStructuralBeamResult,
+): unknown[] {
+  return result.history.map((entry, index) => {
+    const node = result.evaluated[index];
+    assert.ok(node !== undefined);
+    return {
+      depth: entry.depth,
+      groupSize: entry.groupSize,
+      estimatedWork: entry.estimatedWork,
+      cost: entry.cost,
+      metrics: { ...node.score },
+      proposal: structuredClone(entry.proposal),
+      solver: compactNativeSolver(entry.solver),
+      sampleWork: { ...entry.sampleWork },
+      denseWork: { ...entry.denseWork },
+      canonicalWork: { ...entry.canonicalWork },
+    };
+  });
+}
+
+/** Сравнивает W и skip semantics без bounded/legacy identity strings. */
+function nativeWorkSemantics(
+  work: NativeStructuralBeamResult['work'],
+): unknown {
+  return {
+    budget: work.budget,
+    used: work.used,
+    unused: work.unused,
+    skippedBudget: work.skippedBudget.map((skip) => ({
+      depth: skip.depth,
+      estimatedWork: skip.estimatedWork,
+      remainingWork: skip.remainingWork,
+    })),
+  };
+}
+
+/** Сравнивает expansion order/cost без candidate/parent identity strings. */
+function nativeExpansionSemantics(
+  expansion: NativeStructuralBeamResult['expansions'][number],
+): unknown {
+  return {
+    depth: expansion.depth,
+    estimatedWork: expansion.estimatedWork,
+    cost: expansion.cost,
+  };
+}
+
+/** Сравнивает bestAny value и оба exact legacy tokens. */
+function assertNativeBestAnyParity(
+  full: NativeStructuralNode,
+  compact: NativeStructuralNode,
+): void {
+  assert.deepEqual(
+    nativeNodeSemantics(compact),
+    nativeNodeSemantics(full),
+  );
+  assert.deepEqual(compact.value, full.value);
+  const orderToken = compact.orderToken;
+  assert.ok(orderToken !== undefined);
+  assert.equal(stringifyOrderToken(orderToken), full.nodeKey);
+  const candidateToken = compact.candidateOrderToken;
+  assert.ok(candidateToken !== undefined);
+  assert.equal(
+    stringifyOrderToken(candidateToken),
+    full.candidateKey ?? '',
+  );
+}
+
+/** Доказывает A/B parity всего observable результата кроме heavy history. */
+function assertNativeCompactParity(
+  full: NativeStructuralBeamResult,
+  compact: CompactNativeStructuralBeamResult,
+  sampleCount: number,
+): void {
+  assert.equal(compact.status, full.status);
+  assert.deepEqual(compact.patch, full.patch);
+  assert.deepEqual(compact.samples, full.samples);
+  assert.deepEqual(compact.baseline, full.baseline);
+  assert.deepEqual(compact.metrics, full.metrics);
+  if (full.proposed === null || compact.proposed === null) {
+    assert.equal(compact.proposed, full.proposed);
+  } else {
+    assert.equal(compact.proposed.depth, full.proposed.depth);
+    assert.equal(compact.proposed.groupSize, full.proposed.groupSize);
+    assert.equal(
+      compact.proposed.estimatedWork,
+      full.proposed.estimatedWork,
+    );
+    assert.equal(compact.proposed.cost, full.proposed.cost);
+    assert.deepEqual(compact.proposed.patch, full.proposed.patch);
+    assert.deepEqual(compact.proposed.samples, full.proposed.samples);
+    assert.deepEqual(compact.proposed.metrics, full.proposed.metrics);
+    assert.deepEqual(
+      compact.proposed.evaluation,
+      full.proposed.evaluation,
+    );
+  }
+  assert.equal(compact.rejectionReason, full.rejectionReason);
+  assert.equal(compact.canonicalError, full.canonicalError);
+  assert.deepEqual(compact.root, full.root);
+  assertNativeBestAnyParity(full.bestAny, compact.bestAny);
+  assert.deepEqual(
+    compact.bestPath.map(nativeNodeSemantics),
+    full.bestPath.map(nativeNodeSemantics),
+  );
+  assert.deepEqual(
+    compact.evaluated.map(nativeNodeSemantics),
+    full.evaluated.map(nativeNodeSemantics),
+  );
+  assert.deepEqual(
+    compact.depths.map((level) => ({
+      depth: level.depth,
+      nodes: level.nodes.map(nativeNodeSemantics),
+    })),
+    full.depths.map((level) => ({
+      depth: level.depth,
+      nodes: level.nodes.map(nativeNodeSemantics),
+    })),
+  );
+  assert.deepEqual(
+    expectedCompactHistory(compact),
+    expectedCompactHistory(full),
+  );
+  assert.deepEqual(
+    nativeWorkSemantics(compact.work),
+    nativeWorkSemantics(full.work),
+  );
+  assert.equal(compact.evaluatorWork, full.evaluatorWork);
+  assert.equal(compact.expansionWork, full.expansionWork);
+  assert.deepEqual(
+    compact.expansions.map(nativeExpansionSemantics),
+    full.expansions.map(nativeExpansionSemantics),
+  );
+  const expansionSkips = (
+    result:
+      NativeStructuralBeamResult | CompactNativeStructuralBeamResult,
+  ): unknown[] =>
+    result.skippedExpansionBudget.map((skip) => ({
+      depth: skip.depth,
+      estimatedWork: skip.estimatedWork,
+      remainingWork: skip.remainingWork,
+    }));
+  assert.deepEqual(expansionSkips(compact), expansionSkips(full));
+  const groupSkips = (
+    result:
+      NativeStructuralBeamResult | CompactNativeStructuralBeamResult,
+  ): unknown[] =>
+    result.skips.groupSize.map((skip) => ({
+      depth: skip.depth,
+      groupSize: skip.groupSize,
+      maxGroupSize: skip.maxGroupSize,
+    }));
+  assert.deepEqual(groupSkips(compact), groupSkips(full));
+  assert.deepEqual(compact.denseWork, full.denseWork);
+  assert.equal(
+    compact.finalizationSampleWork,
+    full.finalizationSampleWork,
+  );
+  assertPatchMatchesWav(
+    compact.patch,
+    compact.samples,
+    'legacy',
+    SAMPLE_RATE,
+    sampleCount,
+  );
+  for (const node of compact.evaluated) {
+    assert.deepEqual(Object.keys(node.value), ['evaluation']);
+    assert.equal(
+      'fixedOffset' in (node.value.evaluation ?? {}),
+      false,
+    );
+    assert.equal(
+      'raw' in (node.value.evaluation?.solver ?? {}),
+      false,
+    );
+    assert.equal(
+      'samples' in (node.value.evaluation?.solver ?? {}),
+      false,
+    );
+  }
+}
+
+/** Сравнивает proposer calls без public identity strings. */
+function nativeSessionSemantics(
+  sessions: readonly NativeParitySessionSnapshot[],
+): unknown[] {
+  return sessions.map((session) => ({
+    estimateCalls: session.estimates.length,
+    calls: session.calls.map((call) => ({
+      depth: call.depth,
+      proposals: call.proposals,
+    })),
+  }));
+}
+
+test('full and compact native audits preserve beam and width1 A/B parity', () => {
+  const full = runNativeParityFixture('full');
+  const compact = runNativeParityFixture('compact');
+  assert.deepEqual(
+    nativeSessionSemantics(compact.sessions),
+    nativeSessionSemantics(full.sessions),
+  );
+  assertNativeCompactParity(
+    full.control.beam,
+    compact.control.beam,
+    2048,
+  );
+  assertNativeCompactParity(
+    full.control.width1,
+    compact.control.width1,
+    2048,
+  );
+  assert.equal(full.control.beam.evaluated.length, 4);
+  assert.equal(full.control.width1.evaluated.length, 3);
+  assert.equal(full.control.beam.expansionWork, 21);
+  assert.equal(full.control.width1.expansionWork, 14);
+});
+
 /** Независимо повторяет прежнюю fixed-offset сумму без retained solo-cache. */
 function assertNativeMemoryLayout(
   result: NativeStructuralBeamResult,
@@ -1764,5 +2333,213 @@ test('evaluated nodes release solo caches without changing sums, PCM, W or width
       `RSS ${(rssAfter / 2 ** 20).toFixed(1)} MiB ` +
       `(delta ${((rssAfter - rssBefore) / 2 ** 20).toFixed(1)} MiB); ` +
       'диагностика без абсолютного RSS-порога',
+  );
+});
+
+/** Рекурсивно находит typed buffers, скрытые в compact audit graph. */
+function typedBufferPaths(
+  value: unknown,
+  path = '$',
+  seen = new Set<object>(),
+): string[] {
+  if (ArrayBuffer.isView(value)) {
+    return value.byteLength > 0 ? [path] : [];
+  }
+  if (typeof value !== 'object' || value === null) {
+    return [];
+  }
+  if (seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+  return Object.entries(value).flatMap(([key, child]) =>
+    typedBufferPaths(child, `${path}.${key}`, seen),
+  );
+}
+
+/** Находит ordering metadata даже среди non-enumerable свойств light graph. */
+function orderingMetadataPaths(
+  value: unknown,
+  path = '$',
+  seen = new Set<object>(),
+): string[] {
+  if (typeof value !== 'object' || value === null) {
+    return [];
+  }
+  if (seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+  const paths: string[] = [];
+  for (const key of ['orderToken', 'candidateOrderToken']) {
+    if (key in value) {
+      paths.push(`${path}.${key}`);
+    }
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of Object.getOwnPropertyNames(value)) {
+    paths.push(
+      ...orderingMetadataPaths(record[key], `${path}.${key}`, seen),
+    );
+  }
+  return paths;
+}
+
+test('compact audit bounds heavy buffers and keys through depth20', (t) => {
+  const sampleCount = 20_000;
+  const atomCount = 1;
+  const branchDepths = 19;
+  const phaseModel: PhaseModel = 'legacy';
+  const source: ArgCreateSynth = {
+    oscillators: Array.from({ length: 50 }, (_, index) =>
+      tone(
+        45 + index * 11,
+        0.004 + (index % 4) * 0.001,
+        (index * 0.37) % TWO_PI,
+      ),
+    ),
+  };
+  const target = renderForTarget(source, sampleCount, phaseModel);
+  const baseEstimate = estimateStructuralCandidateWork({
+    sampleCount,
+    atomCount,
+    maxInner: 0,
+    maxBacktracks: 0,
+  });
+  const workBudget =
+    14 * baseEstimate +
+    branchDepths * 10 * (baseEstimate + sampleCount);
+  const rssBefore = process.memoryUsage().rss;
+  const result = runNativeStructuralBeam({
+    patch: source,
+    target,
+    phaseModel,
+    beamWidth: 2,
+    maxDepth: branchDepths + 1,
+    maxGroupSize: atomCount,
+    workBudget,
+    maxInner: 0,
+    maxBacktracks: 0,
+    auditMode: 'compact',
+    // Memory-layout fixture уже рендерит canonical PCM в evaluator; не
+    // повторяет второй 50-atom render в injected assert. Финальный assert ниже
+    // независимо проверяет сохранённые patch/PCM настоящим рендером.
+    assertCanonical: () => undefined,
+    propose: (parent) => {
+      assert.equal(parent.rawSum.length, sampleCount);
+      assert.equal(parent.samples.length, sampleCount);
+      const candidateCount = parent.depth === 0 ? 14 : 5;
+      return Array.from({ length: candidateCount }, (_, variant) => {
+        const slot = (parent.depth * 7 + variant) % 50;
+        return {
+          slots: [slot],
+          shapes: [
+            shape(
+              65 + slot * 9 + (variant % 3) * 17,
+              (parent.depth + variant) % 5,
+            ),
+          ],
+        };
+      });
+    },
+  });
+
+  assert.equal(result.evaluated.length, 204);
+  assert.equal(result.history.length, 204);
+  assert.equal(result.depths.length, 21);
+  assert.equal(result.expansions.length, 39);
+  assert.equal(result.work.used, workBudget);
+  assert.equal(result.work.unused, 0);
+  assert.deepEqual(result.skips.budget, []);
+  assert.equal(result.evaluatorWork, workBudget);
+  assert.equal(result.expansionWork, 0);
+  assert.equal(
+    result.history.reduce(
+      (sum, entry) =>
+        sum + entry.canonicalWork.parentContributionRenders,
+      0,
+    ),
+    190 * sampleCount,
+  );
+  for (const node of result.evaluated) {
+    assert.ok(node.nodeKey.length <= 64, node.nodeKey);
+    assert.ok((node.parentKey ?? '').length <= 64);
+    assert.ok((node.candidateKey ?? '').length <= 1024);
+  }
+  for (const [name, audit] of Object.entries({
+    evaluated: result.evaluated,
+    depths: result.depths,
+    bestPath: result.bestPath,
+    path: result.path,
+    history: result.history,
+  })) {
+    assert.deepEqual(
+      typedBufferPaths(audit, name),
+      [],
+      `${name} retains an N-sized buffer`,
+    );
+    assert.deepEqual(
+      orderingMetadataPaths(audit, name),
+      [],
+      `${name} retains non-enumerable ordering metadata`,
+    );
+  }
+  for (const entry of result.history) {
+    assert.equal('fixedOffset' in entry, false);
+    assert.equal('raw' in entry.solver, false);
+    assert.equal('samples' in entry.solver, false);
+    assert.ok(entry.solver.coefficients.length > 0);
+    assert.ok(
+      Number.isFinite(entry.metrics.globalSuppressionPercent),
+    );
+    assert.ok(
+      Number.isFinite(entry.metrics.windowedSuppressionPercent),
+    );
+  }
+  assert.equal(result.root.value.rawSum.length, sampleCount);
+  assert.equal(result.root.value.samples.length, sampleCount);
+  assert.equal(result.root.value.contributions?.length, 50);
+  assert.equal(result.bestAny.value.rawSum.length, sampleCount);
+  assert.equal(result.bestAny.value.samples.length, sampleCount);
+  assert.ok(result.proposed !== null);
+  assert.equal(
+    result.proposed.evaluation.fixedOffset.length,
+    sampleCount,
+  );
+  assert.equal(
+    result.proposed.evaluation.solver.raw.length,
+    sampleCount,
+  );
+  assert.equal(
+    result.proposed.evaluation.solver.samples.length,
+    sampleCount,
+  );
+  assert.equal(result.proposed.samples.length, sampleCount);
+  assert.equal(result.samples.length, sampleCount);
+  assertPatchMatchesWav(
+    result.patch,
+    result.samples,
+    phaseModel,
+    SAMPLE_RATE,
+    sampleCount,
+  );
+  assert.ok(
+    result.finalizationSampleWork === 0 ||
+      result.finalizationSampleWork === 5 * sampleCount,
+  );
+  const maxNodeKey = Math.max(
+    ...result.evaluated.map((node) => node.nodeKey.length),
+  );
+  const maxCandidateKey = Math.max(
+    ...result.evaluated.map((node) => node.candidateKey?.length ?? 0),
+  );
+  const rssAfter = process.memoryUsage().rss;
+  t.diagnostic(
+    `compact depth20: 204 evaluated nodes at N=${sampleCount}; ` +
+      `max node key=${maxNodeKey}, max candidate key=${maxCandidateKey}; ` +
+      '0 buffers in evaluated/depths/path/history; ' +
+      `RSS ${(rssAfter / 2 ** 20).toFixed(1)} MiB ` +
+      `(delta ${((rssAfter - rssBefore) / 2 ** 20).toFixed(1)} MiB); ` +
+      'структурный gate без абсолютного RSS-порога',
   );
 });
