@@ -9,6 +9,7 @@ OpenAlex и Wikipedia стали доступны через MCP. В `docs/metho
 ## 2026-11-24: обе цели и достаточность датасета зафиксированы явно
 
 `AGENTS.md` теперь называет реверс-синтез и улучшение сырых/плохих бочек двумя обязательными условиями завершения; эта правка сохранена отдельно в `dee8c9d`. План также фиксирует предел доказательности: восемь эталонов и повторные сиды позволяют продолжать structural search и screening, но сиды не являются независимыми звуками. После многократного выбора гипотез на одном наборе leave-one-target-out не равен новому holdout. Предварительные Q1–Q5 остаются возможны, однако общий закон качества нельзя объявить окончательно доказанным без явного обсуждения независимых реальных бочек. Новых записей одной бочки на разных высотах это не запрашивает.
+
 ## 2026-11-25: joint-K получил строгий бюджет и полный synthetic work ledger
 
 Радиальная проекция сохраняет границу исходной нормы до fallback-направления. Поэтому нулевые initial coefficients на ненулевом базисе дают ровно MIN_LEVEL=0.001, а не 1. Нулевой target движет ненулевой initial к нижней границе и уменьшает фактический PCM RSS. Ненулевой numerical path не изменён.
@@ -30,6 +31,14 @@ Known-count с K=2, N=3, одним backtrack, двумя accepted и одним
 Known-answer покрывают ортонормированные K=4/5/20/50, K=20 при N=2 и rank 2, обе фазовые модели native patch с близкими 73/73.2 Гц и далёким 6000 Гц, разные onset/durations/sweep/attack/hardStop/endLevel, восстановление после порчи только level/phase, сохранение optional-полей, replacement 20 из 50, отказ 40+20 и duplicate slots. Отдельные контроли ломают реализацию без вычитания fixedOffset, различают полный и standalone clip trap, доказывают непрерывность target и отклонение непрерывного улучшения на неизменном PCM. Beam, runner и production не реализованы; реальные A/B не запускались, закон качества не проверялся.
 
 Проверки: 24/24 новых теста и 60/60 связанных joint-projection/full-patch, всего 84/84. TypeScript, Prettier, target ESLint и diff check проходят без ошибок.
+
+## 2026-11-24: чистый scheduler для structural beam
+
+`src/dataset/structural-beam.ts` реализует generic синхронный поиск поверх injected root, expand, evaluator и comparator. Evaluator возвращает новое value узла вместе со score и фактической стоимостью, поэтому native solver сможет создать patch без мутации candidate. Модуль не знает о PCM, FFT и vector converter. Каждый узел хранит parent/depth, canonical candidate key, стабильный node key, score, groupSize, estimate и фактическую стоимость. Scheduler сохраняет лучшие retained-узлы каждой глубины и `bestAny`, разрешает временное ухудшение и продолжает соседние ветви после слабого или пустого child. Canonical keys не вызывают повторный evaluator, а tie разрешается стабильно.
+
+До вызова evaluator conservative estimate сравнивается с остатком W. Не поместившиеся кандидаты попадают в skipped-budget, фактические затраты дают used/unused, а превышение W вызывает ошибку. Эти единицы задаёт вызывающая сторона: scheduler не выдаёт beam candidate за CD iteration. Native structural nodes, generalized solver, runner, CD и canonical finalization остаются следующим этапом.
+
+Четырнадцать synthetic known-answer прошли 14/14. Табличный контроль дал width-1 путь empty/A/A+B со score 60, а width-2 сохранил A/B и нашёл empty/B/B+C со score 90. Отдельные тесты покрывают одиночный candidate сильнее группы, выигрыш после временного ухудшения, продолжение соседней ветви, дубли/tie и повторный call order, бюджетные ошибки, K=20 и неизменность входа. По WARN добавлены контроли фактической стоимости ниже estimate, root как `bestAny` при худших children, `maxDepth=0` без expand/evaluate и отказа на negative/NaN evaluation cost и NaN comparator. Они не выявили ошибок, поэтому scheduler не изменился. Это числа fixture, а не suppression или результат на аудио. Полный набор прошёл 330/330, TypeScript, сборка и Prettier прошли, target ESLint чистый; полный ESLint сохранил 70 прежних warning без ошибок. Production и реальные A/B не запускались.
 
 ## 2026-11-24: direct match и граница следующего structural search
 
