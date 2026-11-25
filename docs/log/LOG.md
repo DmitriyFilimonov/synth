@@ -2,6 +2,14 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-25: residual proposer соединён с measured native beam
+
+`residual-structural-proposer.ts` сам измеряет residual subtraction, окна/Hann, radix-2 FFT, пики, полные shape variants и leave-one-out slot ranking. Он не использует прежний `buildPursuitDictionary`, чьи localEvaluations не описывали полную работу. Полный `StructuralAtomShape` сохраняет независимые частоты, sweep, обе огибающие и delay/attack/hardStop; группа не получает общий decay или onset.
+
+Session возвращает conservative `estimateExpansion` и фактический `{ candidates, cost }`. Ledger разделяет residual/window/fft/peaks/shapes/slots и суммирует их без скрытой FFT-стоимости. Off/append идут первыми, active slots сортируются по canonical leave-one-out RSS. Нет скрытого K1/K2, кэша или общего состояния между sessions. При cost выше estimate proposer сам выбрасывает ошибку.
+
+Численная, optimizer и структурная ревизии READY. Шестнадцать known-answer включают K=20, off/append, weak slots, границы окон, валидацию всех публичных опций и independent sessions. Полный automatic путь без injected candidates нашёл synthetic тон 11025 Гц, прошёл настоящий native solver/canonical evaluator и дал global выше 99% с PCM-ошибкой не более одного Int16-отсчёта. Это не результат на реальных бочках и не закон качества. До финальных WARN-тестов общий набор прошёл 398/398; финальный полный прогон после них выполняет primary. Dataset runner и production пока отсутствуют.
+
 ## 2026-11-25: generic evaluator соблюдает conservative estimate
 
 `runStructuralBeam` теперь отклоняет `evaluation.cost > candidate.estimatedWork`, как уже делают expansion и native evaluator. Guard стоит после вызова evaluator, но до списания used/evaluatorWork, добавления node и сравнения с bestAny. Прежняя проверка W и все вызовы с cost не выше estimate сохранены.
