@@ -103,7 +103,11 @@ export interface StructuralBeamResult<Value, Score> {
 }
 
 /** Вход одного чистого синхронного beam-запуска. */
-export interface StructuralBeamOptions<Value, Score> {
+export interface StructuralBeamOptions<
+  Value,
+  Score,
+  CandidateValue = Value,
+> {
   root: StructuralBeamRoot<Value, Score>;
   beamWidth: number;
   maxDepth: number;
@@ -113,18 +117,18 @@ export interface StructuralBeamOptions<Value, Score> {
   /** Возвращает предложения только для retained parent-узла. */
   expand: (
     parent: StructuralBeamNode<Value, Score>,
-  ) => readonly StructuralBeamCandidate<Value>[];
+  ) => readonly StructuralBeamCandidate<CandidateValue>[];
   /** Возвращает новое значение узла, score и фактическую работу. */
   evaluate: (
-    candidate: StructuralBeamCandidate<Value>,
+    candidate: StructuralBeamCandidate<CandidateValue>,
     parent: StructuralBeamNode<Value, Score>,
   ) => StructuralBeamEvaluation<Value, Score>;
   /** Возвращает положительное число, если `a` лучше `b`, и ноль при tie. */
   compareScores: (a: Score, b: Score) => number;
 }
 
-interface CandidateProposal<Value, Score> {
-  candidate: StructuralBeamCandidate<Value>;
+interface CandidateProposal<Value, Score, CandidateValue> {
+  candidate: StructuralBeamCandidate<CandidateValue>;
   parent: StructuralBeamNode<Value, Score>;
   sequence: number;
 }
@@ -172,9 +176,9 @@ function assertCandidate<Value>(
 }
 
 /** Строит однозначный key пути без небезопасной склейки строк. */
-function childNodeKey<Value, Score>(
+function childNodeKey<Value, Score, CandidateValue>(
   parent: StructuralBeamNode<Value, Score>,
-  candidate: StructuralBeamCandidate<Value>,
+  candidate: StructuralBeamCandidate<CandidateValue>,
 ): string {
   return JSON.stringify([parent.nodeKey, candidate.key]);
 }
@@ -211,9 +215,9 @@ function compareNodes<Value, Score>(
 }
 
 /** Сортирует копию предложений, не меняя массивы источника кандидатов. */
-function orderedProposals<Value, Score>(
-  proposals: CandidateProposal<Value, Score>[],
-): CandidateProposal<Value, Score>[] {
+function orderedProposals<Value, Score, CandidateValue>(
+  proposals: CandidateProposal<Value, Score, CandidateValue>[],
+): CandidateProposal<Value, Score, CandidateValue>[] {
   return [...proposals].sort((a, b) => {
     const candidateOrder = compareText(
       a.candidate.key,
@@ -283,8 +287,12 @@ function buildBestPath<Value, Score>(
  * Payload остаётся caller-owned, поэтому callbacks должны читать его как
  * readonly, если требуется сквозная неизменность.
  */
-export function runStructuralBeam<Value, Score>(
-  options: StructuralBeamOptions<Value, Score>,
+export function runStructuralBeam<
+  Value,
+  Score,
+  CandidateValue = Value,
+>(
+  options: StructuralBeamOptions<Value, Score, CandidateValue>,
 ): StructuralBeamResult<Value, Score> {
   assertInteger(options.beamWidth, 'beamWidth', 1);
   assertInteger(options.maxDepth, 'maxDepth', 0);
@@ -320,7 +328,11 @@ export function runStructuralBeam<Value, Score>(
   let parents = [root];
 
   for (let depth = 1; depth <= options.maxDepth; depth += 1) {
-    const proposals: CandidateProposal<Value, Score>[] = [];
+    const proposals: CandidateProposal<
+      Value,
+      Score,
+      CandidateValue
+    >[] = [];
     let sequence = 0;
     for (const parent of parents) {
       const candidates = options.expand(parent);
