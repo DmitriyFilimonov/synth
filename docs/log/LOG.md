@@ -2,6 +2,12 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-25: реальный structural screening запущен
+
+После no-op preflight 12/12 canonical входов запущены GrumU A+B2, BOg delayed и water_15 на сидах 1–4. Все используют runner-коммит `83feea8`, beamWidth=4, maxDepth=20, maxGroupSize=20, maxInner=12, maxBacktracks=16 и W=20000000000 на сид на ветвь. Каталоги `structural-beam-{grumu,bog,water15}-v1` содержат launch.json с SHA, command context и PID; логи лежат в `/tmp/opencode/structural-beam-*-v1.log`. Width1 получает тот же W и independent proposer session. Gate заранее сохранён: 4 completed без errors/skips, минимум 3 improved saved beam, mean global ≥4.6 п.п., residual RMS reduction ≥25% и все guards. Первый сид ещё не завершён на момент записи, поэтому никакого качества или gate-результата не заявлено. Бюджет после результата не увеличивается.
+
+Объединённая structural+full-patch+modulation сборка `177e1d2` прошла 427/427, backend build, Prettier и ESLint без ошибок.
+
 ## 2026-11-25: structural dataset runner готов к проверенному запуску
 
 `structural-beam-run.ts` принимает раздельные source-base/target-dataset, slug, candidate-subdir и обязательный work-бюджет. До solver он проверяет completed run, пути и canonical source; phase/attackBoost действуют на весь paired run и восстанавливаются через finally. Beam и width 1 получают одинаковый W и independent residual proposer sessions. Runner атомарно сохраняет no-op, proposed/saved patch/WAV, history/audit/checkpoints, перечитывает сохранённые PCM и заново измеряет global/J. Report разделяет evaluator/expansion/dense/finalization, character/bands, path и warnings; rootSampleWork остаётся null, а не превращается в фиктивный ноль.
