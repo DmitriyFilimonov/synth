@@ -2,6 +2,14 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-24: чистый scheduler для structural beam
+
+`src/dataset/structural-beam.ts` реализует generic синхронный поиск поверх injected root, expand, evaluator и comparator. Evaluator возвращает новое value узла вместе со score и фактической стоимостью, поэтому native solver сможет создать patch без мутации candidate. Модуль не знает о PCM, FFT и vector converter. Каждый узел хранит parent/depth, canonical candidate key, стабильный node key, score, groupSize, estimate и фактическую стоимость. Scheduler сохраняет лучшие retained-узлы каждой глубины и `bestAny`, разрешает временное ухудшение и продолжает соседние ветви после слабого или пустого child. Canonical keys не вызывают повторный evaluator, а tie разрешается стабильно.
+
+До вызова evaluator conservative estimate сравнивается с остатком W. Не поместившиеся кандидаты попадают в skipped-budget, фактические затраты дают used/unused, а превышение W вызывает ошибку. Эти единицы задаёт вызывающая сторона: scheduler не выдаёт beam candidate за CD iteration. Native structural nodes, generalized solver, runner, CD и canonical finalization остаются следующим этапом.
+
+Четырнадцать synthetic known-answer прошли 14/14. Табличный контроль дал width-1 путь empty/A/A+B со score 60, а width-2 сохранил A/B и нашёл empty/B/B+C со score 90. Отдельные тесты покрывают одиночный candidate сильнее группы, выигрыш после временного ухудшения, продолжение соседней ветви, дубли/tie и повторный call order, бюджетные ошибки, K=20 и неизменность входа. По WARN добавлены контроли фактической стоимости ниже estimate, root как `bestAny` при худших children, `maxDepth=0` без expand/evaluate и отказа на negative/NaN evaluation cost и NaN comparator. Они не выявили ошибок, поэтому scheduler не изменился. Это числа fixture, а не suppression или результат на аудио. Полный набор прошёл 330/330, TypeScript, сборка и Prettier прошли, target ESLint чистый; полный ESLint сохранил 70 прежних warning без ошибок. Production и реальные A/B не запускались.
+
 ## 2026-11-24: direct match и граница следующего structural search
 
 Full-patch runner получил `--dataset match --match-base DIR --match-slug SLUG`: он читает completed `<base>/<slug>/seed-N` напрямую, проверяет canonical source и сохраняет delay через fixed-delay control. Localized source получает явный skip-control. CLI отклоняет небезопасный slug и совпадение выхода со входом. No-delay known-answer проходит настоящий CD control и не материализует `delay: 0`. Три ревизии direct runner и финальная safety-ревизия READY; полный набор прошёл 316/316, backend build, Prettier и lint без ошибок. Это инфраструктура для будущих структурных кандидатов. Отдельный water_15 VP не запускался: повторять локальный solver на уже разобранном остатке без новой структуры было бы кругом.
