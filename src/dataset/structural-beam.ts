@@ -4,6 +4,20 @@
  * Модуль не знает об осцилляторах, PCM или coordinate descent. Источник
  * кандидатов, evaluator и comparator задают предметную область снаружи.
  */
+import {
+  assertStructuralExpansionEstimate,
+  chargeStructuralExpansion,
+  normalizeStructuralExpansion,
+  type StructuralExpansion as GenericStructuralExpansion,
+  type StructuralExpansionBudgetSkip as StructuralBeamExpansionBudgetSkip,
+  type StructuralExpansionRecord as StructuralBeamExpansionRecord,
+  type StructuralExpansionResult as GenericStructuralExpansionResult,
+} from './structural-expansion';
+
+export type {
+  StructuralExpansionBudgetSkip as StructuralBeamExpansionBudgetSkip,
+  StructuralExpansionRecord as StructuralBeamExpansionRecord,
+} from './structural-expansion';
 
 /** Исходный узел поиска; его score уже известен и evaluator не нужен. */
 export interface StructuralBeamRoot<Value, Score> {
@@ -28,6 +42,22 @@ export interface StructuralBeamCandidate<Value> {
   /** Консервативная оценка работы в единицах общего бюджета W. */
   estimatedWork: number;
 }
+
+/**
+ * Measured expansion с typed beam candidates и фактической
+ * стоимостью.
+ */
+export type StructuralBeamExpansion<CandidateValue> =
+  GenericStructuralExpansion<StructuralBeamCandidate<CandidateValue>>;
+
+/**
+ * Прежний candidate array либо measured expansion того же
+ * candidate type.
+ */
+export type StructuralBeamExpansionResult<CandidateValue> =
+  GenericStructuralExpansionResult<
+    StructuralBeamCandidate<CandidateValue>
+  >;
 
 /** Фактический результат одного вызова evaluator. */
 export interface StructuralBeamEvaluation<Value, Score> {
@@ -98,7 +128,18 @@ export interface StructuralBeamResult<Value, Score> {
   depths: StructuralBeamDepth<Value, Score>[];
   /** Все оценённые узлы в точном порядке вызовов evaluator. */
   evaluated: StructuralBeamNode<Value, Score>[];
+  /** Прежний общий W: `used = evaluatorWork + expansionWork`. */
   work: StructuralBeamWorkLedger;
+  /** Фактические затраты evaluator, отдельно от работы proposer. */
+  evaluatorWork: number;
+  /** Фактические затраты expansion, отдельно от evaluator. */
+  expansionWork: number;
+  /** Все вызванные expansions в deterministic порядке. */
+  expansions: StructuralBeamExpansionRecord[];
+  /**
+   * Expansions, пропущенные до callback из-за conservative estimate.
+   */
+  skippedExpansionBudget: StructuralBeamExpansionBudgetSkip[];
   skippedGroupSize: StructuralBeamGroupSizeSkip[];
 }
 
@@ -112,12 +153,37 @@ export interface StructuralBeamOptions<
   beamWidth: number;
   maxDepth: number;
   maxGroupSize: number;
-  /** Общий бюджет W в caller-defined единицах работы. */
+  /**
+   * Общий бюджет W в caller-defined единицах работы evaluator и
+   * expansion. Scheduler не знает, какие физические операции измеряет
+   * caller.
+   */
   workBudget: number;
-  /** Возвращает предложения только для retained parent-узла. */
+  /**
+   * Возвращает conservative estimate expansion до вызова `expand`.
+   * Отсутствие estimator означает нулевой estimate и допускает только
+   * прежний массив candidates либо measured expansion с нулевой
+   * фактической ценой.
+   *
+   * @param parent - Retained parent, который scheduler собирается
+   *   расширить
+   * @returns Конечный неотрицательный верхний предел фактической цены
+   */
+  estimateExpansion?: (
+    parent: StructuralBeamNode<Value, Score>,
+  ) => number;
+  /**
+   * Возвращает предложения только для retained parent-узла.
+   * Прежний массив сохраняет нулевую expansion cost; объект явно
+   * возвращает `{ candidates, cost }` и не меняет score или payload
+   * кандидатов.
+   *
+   * @param parent - Retained parent текущей глубины
+   * @returns Массив candidates либо measured `{ candidates, cost }`
+   */
   expand: (
     parent: StructuralBeamNode<Value, Score>,
-  ) => readonly StructuralBeamCandidate<CandidateValue>[];
+  ) => StructuralBeamExpansionResult<CandidateValue>;
   /** Возвращает новое значение узла, score и фактическую работу. */
   evaluate: (
     candidate: StructuralBeamCandidate<CandidateValue>,
@@ -131,6 +197,13 @@ interface CandidateProposal<Value, Score, CandidateValue> {
   candidate: StructuralBeamCandidate<CandidateValue>;
   parent: StructuralBeamNode<Value, Score>;
   sequence: number;
+}
+
+/** Внутренние фактические суммы; публичный legacy `work` не расширяется. */
+interface StructuralBeamWorkTotals {
+  used: number;
+  evaluatorWork: number;
+  expansionWork: number;
 }
 
 /** Сравнивает строки без locale-dependent порядка. */
@@ -181,6 +254,81 @@ function childNodeKey<Value, Score, CandidateValue>(
   candidate: StructuralBeamCandidate<CandidateValue>,
 ): string {
   return JSON.stringify([parent.nodeKey, candidate.key]);
+}
+
+/**
+ * Расширяет каждый retained parent не более одного раза за запуск.
+ *
+ * Estimate проверяется до callback. После callback helper списывает только
+ * фактический cost, поэтому неизрасходованная часть estimate доступна следующим
+ * parents и candidates. Исключения estimator/proposer идут вызывающему коду.
+ */
+function expandStructuralParents<Value, Score, CandidateValue>(arg: {
+  options: StructuralBeamOptions<Value, Score, CandidateValue>;
+  parents: readonly StructuralBeamNode<Value, Score>[];
+  depth: number;
+  totals: StructuralBeamWorkTotals;
+  expandedParentKeys: Set<string>;
+}): {
+  proposals: CandidateProposal<Value, Score, CandidateValue>[];
+  expansions: StructuralBeamExpansionRecord[];
+  skippedBudget: StructuralBeamExpansionBudgetSkip[];
+} {
+  const proposals: CandidateProposal<Value, Score, CandidateValue>[] =
+    [];
+  const expansions: StructuralBeamExpansionRecord[] = [];
+  const skippedBudget: StructuralBeamExpansionBudgetSkip[] = [];
+  let sequence = 0;
+  for (const parent of arg.parents) {
+    if (arg.expandedParentKeys.has(parent.nodeKey)) {
+      continue;
+    }
+    arg.expandedParentKeys.add(parent.nodeKey);
+    const estimateExpansion = arg.options.estimateExpansion;
+    const estimatedWork =
+      estimateExpansion === undefined ? 0 : estimateExpansion(parent);
+    assertStructuralExpansionEstimate(estimatedWork);
+    const remainingWork = arg.options.workBudget - arg.totals.used;
+    if (estimatedWork > remainingWork) {
+      skippedBudget.push({
+        parentKey: parent.nodeKey,
+        depth: arg.depth,
+        estimatedWork,
+        remainingWork,
+      });
+      continue;
+    }
+
+    const expansion = normalizeStructuralExpansion(
+      arg.options.expand(parent),
+    );
+    const charge = chargeStructuralExpansion({
+      budget: arg.options.workBudget,
+      used: arg.totals.used,
+      expansionWork: arg.totals.expansionWork,
+      parentKey: parent.nodeKey,
+      estimatedWork,
+      cost: expansion.cost,
+    });
+    arg.totals.used = charge.used;
+    arg.totals.expansionWork = charge.expansionWork;
+    const candidateKeys: string[] = [];
+    for (const candidate of expansion.candidates) {
+      assertCandidate(candidate);
+      candidateKeys.push(candidate.key);
+      proposals.push({ candidate, parent, sequence });
+      sequence += 1;
+    }
+    candidateKeys.sort(compareText);
+    expansions.push({
+      parentKey: parent.nodeKey,
+      depth: arg.depth,
+      estimatedWork,
+      cost: expansion.cost,
+      candidateKeys,
+    });
+  }
+  return { proposals, expansions, skippedBudget };
 }
 
 /**
@@ -267,25 +415,39 @@ function buildBestPath<Value, Score>(
 }
 
 /**
- * Запускает generic beam search поверх injected candidates и evaluator.
+ * Запускает generic beam search поверх injected candidates и
+ * evaluator.
  *
- * Каждая глубина оценивает предложения всех retained parents, а затем
- * оставляет `beamWidth` лучших children этой глубины. Промежуточный узел не
- * обязан улучшать parent или global best. Пустая или слабая ветвь не
- * останавливает остальные parents. Исключения самих callbacks не
- * поглощаются.
+ * @param options - Root, пределы beam/W и callbacks предметной
+ *   области
+ * @returns Полный deterministic результат с раздельным учётом
+ *   evaluator и expansion
+ * @throws Error при невалидных параметрах, ключах, estimate/cost или
+ *   превышении conservative estimate/W; ошибки callbacks пробрасываются
+ *   без изменений
+ * @remarks Каждая глубина оценивает предложения всех retained
+ * parents, а затем оставляет `beamWidth` лучших children этой глубины.
+ * Промежуточный узел не обязан улучшать parent или global best.
+ * Пустая или слабая ветвь не останавливает остальные parents.
  *
  * Canonical candidate keys дедуплицируются глобально. Перед evaluator
- * scheduler проверяет conservative estimate против оставшегося W и при
- * нехватке записывает skip. Фактическая стоимость суммируется после вызова;
- * превышение W является ошибкой. В успешном результате `used <= W` и
- * `unused = W - used`.
+ * scheduler проверяет conservative estimate против оставшегося W
+ * и при нехватке записывает skip. Фактическая стоимость суммируется после
+ * вызова; превышение candidate estimate или W является ошибкой до списания
+ * и обновления bestAny. Аналогичный estimate/cost
+ * контракт покрывает expansion: его skip происходит до `expand`, а
+ * фактическая цена сразу уменьшает W для candidates и следующих
+ * parents.
+ * Отдельные `evaluatorWork` и `expansionWork` не смешивают аудит двух
+ * видов операций. В успешном результате
+ * `used = evaluatorWork + expansionWork <= W`, а `unused = W - used`.
  *
- * Единицы W ничего не знают о CD iterations и не приравниваются к числу beam
- * candidates. Модуль не выполняет runner, CD или canonical finalization.
- * Он не сортирует и не изменяет входные массивы, nodes или candidates.
- * Payload остаётся caller-owned, поэтому callbacks должны читать его как
- * readonly, если требуется сквозная неизменность.
+ * Единицы W ничего не знают о CD iterations, FFT,
+ * dense-операциях и не приравниваются к числу beam candidates. Модуль
+ * не выполняет runner, CD или canonical finalization. Он не сортирует
+ * и не изменяет входные массивы, nodes или candidates. Payload остаётся
+ * caller-owned, поэтому callbacks должны читать его как readonly, если
+ * требуется сквозная неизменность.
  */
 export function runStructuralBeam<
   Value,
@@ -320,28 +482,32 @@ export function runStructuralBeam<
     { depth: 0, nodes: [root] },
   ];
   const evaluated: StructuralBeamNode<Value, Score>[] = [];
+  const expansions: StructuralBeamExpansionRecord[] = [];
   const skippedBudget: StructuralBeamBudgetSkip[] = [];
+  const skippedExpansionBudget: StructuralBeamExpansionBudgetSkip[] =
+    [];
   const skippedGroupSize: StructuralBeamGroupSizeSkip[] = [];
   const seenCandidateKeys = new Set<string>([options.root.key]);
-  let used = 0;
+  const expandedParentKeys = new Set<string>();
+  const totals: StructuralBeamWorkTotals = {
+    used: 0,
+    evaluatorWork: 0,
+    expansionWork: 0,
+  };
   let bestAny = root;
   let parents = [root];
 
   for (let depth = 1; depth <= options.maxDepth; depth += 1) {
-    const proposals: CandidateProposal<
-      Value,
-      Score,
-      CandidateValue
-    >[] = [];
-    let sequence = 0;
-    for (const parent of parents) {
-      const candidates = options.expand(parent);
-      for (const candidate of candidates) {
-        assertCandidate(candidate);
-        proposals.push({ candidate, parent, sequence });
-        sequence += 1;
-      }
-    }
+    const expanded = expandStructuralParents({
+      options,
+      parents,
+      depth,
+      totals,
+      expandedParentKeys,
+    });
+    const { proposals } = expanded;
+    expansions.push(...expanded.expansions);
+    skippedExpansionBudget.push(...expanded.skippedBudget);
 
     const children: StructuralBeamNode<Value, Score>[] = [];
     for (const proposal of orderedProposals(proposals)) {
@@ -360,7 +526,7 @@ export function runStructuralBeam<
         });
         continue;
       }
-      const remainingWork = options.workBudget - used;
+      const remainingWork = options.workBudget - totals.used;
       if (candidate.estimatedWork > remainingWork) {
         skippedBudget.push({
           parentKey: parent.nodeKey,
@@ -374,13 +540,20 @@ export function runStructuralBeam<
 
       const evaluation = options.evaluate(candidate, parent);
       assertWork(evaluation.cost, 'evaluation.cost');
-      if (used + evaluation.cost > options.workBudget) {
+      if (totals.used + evaluation.cost > options.workBudget) {
         throw new Error(
           `Structural beam evaluator exceeded W for ${candidate.key}: ` +
-            `${used} + ${evaluation.cost} > ${options.workBudget}`,
+            `${totals.used} + ${evaluation.cost} > ${options.workBudget}`,
         );
       }
-      used += evaluation.cost;
+      if (evaluation.cost > candidate.estimatedWork) {
+        throw new Error(
+          `Structural beam evaluator exceeded estimate for ${candidate.key}: ` +
+            `${evaluation.cost} > ${candidate.estimatedWork}`,
+        );
+      }
+      totals.used += evaluation.cost;
+      totals.evaluatorWork += evaluation.cost;
       const node: StructuralBeamNode<Value, Score> = {
         nodeKey: childNodeKey(parent, candidate),
         candidateKey: candidate.key,
@@ -417,10 +590,14 @@ export function runStructuralBeam<
     evaluated,
     work: {
       budget: options.workBudget,
-      used,
-      unused: options.workBudget - used,
+      used: totals.used,
+      unused: options.workBudget - totals.used,
       skippedBudget,
     },
+    evaluatorWork: totals.evaluatorWork,
+    expansionWork: totals.expansionWork,
+    expansions,
+    skippedExpansionBudget,
     skippedGroupSize,
   };
 }

@@ -46,6 +46,10 @@ import {
   type StructuralBeamResult,
 } from './structural-beam';
 import {
+  normalizeStructuralExpansion,
+  type StructuralExpansionResult,
+} from './structural-expansion';
+import {
   addStructuralSampleWork,
   createStructuralWorkLedger,
   snapshotStructuralWork,
@@ -83,6 +87,59 @@ export interface NativeStructuralProposal {
   slots: readonly number[];
   shapes: readonly StructuralAtomShape[];
 }
+
+/**
+ * Прежний массив proposals либо measured `{ candidates, cost }`.
+ * Массив сохраняет нулевую expansion cost, а объект списывает
+ * фактическую работу proposer в общий W.
+ */
+export type NativeStructuralProposeResult =
+  StructuralExpansionResult<NativeStructuralProposal>;
+
+/**
+ * Stateless native proposer; measured expansion является opt-in.
+ *
+ * @param parent - Canonical native-состояние и metadata текущего узла
+ * @returns Массив proposals либо measured `{ candidates, cost }`
+ */
+export type NativeStructuralPropose = (
+  parent: NativeStructuralParent,
+) => NativeStructuralProposeResult;
+
+/**
+ * Возвращает conservative estimate только для proposer, не для
+ * evaluator.
+ *
+ * @param parent - Canonical native-состояние и metadata текущего узла
+ * @returns Конечный неотрицательный верхний предел expansion cost в
+ *   единицах W
+ */
+export type NativeStructuralExpansionEstimate = (
+  parent: NativeStructuralParent,
+) => number;
+
+/**
+ * Независимая session одного запуска или одной ветви width-control.
+ * Внутреннее состояние и measured cost принадлежат только этой
+ * session.
+ */
+export interface NativeStructuralProposerSession {
+  /**
+   * Возвращает proposals и при measured API их фактическую стоимость.
+   */
+  propose: NativeStructuralPropose;
+  /** Возвращает conservative estimate до вызова `propose`. */
+  estimateExpansion?: NativeStructuralExpansionEstimate;
+}
+
+/**
+ * Создаёт новую session с одинаковым начальным состоянием для
+ * каждой ветви.
+ *
+ * @returns Новая независимая session proposer
+ */
+export type NativeStructuralProposerSessionFactory =
+  () => NativeStructuralProposerSession;
 
 /** Раздельный учёт canonical N-проходов вне solver ledger. */
 export interface NativeStructuralCanonicalWork {
@@ -148,8 +205,8 @@ export interface NativeStructuralHistoryEntry {
 export type NativeStructuralCanonicalAssert =
   typeof assertPatchMatchesWav;
 
-/** Вход native synthetic beam; W измеряет только evaluator sample-work. */
-export interface NativeStructuralBeamOptions {
+/** Общие поля native synthetic beam независимо от способа подачи proposer. */
+export interface NativeStructuralBeamBaseOptions {
   patch: ArgCreateSynth;
   /** Ненулевой mono PCM в единицах Int16; повторного квантования нет. */
   target: ArrayLike<number>;
@@ -158,18 +215,44 @@ export interface NativeStructuralBeamOptions {
   beamWidth: number;
   maxDepth: number;
   maxGroupSize: number;
+  /**
+   * W покрывает evaluator и opt-in measured expansion; root и
+   * finalization в этот бюджет не входят.
+   */
   workBudget: number;
   maxInner?: number;
   maxBacktracks?: number;
-  propose: (
-    parent: NativeStructuralParent,
-  ) => readonly NativeStructuralProposal[];
   /**
    * Точка synthetic mismatch-контроля; по умолчанию вызывается общий
    * `assertPatchMatchesWav`. Production runner сюда не подключается.
    */
   assertCanonical?: NativeStructuralCanonicalAssert;
 }
+
+/**
+ * Вход native synthetic beam с ровно одним источником proposals.
+ *
+ * Прямой `propose` сохраняет прежний stateless API. Для stateful
+ * proposer и независимого width-control следует передать
+ * `createProposerSession`: factory вызывается отдельно для основной и
+ * width-1 ветви. Необязательный estimator задаётся рядом с прямым
+ * `propose` или внутри session, относится только к measured
+ * expansion и использует те же caller-defined единицы W.
+ */
+export type NativeStructuralBeamOptions =
+  NativeStructuralBeamBaseOptions &
+    (
+      | {
+          propose: NativeStructuralPropose;
+          estimateExpansion?: NativeStructuralExpansionEstimate;
+          createProposerSession?: never;
+        }
+      | {
+          propose?: never;
+          estimateExpansion?: never;
+          createProposerSession: NativeStructuralProposerSessionFactory;
+        }
+    );
 
 /** Saved fallback, proposed candidate и полный beam/work аудит. */
 export interface NativeStructuralBeamResult {
@@ -196,11 +279,36 @@ export interface NativeStructuralBeamResult {
     NativeStructuralState,
     RefitMetrics
   >['work'];
+  /**
+   * N-pass evaluator ветви; без measured expansion совпадает с
+   * прежним `work.used`.
+   */
+  evaluatorWork: number;
+  /**
+   * Caller-defined proposer work ветви; не примешивается к denseWork.
+   */
+  expansionWork: number;
+  /** Expansion parent/depth/estimate/cost/keys только этой ветви. */
+  expansions: StructuralBeamResult<
+    NativeStructuralState,
+    RefitMetrics
+  >['expansions'];
+  /**
+   * Тот же expansion-skip аудит, что и в `skips.expansionBudget`.
+   */
+  skippedExpansionBudget: StructuralBeamResult<
+    NativeStructuralState,
+    RefitMetrics
+  >['skippedExpansionBudget'];
   skips: {
     budget: StructuralBeamResult<
       NativeStructuralState,
       RefitMetrics
     >['work']['skippedBudget'];
+    expansionBudget: StructuralBeamResult<
+      NativeStructuralState,
+      RefitMetrics
+    >['skippedExpansionBudget'];
     groupSize: StructuralBeamResult<
       NativeStructuralState,
       RefitMetrics
@@ -218,6 +326,17 @@ export interface NativeStructuralWidthControlResult {
   width1: NativeStructuralBeamResult;
 }
 
+type PreparedNativeProposer =
+  | {
+      kind: 'stateless';
+      propose: NativeStructuralPropose;
+      estimateExpansion?: NativeStructuralExpansionEstimate;
+    }
+  | {
+      kind: 'factory';
+      createSession: NativeStructuralProposerSessionFactory;
+    };
+
 interface PreparedNativeRun {
   source: ArgCreateSynth;
   rootState: NativeStructuralState;
@@ -228,7 +347,8 @@ interface PreparedNativeRun {
   usefulZone: UsefulZone;
   maxInner: number;
   maxBacktracks: number;
-  propose: NativeStructuralBeamOptions['propose'];
+  /** Factory хранится невызванной до начала конкретной ветви. */
+  proposer: PreparedNativeProposer;
   assertCanonical: NativeStructuralCanonicalAssert;
 }
 
@@ -370,6 +490,77 @@ function assertFiniteMetrics(metrics: RefitMetrics): void {
   }
 }
 
+/** Проверяет взаимно исключающие stateless и session-factory входы. */
+function prepareNativeProposer(
+  options: NativeStructuralBeamOptions,
+): PreparedNativeProposer {
+  const direct = options.propose;
+  const factory = options.createProposerSession;
+  if (factory !== undefined) {
+    if (
+      direct !== undefined ||
+      options.estimateExpansion !== undefined
+    ) {
+      throw new Error(
+        'Use either propose or createProposerSession, not both',
+      );
+    }
+    if (typeof factory !== 'function') {
+      throw new Error('createProposerSession must be a function');
+    }
+    return { kind: 'factory', createSession: factory };
+  }
+  if (typeof direct !== 'function') {
+    throw new Error('propose must be a function');
+  }
+  const estimateExpansion = options.estimateExpansion;
+  if (
+    estimateExpansion !== undefined &&
+    typeof estimateExpansion !== 'function'
+  ) {
+    throw new Error('estimateExpansion must be a function');
+  }
+  return {
+    kind: 'stateless',
+    propose: direct,
+    estimateExpansion,
+  };
+}
+
+/** Создаёт session после подготовки root, не деля её с другой ветвью. */
+function createNativeProposerSession(
+  context: PreparedNativeRun,
+): NativeStructuralProposerSession {
+  const source = context.proposer;
+  if (source.kind === 'stateless') {
+    const estimateExpansion = source.estimateExpansion;
+    return {
+      propose: (parent) => source.propose(parent),
+      estimateExpansion:
+        estimateExpansion === undefined
+          ? undefined
+          : (parent): number => estimateExpansion(parent),
+    };
+  }
+  const session = source.createSession();
+  if (
+    typeof session !== 'object' ||
+    session === null ||
+    typeof session.propose !== 'function'
+  ) {
+    throw new Error('Proposer session must provide propose(parent)');
+  }
+  if (
+    session.estimateExpansion !== undefined &&
+    typeof session.estimateExpansion !== 'function'
+  ) {
+    throw new Error(
+      'Proposer session estimateExpansion must be a function',
+    );
+  }
+  return session;
+}
+
 /** Проверяет вход и один раз нормализует continuous target для solver. */
 function prepareNativeStructuralRun(
   options: NativeStructuralBeamOptions,
@@ -396,9 +587,7 @@ function prepareNativeStructuralRun(
   if (options.patch.oscillators.length > MAX_OSCILLATORS) {
     throw new Error(`Maximum ${MAX_OSCILLATORS} oscillators allowed`);
   }
-  if (typeof options.propose !== 'function') {
-    throw new Error('propose must be a function');
-  }
+  const proposer = prepareNativeProposer(options);
 
   const target = Array.from(options.target);
   if (target.length === 0) {
@@ -441,7 +630,7 @@ function prepareNativeStructuralRun(
     usefulZone,
     maxInner,
     maxBacktracks,
-    propose: options.propose,
+    proposer,
     assertCanonical,
   };
 }
@@ -988,7 +1177,19 @@ function nativeHistory(
   });
 }
 
-/** Запускает scheduler поверх уже prepared root; root нигде не мутируется. */
+/** Добавляет metadata пути без копирования больших native PCM buffers. */
+function nativeStructuralParent(
+  parent: NativeStructuralNode,
+): NativeStructuralParent {
+  return {
+    ...parent.value,
+    depth: parent.depth,
+    nodeKey: parent.nodeKey,
+    candidateKey: parent.candidateKey,
+  };
+}
+
+/** Запускает scheduler с новой proposer session и независимым ledger ветви. */
 function executeNativeStructuralBeam(
   context: PreparedNativeRun,
   beamWidth: number,
@@ -996,6 +1197,9 @@ function executeNativeStructuralBeam(
   maxGroupSize: number,
   workBudget: number,
 ): NativeStructuralBeamResult {
+  const proposer = createNativeProposerSession(context);
+  const propose = proposer.propose;
+  const estimateExpansion = proposer.estimateExpansion;
   const beam = runStructuralBeam<
     NativeStructuralState,
     RefitMetrics,
@@ -1010,16 +1214,24 @@ function executeNativeStructuralBeam(
     maxDepth,
     maxGroupSize,
     workBudget,
+    estimateExpansion:
+      estimateExpansion === undefined
+        ? undefined
+        : (parent): number =>
+            estimateExpansion.call(
+              proposer,
+              nativeStructuralParent(parent),
+            ),
     expand: (parent) => {
-      const proposals = context.propose({
-        ...parent.value,
-        depth: parent.depth,
-        nodeKey: parent.nodeKey,
-        candidateKey: parent.candidateKey,
-      });
-      return proposals.map((proposal) =>
-        prepareNativeStructuralProposal(proposal, parent, context),
+      const expansion = normalizeStructuralExpansion(
+        propose.call(proposer, nativeStructuralParent(parent)),
       );
+      return {
+        candidates: expansion.candidates.map((proposal) =>
+          prepareNativeStructuralProposal(proposal, parent, context),
+        ),
+        cost: expansion.cost,
+      };
     },
     evaluate: (candidate, parent) =>
       evaluateNativeStructuralCandidate(candidate, parent, context),
@@ -1043,8 +1255,13 @@ function executeNativeStructuralBeam(
     evaluated: beam.evaluated,
     history: nativeHistory(beam.evaluated),
     work: beam.work,
+    evaluatorWork: beam.evaluatorWork,
+    expansionWork: beam.expansionWork,
+    expansions: beam.expansions,
+    skippedExpansionBudget: beam.skippedExpansionBudget,
     skips: {
       budget: beam.work.skippedBudget,
+      expansionBudget: beam.skippedExpansionBudget,
       groupSize: beam.skippedGroupSize,
     },
     denseWork: aggregateDenseWork(beam.evaluated),
@@ -1053,15 +1270,25 @@ function executeNativeStructuralBeam(
 }
 
 /**
- * Запускает deterministic native synthetic beam от canonical source baseline.
+ * Запускает deterministic native synthetic beam от canonical source
+ * baseline.
  *
- * Proposer получает patch/PCM/global/J/rawSum/contributions текущего узла.
- * Каждый proposal заново решает все 2K коэффициенты против
- * `target−fixedOffset`. `bestAny` включает root, а `proposed` сохраняет лучший
- * evaluated candidate даже тогда, когда saved guard возвращает исходник.
- * `work.used <= workBudget`, `work.unused` равен остатку, а dense-work и
- * одноразовый финальный guard опубликованы отдельно. CD и реальные runner'ы
- * не вызываются.
+ * @param options - Исходный patch/PCM, пределы beam/W и источник
+ *   proposals
+ * @returns Saved patch/WAV, лучший proposed candidate и полный аудит
+ * @throws Error при невалидном входе, нарушении estimate/W или ошибке
+ *   proposer/evaluator
+ * @remarks Proposer получает patch/PCM/global/J/rawSum/contributions
+ * текущего узла. Каждый proposal заново решает все 2K коэффициенты
+ * против `target−fixedOffset`. `bestAny` включает root, а `proposed`
+ * сохраняет лучший evaluated candidate даже тогда, когда saved guard
+ * возвращает исходник.
+ * `work.used = evaluatorWork + expansionWork <= workBudget`, а
+ * `work.unused` равен остатку. Прежний массив proposals имеет нулевую
+ * expansion cost; measured `{ candidates, cost }` проходит тот же
+ * generic estimate/W guard. Dense-work, proposer work и одноразовый
+ * финальный guard опубликованы отдельно. CD и реальные runner'ы не
+ * вызываются.
  */
 export function runNativeStructuralBeam(
   options: NativeStructuralBeamOptions,
@@ -1077,11 +1304,20 @@ export function runNativeStructuralBeam(
 }
 
 /**
- * Сравнивает заданную ширину с width-1 от одного canonical root и одного W.
+ * Сравнивает заданную ширину с width-1 от одного canonical root и
+ * одного W.
  *
- * Обе ветви получают один и тот же injected proposer и независимые фактические
- * used/unused/saved/proposed. Общий root подготавливается один раз; scheduler
- * не переиспользует score или PCM другой ветви.
+ * @param options - Общий canonical вход и правила обоих beam-запусков
+ * @returns Результаты заданной ширины и независимой width-1 ветви
+ * @throws Error при невалидном входе, нарушении estimate/W или ошибке
+ *   proposer/evaluator
+ * @remarks Обе ветви получают одинаковые expansion rules и W, но
+ * независимые ledger и фактические used/unused/saved/proposed. При
+ * `createProposerSession` factory создаёт отдельную session для
+ * каждой ветви, поэтому stateful budget/history первой ветви не влияет
+ * на вторую. Прямой stateless `propose` сохраняется. Общий root
+ * подготавливается один раз; scheduler не переиспользует score или
+ * PCM другой ветви.
  */
 export function runNativeStructuralBeamWithWidthControl(
   options: NativeStructuralBeamOptions,

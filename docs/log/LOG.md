@@ -2,6 +2,24 @@
 
 Здесь я фиксирую, что сделано и почему. Пишу по датам, от свежего к старому внутри дня. Цель — чтобы по журналу можно было повторить шаги из любого тега.
 
+## 2026-11-25: generic evaluator соблюдает conservative estimate
+
+`runStructuralBeam` теперь отклоняет `evaluation.cost > candidate.estimatedWork`, как уже делают expansion и native evaluator. Guard стоит после вызова evaluator, но до списания used/evaluatorWork, добавления node и сравнения с bestAny. Прежняя проверка W и все вызовы с cost не выше estimate сохранены.
+
+Known-answer с estimate 1, cost 2 и W 2 вызывает evaluator один раз и получает `evaluator exceeded estimate`. Comparator не вызывается, поэтому rejected candidate не проходит путь обновления bestAny. Из старых fixtures только K=20 нарушал conservative contract: его estimate исправлен с 1 на фактические 3; cost, W, used/unused и остальные ожидания не изменились.
+
+Scheduler прошёл 21/21, native — 17/17. TypeScript, Prettier, target ESLint и diff check проходят. Полный `npm test` после этого WARN-fix не запускался: финальный полный прогон выполняет primary. Реальных прогонов и production-изменений нет.
+
+## 2026-11-25: beam учитывает measured expansion и разделяет stateful sessions
+
+`structural-expansion.ts` проверяет conservative estimate и фактический cost отдельно от scheduler. Прежний `expand(parent) => candidates[]` означает нулевую стоимость и сохраняет прежнюю форму `work`. Новый `{ candidates, cost }` работает вместе с `estimateExpansion(parent)`: scheduler сравнивает estimate с остатком W до callback, а после callback списывает только фактический cost. Invalid/NaN values и превышение estimate/W вызывают ошибку. Разница estimate−cost остаётся доступна следующим parents и candidates. Scheduler не знает, обозначают эти единицы FFT, dense-анализ или другую работу.
+
+`StructuralBeamResult` добавляет `evaluatorWork`, `expansionWork`, `expansions` и `skippedExpansionBudget`. Expansion record хранит parent/depth/estimate/cost и лексикографически стабильные candidate keys, включая duplicates. Пустой expansion списывается один раз, повторный parent не вызывает proposer повторно. Стоимость не меняет score или candidate payload. В synthetic fixture с W=10 expansion даёт 3 единицы, evaluator — 7, unused — 0. Отдельный контроль с estimate 3 при остатке 2 не вызывает expand. Другой контроль оставляет candidate evaluator ровно 3 после expansion cost 2 и сохраняет видимый budget skip у более дорогого sibling.
+
+Native сохраняет stateless `propose` и добавляет `createProposerSession`. Factory вызывается отдельно для beam и width 1 после одного общего prepared root. Каждая ветвь получает собственный generic ledger и expansion audit; measured propose cost проходит тот же W guard. Root и finalization 5N не изменились. В stateful known-answer обе sessions начинают с локальных 21 единиц: beam тратит 21 на три вызова, width 1 тратит 14 на два и сохраняет 7. Настоящий solver/renderer выполняет четыре candidate evaluations в beam и три в width 1, без подмены PCM evaluator.
+
+Прежние 14 scheduler и 15 native тестов не изменили ожиданий. С шестью generic и двумя native контролями наборы прошли 20/20 и 17/17; связанные structural/solver/refit тесты — 98/98, полный `npm test` — 387/387. Повторный measured fixture сохраняет path, work и точный call order. TypeScript build, Prettier, target ESLint и diff check проходят. FFT-реализации, dataset runner, production и реальные прогоны отсутствуют; synthetic counters не доказывают suppression или закон качества.
+
 ## 2026-11-25: native synthetic beam соединил atoms, solver и scheduler
 
 `native-structural-beam.ts` публикует `runNativeStructuralBeam` и `runNativeStructuralBeamWithWidthControl`. Proposer получает canonical patch/PCM/global/J текущего parent, его rawSum и contributions, а возвращает только уникальные slots и полные `StructuralAtomShape`. Generic scheduler теперь допускает отдельный `CandidateValue`: proposal не притворяется canonical node, а прежние двухпараметровые вызовы сохраняют default и поведение.

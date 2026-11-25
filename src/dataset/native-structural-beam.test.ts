@@ -15,6 +15,7 @@ import {
   type NativeStructuralBeamOptions,
   type NativeStructuralCanonicalAssert,
   type NativeStructuralProposal,
+  type NativeStructuralProposeResult,
 } from './native-structural-beam';
 import { renderForTarget } from './quadrature-refit';
 import {
@@ -1349,4 +1350,165 @@ test('native evaluator accepts K=50 without a hidden K1/K2 cap and keeps 50 slot
     result.work.budget - result.work.used,
   );
   assert.deepEqual(source, sourceSnapshot);
+});
+
+test('native measured propose reaches generic W without changing finalization', () => {
+  const sampleCount = 256;
+  const fixture = coefficientFixture(1, 'legacy', sampleCount);
+  const result = runNativeStructuralBeam({
+    patch: fixture.source,
+    target: fixture.target,
+    phaseModel: fixture.options.phaseModel,
+    beamWidth: fixture.options.beamWidth,
+    maxDepth: fixture.options.maxDepth,
+    maxGroupSize: fixture.options.maxGroupSize,
+    workBudget: fixture.options.workBudget + 2,
+    maxInner: fixture.options.maxInner,
+    maxBacktracks: fixture.options.maxBacktracks,
+    estimateExpansion: () => 3,
+    propose: () => ({
+      candidates: [fixture.proposal],
+      cost: 2,
+    }),
+  });
+
+  const node = result.evaluated[0];
+  assert.ok(node !== undefined);
+  assert.equal(result.status, 'refined');
+  assert.equal(result.expansionWork, 2);
+  assert.equal(result.evaluatorWork, node.cost);
+  assert.equal(result.work.used, node.cost + 2);
+  assert.equal(
+    result.work.unused,
+    result.work.budget - result.work.used,
+  );
+  assert.deepEqual(result.expansions, [
+    {
+      parentKey: 'native-root',
+      depth: 1,
+      estimatedWork: 3,
+      cost: 2,
+      candidateKeys: [node.candidateKey],
+    },
+  ]);
+  assert.deepEqual(result.skippedExpansionBudget, []);
+  assert.equal(
+    result.skips.expansionBudget,
+    result.skippedExpansionBudget,
+  );
+  assert.deepEqual(
+    result.denseWork,
+    node.value.evaluation?.denseWork,
+  );
+  assert.equal(result.finalizationSampleWork, 5 * sampleCount);
+});
+
+test('width control creates independent stateful sessions with equal initial budget', () => {
+  const fixture = widthControlFixture();
+  const statelessPropose = fixture.options.propose;
+  assert.ok(statelessPropose !== undefined);
+  const expansionCost = 7;
+  const sessionBudget = 3 * expansionCost;
+  const sessions: {
+    calls: number;
+    cost: number;
+    remaining: number;
+  }[] = [];
+  const callOrder: string[] = [];
+  const control = runNativeStructuralBeamWithWidthControl({
+    patch: fixture.source,
+    target: fixture.target,
+    beamWidth: fixture.options.beamWidth,
+    maxDepth: fixture.options.maxDepth,
+    maxGroupSize: fixture.options.maxGroupSize,
+    workBudget: fixture.options.workBudget + sessionBudget,
+    maxInner: fixture.options.maxInner,
+    maxBacktracks: fixture.options.maxBacktracks,
+    createProposerSession: () => {
+      const sessionIndex = sessions.length;
+      const audit = { calls: 0, cost: 0, remaining: sessionBudget };
+      sessions.push(audit);
+      return {
+        estimateExpansion: (parent): number => {
+          callOrder.push(
+            `S${sessionIndex}:estimate:${parent.nodeKey}`,
+          );
+          return expansionCost;
+        },
+        propose: (parent): NativeStructuralProposeResult => {
+          assert.ok(audit.remaining >= expansionCost);
+          audit.calls += 1;
+          audit.cost += expansionCost;
+          audit.remaining -= expansionCost;
+          callOrder.push(
+            `S${sessionIndex}:propose:${parent.nodeKey}`,
+          );
+          const proposals = statelessPropose(parent);
+          if (!Array.isArray(proposals)) {
+            throw new Error('Expected the legacy proposal array');
+          }
+          return { candidates: proposals, cost: expansionCost };
+        },
+      };
+    },
+  });
+  const { beam, width1 } = control;
+
+  assert.equal(sessions.length, 2);
+  assert.deepEqual(sessions[0], { calls: 3, cost: 21, remaining: 0 });
+  assert.deepEqual(sessions[1], { calls: 2, cost: 14, remaining: 7 });
+  assert.deepEqual(callOrder.slice(0, 2), [
+    'S0:estimate:native-root',
+    'S0:propose:native-root',
+  ]);
+  assert.deepEqual(
+    callOrder.filter((event) => event.startsWith('S1:')).slice(0, 2),
+    ['S1:estimate:native-root', 'S1:propose:native-root'],
+  );
+  assert.equal(
+    callOrder.filter((event) => event.startsWith('S0:')).length,
+    6,
+  );
+  assert.equal(
+    callOrder.filter((event) => event.startsWith('S1:')).length,
+    4,
+  );
+
+  assert.equal(beam.root.value, width1.root.value);
+  assert.equal(beam.work.budget, fixture.options.workBudget + 21);
+  assert.equal(width1.work.budget, beam.work.budget);
+  assert.equal(beam.expansions.length, 3);
+  assert.equal(width1.expansions.length, 2);
+  assert.equal(beam.expansionWork, 21);
+  assert.equal(width1.expansionWork, 14);
+  assert.equal(beam.evaluated.length, 4);
+  assert.equal(width1.evaluated.length, 3);
+  assert.notEqual(beam.expansions, width1.expansions);
+  assert.notEqual(beam.work, width1.work);
+  for (const result of [beam, width1]) {
+    const evaluatorWork = result.history.reduce(
+      (sum, entry) => sum + entry.cost,
+      0,
+    );
+    assert.equal(result.evaluatorWork, evaluatorWork);
+    assert.equal(
+      result.work.used,
+      result.evaluatorWork + result.expansionWork,
+    );
+    assert.equal(
+      result.work.unused,
+      result.work.budget - result.work.used,
+    );
+    assert.ok(result.work.used <= result.work.budget);
+    assert.deepEqual(result.skippedExpansionBudget, []);
+    assert.equal(result.status, 'refined');
+    assert.equal(
+      result.finalizationSampleWork,
+      5 * fixture.sampleCount,
+    );
+    for (const expansion of result.expansions) {
+      assert.equal(expansion.estimatedWork, expansionCost);
+      assert.equal(expansion.cost, expansionCost);
+    }
+  }
 });
